@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.build/
+.local/
+DerivedData/
+work/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+*.log

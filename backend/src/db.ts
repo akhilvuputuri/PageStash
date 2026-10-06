@@ -1,0 +1,102 @@
+import { PGlite } from "@electric-sql/pglite";
+import pg from "pg";
+
+export interface Database {
+  query<T = Record<string, unknown>>(
+    sql: string,
+    values?: unknown[],
+  ): Promise<{ rows: T[] }>;
+  close(): Promise<void>;
+}
+
+export async function openDatabase(
+  url?: string,
+  localPath?: string,
+): Promise<Database> {
+  if (url) {
+    const pool = new pg.Pool({ connectionString: url });
+    return {
+      query: async <T>(sql: string, values?: unknown[]) => ({
+        rows: (await pool.query(sql, values)).rows as T[],
+      }),
+      close: () => pool.end(),
+    };
+  }
+  const db = new PGlite(localPath);
+  await db.waitReady;
+  return {
+    query: <T>(sql: string, values?: unknown[]) => db.query<T>(sql, values),
+    close: () => db.close(),
+  };
+}
+
+export const schema = `
+CREATE TABLE IF NOT EXISTS schema_version (version integer PRIMARY KEY);
+CREATE SEQUENCE IF NOT EXISTS library_revision;
+CREATE TABLE IF NOT EXISTS accounts (
+ id uuid PRIMARY KEY, email text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS credentials (
+ id uuid PRIMARY KEY, owner_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+ connection_id uuid NOT NULL, hash text UNIQUE NOT NULL, kind text NOT NULL,
+ label text NOT NULL, expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS items (
+ id uuid PRIMARY KEY, owner_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+ connection_id uuid NOT NULL, idempotency_key text NOT NULL, normalized_url text,
+ kind text NOT NULL, status text NOT NULL DEFAULT 'queued', title text NOT NULL,
+ author text, source_url text, sources jsonb NOT NULL DEFAULT '[]',
+ captured_at timestamptz NOT NULL DEFAULT now(), error text,
+ content_version integer NOT NULL DEFAULT 0, archived boolean NOT NULL DEFAULT false,
+ collections jsonb NOT NULL DEFAULT '[]', progress double precision NOT NULL DEFAULT 0,
+ deleted boolean NOT NULL DEFAULT false,
+ revision bigint NOT NULL DEFAULT nextval('library_revision'),
+ UNIQUE(owner_id, idempotency_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS unique_saved_url ON items(owner_id, normalized_url)
+ WHERE normalized_url IS NOT NULL AND deleted=false;
+CREATE INDEX IF NOT EXISTS sync_owner ON items(owner_id, revision);
+CREATE TABLE IF NOT EXISTS jobs (
+ id uuid PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE, payload jsonb NOT NULL,
+ attempts integer NOT NULL DEFAULT 0, available_at timestamptz NOT NULL DEFAULT now(),
+ lease_until timestamptz, lease_token uuid
+);
+CREATE TABLE IF NOT EXISTS assets (
+ id uuid PRIMARY KEY, item_id uuid NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+ role text NOT NULL, mime text NOT NULL, size integer NOT NULL, sha256 text NOT NULL,
+ filename text NOT NULL, storage_key text NOT NULL
+);
+CREATE TABLE IF NOT EXISTS download_grants (
+ hash text PRIMARY KEY, asset_id uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+ credential_id uuid NOT NULL REFERENCES credentials(id) ON DELETE CASCADE,
+ expires_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_clients (
+ id text PRIMARY KEY, name text NOT NULL, redirect_uris jsonb NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_codes (
+ hash text PRIMARY KEY, owner_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+ client_id text NOT NULL REFERENCES oauth_clients(id), redirect_uri text NOT NULL,
+ challenge text NOT NULL, expires_at timestamptz NOT NULL
+);
+INSERT INTO schema_version(version) VALUES(1) ON CONFLICT DO NOTHING;
+`;
+
+export async function migrate(db: Database) {
+  // Execute individually for compatibility with parameterized PostgreSQL drivers.
+  for (const statement of schema.split(";").filter((s) => s.trim()))
+    await db.query(statement);
+  // Supabase's public data APIs get no policies. Only the backend database role accesses these tables.
+  for (const name of [
+    "accounts",
+    "credentials",
+    "items",
+    "jobs",
+    "assets",
+    "download_grants",
+    "oauth_clients",
+    "oauth_codes",
+    "schema_version",
+  ])
+    await db.query(`ALTER TABLE ${name} ENABLE ROW LEVEL SECURITY`);
+}

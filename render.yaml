@@ -1,0 +1,32 @@
+# Review the recurring service cost in Render before applying this Blueprint.
+services:
+  - type: web
+    name: offline-reader
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DEV_AUTH
+        value: "false"
+      - key: PUBLIC_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: OWNER_EMAIL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: STORAGE_BUCKET
+        value: articles

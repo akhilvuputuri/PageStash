@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Generate the small Xcode project without requiring a third-party generator."""
+import hashlib
+from pathlib import Path
+root = Path(__file__).resolve().parents[1]
+ios = root / 'ios'
+project = ios / 'OfflineReader.xcodeproj'
+project.mkdir(exist_ok=True)
+def uid(name): return hashlib.sha256(name.encode()).hexdigest()[:24].upper()
+def q(value): return '"' + str(value).replace('\\','\\\\').replace('"','\\"') + '"'
+objects = []
+def obj(name, body):
+    identifier = uid(name)
+    objects.append(f'{identifier} = {{ {body} }};')
+    return identifier
+sources = sorted((ios / 'OfflineReader').glob('*.swift'))
+refs, builds = [], []
+for source in sources:
+    ref = obj('ref:'+source.name, f'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {q("OfflineReader/"+source.name)}; sourceTree = "<group>";')
+    refs.append(ref)
+    builds.append(obj('build:'+source.name, f'isa = PBXBuildFile; fileRef = {ref};'))
+asset = obj('assets', 'isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = OfflineReader/Assets.xcassets; sourceTree = "<group>";')
+assetBuild = obj('asset-build', f'isa = PBXBuildFile; fileRef = {asset};')
+privacy = obj('privacy', 'isa = PBXFileReference; lastKnownFileType = text.xml; path = OfflineReader/PrivacyInfo.xcprivacy; sourceTree = "<group>";')
+privacyBuild = obj('privacy-build', f'isa = PBXBuildFile; fileRef = {privacy};')
+product = obj('product', 'isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OfflineReader.app; sourceTree = BUILT_PRODUCTS_DIR;')
+products = obj('products', f'isa = PBXGroup; children = ({product}); name = Products; sourceTree = "<group>";')
+group = obj('group', f'isa = PBXGroup; children = ({",".join(refs+[asset,privacy,products])}); sourceTree = "<group>";')
+package = obj('package', 'isa = XCLocalSwiftPackageReference; relativePath = ReaderCore;')
+dependency = obj('package-product', f'isa = XCSwiftPackageProductDependency; package = {package}; productName = ReaderCore;')
+link = obj('link', f'isa = PBXBuildFile; productRef = {dependency};')
+sourcePhase = obj('sources', f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ({",".join(builds)}); runOnlyForDeploymentPostprocessing = 0;')
+frameworkPhase = obj('frameworks', f'isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ({link}); runOnlyForDeploymentPostprocessing = 0;')
+resourcePhase = obj('resources', f'isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ({assetBuild},{privacyBuild}); runOnlyForDeploymentPostprocessing = 0;')
+def config(name, app):
+    debug = name == 'Debug'
+    settings = {'IPHONEOS_DEPLOYMENT_TARGET':'17.0','SDKROOT':'iphoneos','SWIFT_VERSION':'5.0','CLANG_ENABLE_MODULES':'YES', 'SWIFT_OPTIMIZATION_LEVEL':'-Onone' if debug else '-O'}
+    if app:
+        settings.update({'PRODUCT_BUNDLE_IDENTIFIER':'com.akhilvuputuri.offlinereader','PRODUCT_NAME':'$(TARGET_NAME)','INFOPLIST_FILE':'OfflineReader/Info-Debug.plist' if debug else 'OfflineReader/Info.plist','GENERATE_INFOPLIST_FILE':'NO','CURRENT_PROJECT_VERSION':'1','MARKETING_VERSION':'0.1.0','TARGETED_DEVICE_FAMILY':'1','CODE_SIGN_STYLE':'Automatic','ASSETCATALOG_COMPILER_APPICON_NAME':'AppIcon','SWIFT_ACTIVE_COMPILATION_CONDITIONS':'DEBUG' if debug else '', 'ENABLE_USER_SCRIPT_SANDBOXING':'YES'})
+    return obj(('app' if app else 'project')+name, f'isa = XCBuildConfiguration; buildSettings = {{'+''.join(f'{key} = {q(value)};' for key,value in settings.items())+f'}}; name = {name};')
+appConfigs = [config(name,True) for name in ['Debug','Release']]
+projConfigs = [config(name,False) for name in ['Debug','Release']]
+appList = obj('app-list', f'isa = XCConfigurationList; buildConfigurations = ({",".join(appConfigs)}); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
+projList = obj('project-list', f'isa = XCConfigurationList; buildConfigurations = ({",".join(projConfigs)}); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
+target = obj('target', f'isa = PBXNativeTarget; buildConfigurationList = {appList}; buildPhases = ({sourcePhase},{frameworkPhase},{resourcePhase}); buildRules = (); dependencies = (); name = OfflineReader; packageProductDependencies = ({dependency}); productName = OfflineReader; productReference = {product}; productType = "com.apple.product-type.application";')
+projectID = obj('project', f'isa = PBXProject; attributes = {{BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2630; TargetAttributes = {{{target} = {{CreatedOnToolsVersion = 26.3;}};}};}}; buildConfigurationList = {projList}; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en,Base); mainGroup = {group}; packageReferences = ({package}); productRefGroup = {products}; projectDirPath = ""; projectRoot = ""; targets = ({target});')
+(project/'project.pbxproj').write_text('// !$*UTF8*$!\n{archiveVersion = 1; classes = {}; objectVersion = 56; objects = {\n'+'\n'.join(objects)+f'\n}}; rootObject = {projectID};}}\n')
+schemeDir=project/'xcshareddata/xcschemes'
+schemeDir.mkdir(parents=True,exist_ok=True)
+(schemeDir/'OfflineReader.xcscheme').write_text(f'''<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion="2630" version="1.3"><BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="OfflineReader.app" BlueprintName="OfflineReader" ReferencedContainer="container:OfflineReader.xcodeproj"/></BuildActionEntry></BuildActionEntries></BuildAction><LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="OfflineReader.app" BlueprintName="OfflineReader" ReferencedContainer="container:OfflineReader.xcodeproj"/></BuildableProductRunnable></LaunchAction><ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"/><AnalyzeAction buildConfiguration="Debug"/><ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/></Scheme>''')
+print(project)
