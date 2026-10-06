@@ -23,6 +23,13 @@ Build date: 6 October 2026. This record separates completed checks from required
 - No Render paid service has been provisioned. No Supabase secrets have been transferred to Render or committed to Git.
 - No iPhone is connected and no local code-signing identity is present. A simulator runtime is also absent; available disk space is insufficient to casually install a large runtime. The next device acceptance should use the physical iPhone.
 
+### Update: 7 October 2026
+
+- User selected **Northflank Free** for the server, keeping Supabase. The paid Render service draft remains unsubmitted.
+- Server worker now wakes on new saves/retries, checks idle queues every minute, and performs expiry cleanup hourly. Added tests for immediate wake-up, a save racing with an empty claim, non-overlapping execution, outage retry, and shutdown.
+- Local backend type-check/build and all 13 backend tests passed after the worker change. Native storage code was unchanged.
+- Northflank account sign-in, free project/resource limits, repository authorization, runtime secret setup and live deployment remain pending verification.
+
 ## Not yet tested
 
 - Signed installation or TestFlight upload.

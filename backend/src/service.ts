@@ -63,6 +63,7 @@ export interface Item {
 }
 
 export class Service {
+  onQueued?: () => void;
   constructor(
     public db: Database,
     public config: Config,
@@ -195,8 +196,10 @@ export class Service {
         JSON.stringify(input),
       ],
     );
-    if (inserted.rows.length)
+    if (inserted.rows.length) {
+      this.onQueued?.();
       return { submission_id: id, status: "queued", duplicate: false };
+    }
     const existing = await this.db.query<{
       id: string;
       status: string;

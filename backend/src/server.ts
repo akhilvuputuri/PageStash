@@ -157,6 +157,7 @@ export async function buildServer(service: Service) {
     );
     if (!result.rows.length)
       throw new HTTPError(404, "Retryable bookmark not found.");
+    service.onQueued?.();
     return { ok: true };
   });
   app.get("/v1/downloads/:token", async (request, reply) => {

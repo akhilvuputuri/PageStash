@@ -46,12 +46,14 @@ xcodebuild -project ios/OfflineReader.xcodeproj -scheme OfflineReader \
 
 ## Deployment and integration
 
-- [Supabase and Render setup](docs/DEPLOYMENT.md)
+- [Supabase and Northflank Free setup](docs/DEPLOYMENT.md)
 - [HTTP, Telegram assistant, ChatGPT and Claude](docs/INTEGRATIONS.md)
 - [Architecture and tradeoffs](docs/ARCHITECTURE.md)
 - [Validation and device acceptance checklist](docs/VALIDATION.md)
 
 ## Background behavior
+
+The server worker wakes immediately after a save, polls once per minute when idle for crash/retry recovery, and removes expired credentials/download grants hourly. One import runs at a time; small batches yield between cycles. This avoids constant database housekeeping for the single-user beta.
 
 The app requests another refresh opportunity after 30 minutes. **That is an earliest opportunity, not an exact schedule.** iOS controls execution. Background refresh queries the library and hands downloads to native background `URLSession`; content is verified before becoming readable. Foreground and manual refresh use the same pipeline.
 
