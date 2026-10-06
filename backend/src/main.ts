@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { configuration } from "./config.js";
+import { configuration, databaseConnection } from "./config.js";
 import { migrate, openDatabase } from "./db.js";
 import { storage } from "./storage.js";
 import { Service } from "./service.js";
@@ -10,7 +10,7 @@ import { ImportWorker } from "./worker.js";
 const config = configuration();
 await mkdir(config.dataDirectory, { recursive: true });
 const db = await openDatabase(
-  process.env.DATABASE_URL,
+  databaseConnection(),
   join(config.dataDirectory, "database"),
 );
 await migrate(db);

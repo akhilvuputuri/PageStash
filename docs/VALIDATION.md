@@ -30,6 +30,16 @@ Build date: 6 October 2026. This record separates completed checks from required
 - Local backend type-check/build and all 13 backend tests passed after the worker change. Native storage code was unchanged.
 - Northflank account sign-in, free project/resource limits, repository authorization, runtime secret setup and live deployment remain pending verification.
 
+### Northflank configuration progress
+
+- Free team and `offline-reader` project created in US Central. Free region choices were US Central and London; Asian regions require a paid plan.
+- User completed Northflank's required card verification. The project remains on Developer Sandbox.
+- GitHub installation is verified as **Only select repositories**, with exactly `akhilvuputuri/offline-reader` selected.
+- `reader-api` combined-service draft uses `/backend/Dockerfile`, `/backend` context, one `nf-compute-20` replica (0.2 shared vCPU / 512 MB), manual builds, public HTTP port 8787 and a `/health` readiness probe.
+- Approved API keys are populated in the draft's runtime environment, with the TLS session-pooler URI template. No secret values were written to Git or deliverable files.
+- Added a separate `DATABASE_PASSWORD` runtime option to safely encode reserved characters into Supabase's URI template. Type-check, build and all 16 backend tests passed.
+- Service submission and live validation are still pending the existing database-password input. The Mac locked while opening that field; user unlock is required. The generated draft endpoint has not yet been tested as a running service.
+
 ## Not yet tested
 
 - Signed installation or TestFlight upload.

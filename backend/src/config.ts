@@ -12,9 +12,23 @@ export interface Config {
   bucket: string;
   dataDirectory: string;
 }
-export function supabaseHeaders(key: string): Record<string,string> {
+export function supabaseHeaders(key: string): Record<string, string> {
   // Modern sb_secret keys are API keys, not JWT bearer tokens.
-  return key.startsWith('eyJ') ? {apikey:key,Authorization:`Bearer ${key}`} : {apikey:key};
+  return key.startsWith("eyJ")
+    ? { apikey: key, Authorization: `Bearer ${key}` }
+    : { apikey: key };
+}
+/** Accept the provider's URI template and a separately entered runtime password. */
+export function databaseConnection(env = process.env): string | undefined {
+  const template = env.DATABASE_URL;
+  if (!template) return undefined;
+  if (!template.includes("[YOUR-PASSWORD]")) return template;
+  if (!env.DATABASE_PASSWORD)
+    throw new Error("Set DATABASE_PASSWORD in runtime secrets.");
+  return template.replace(
+    "[YOUR-PASSWORD]",
+    encodeURIComponent(env.DATABASE_PASSWORD),
+  );
 }
 export function configuration(env = process.env): Config {
   const host = env.HOST ?? "127.0.0.1";
