@@ -11,6 +11,17 @@ Build date: 6 October 2026. This record separates completed checks from required
 - Dependency audit after upgrading the image processor: no known vulnerabilities reported at that check.
 - Live public extraction smoke check: Wikipedia's “Airplane mode” article captured six images with no missing-image warnings. This verifies real network extraction, not iPhone offline behavior.
 - 10 backend tests and 6 Swift storage tests passed. The backend tests include account deletion of referenced and orphaned files.
+- Complete live local HTTP smoke passed: sign-in → restricted assistant credential → asynchronous brief import → hash-verified download → reading/collection edit sync. No real account credentials were used.
+- GitHub CI passed independently on Linux (backend tests/build/audit) and macOS (Swift storage tests and unsigned iPhone compilation): https://github.com/akhilvuputuri/offline-reader/actions/runs/37459427884
+
+## Provisioning progress
+
+- Private repository created and initial implementation pushed to `akhilvuputuri/offline-reader`.
+- User created a healthy Supabase Free project in Tokyo. The original Singapore suggestion is optional; the existing Tokyo project can serve this personal beta.
+- Empty private `articles` bucket created with no public access policies.
+- User signed into Render. Its GitHub connection requires explicit approval for repository access before deployment can proceed.
+- No Render paid service has been provisioned. No Supabase secrets have been transferred to Render or committed to Git.
+- No iPhone is connected and no local code-signing identity is present. A simulator runtime is also absent; available disk space is insufficient to casually install a large runtime. The next device acceptance should use the physical iPhone.
 
 ## Not yet tested
 
