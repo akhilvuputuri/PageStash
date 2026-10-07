@@ -38,7 +38,16 @@ Build date: 6 October 2026. This record separates completed checks from required
 - `reader-api` combined-service draft uses `/backend/Dockerfile`, `/backend` context, one `nf-compute-20` replica (0.2 shared vCPU / 512 MB), manual builds, public HTTP port 8787 and a `/health` readiness probe.
 - Approved API keys are populated in the draft's runtime environment, with the TLS session-pooler URI template. No secret values were written to Git or deliverable files.
 - Added a separate `DATABASE_PASSWORD` runtime option to safely encode reserved characters into Supabase's URI template. Type-check, build and all 16 backend tests passed.
-- Service submission and live validation are still pending the existing database-password input. The Mac locked while opening that field; user unlock is required. The generated draft endpoint has not yet been tested as a running service.
+- User entered the database password and created the free service. The first container build passed but startup failed because Node did not trust Supabase's database CA. Added the official public CA via `NODE_EXTRA_CA_CERTS`, preserving `sslmode=verify-full`; independently verified the pooler's certificate and hostname without credentials.
+
+### Live deployment: 7 October 2026
+
+- Northflank build `eloquent-spirit-8458` deployed commit `f635e40`. One `nf-compute-20` instance is running on the Free team with its HTTP readiness probe passing (200) and zero restarts for the corrected deployment.
+- HTTPS origin: `https://p01--reader-api--2sn8tjhm47hb.code.run`.
+- `GET /health` returned 200 and `{"ok":true}`, verifying the production PostgreSQL connection and completed startup migrations.
+- Anonymous `GET /v1/library` returned 401. OAuth protected-resource discovery returned 200 with the deployed origin; MCP initialize returned 200 and the expected server capabilities.
+- GitHub CI passed for the deployed commit: https://github.com/akhilvuputuri/offline-reader/actions/runs/37563016494.
+- Personal Supabase application-user creation remains a human handoff. Authenticated ingestion, private asset upload/download and restart recovery on this host remain unverified.
 
 ## Not yet tested
 
@@ -46,8 +55,8 @@ Build date: 6 October 2026. This record separates completed checks from required
 - SwiftUI visual layout on a running iPhone or simulator; no simulator runtime was installed and no iPhone was connected when implementation began.
 - An actual article with images reopening on the iPhone after a restart in airplane mode.
 - Naturally scheduled background refresh over multiple days, low-power restrictions, reboot/force-quit behavior and background transfer relaunch callbacks.
-- Live Supabase authentication/private storage/production PostgreSQL; local tests use embedded PostgreSQL.
-- Render deployment, container runtime behavior, restart/crash recovery and provider access-log configuration.
+- Live Supabase authentication/private storage; production PostgreSQL startup and health have passed, while ingestion tests still use embedded PostgreSQL.
+- Northflank restart/crash recovery and provider access-log configuration. Render is an unprovisioned alternative.
 - Real ChatGPT/Claude OAuth linking and token refresh.
 - Existing Telegram assistant configuration and a real save request through that assistant.
 - Backup restoration, large libraries, accessibility audit and provider account deletion failure recovery.
