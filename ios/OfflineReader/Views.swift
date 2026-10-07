@@ -4,9 +4,18 @@ import SwiftUI
 
 struct RootView: View {
   @EnvironmentObject var state: AppState
+  @AppStorage("appearance") private var appearance = "light"
+  private var preferredScheme: ColorScheme? {
+    switch appearance {
+    case "dark": return .dark
+    case "system": return nil
+    default: return .light
+    }
+  }
   var body: some View {
     Group { if state.session == nil { LoginView() } else { LibraryView() } }.tint(
-      Color(red: 0.78, green: 0.30, blue: 0.15))
+      Color(red: 0.78, green: 0.30, blue: 0.15)
+    ).preferredColorScheme(preferredScheme)
   }
 }
 struct LoginView: View {
@@ -315,6 +324,7 @@ struct SettingsView: View {
   @Environment(\.dismiss) var dismiss
   @AppStorage("cellular") private var cellular = false
   @AppStorage("storageLimit") private var storageLimit = 512_000_000
+  @AppStorage("appearance") private var appearance = "light"
   @State private var connections: [Connection] = []
   @State private var label = "Telegram assistant"
   @State private var newToken: String?
@@ -323,6 +333,15 @@ struct SettingsView: View {
   var body: some View {
     NavigationStack {
       Form {
+        Section("Appearance") {
+          Picker("Theme", selection: $appearance) {
+            Text("Light").tag("light")
+            Text("Dark").tag("dark")
+            Text("System").tag("system")
+          }
+          Text("Light uses a white reading background.")
+            .font(.footnote).foregroundStyle(.secondary)
+        }
         Section("Downloads") {
           Toggle("Allow cellular downloads", isOn: $cellular).onChange(of: cellular) { _, _ in
             Task {

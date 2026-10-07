@@ -8,7 +8,7 @@ Native SwiftUI app · TypeScript backend · PostgreSQL · private object storage
 
 Implemented: sign-in, library, URL submission, asynchronous article extraction and supported images, Markdown briefs, local reader, persistent download queue, background refresh registration, integrity verification, reading position, search, collections, archive/delete, download removal, credential creation/revocation, OAuth and the three MCP tools.
 
-The backend is deployed on Northflank Free with Supabase PostgreSQL; live health, anonymous-access rejection, and MCP discovery pass. The native app compiles for both a simulator and an unsigned iPhone build. Simulator checks passed for sign-in, article text/images, an MCP-created brief, cached reading after restarting with the local server stopped, reading position, search, offline edits and download removal/retry. Automated tests cover backend authorization, extraction fixtures, OAuth, MCP, durable jobs, local persistence, interrupted updates, and offline edit races. **Production sign-in/storage ingestion, physical-device airplane-mode/background execution, TestFlight, and ChatGPT/Claude connections are not yet verified.** See [validation](docs/VALIDATION.md).
+The backend is deployed on Northflank Free with Supabase PostgreSQL; live health, anonymous-access rejection, and MCP discovery pass. The native app compiles for both a simulator and an unsigned iPhone build. Simulator checks passed for sign-in, article text/images, an MCP-created brief, cached reading after restarting with the local server stopped, reading position, search, offline edits and download removal/retry. Automated tests cover backend authorization, extraction fixtures, OAuth, MCP, durable jobs, local persistence, interrupted updates, and offline edit races. The owner also confirmed production sign-in and reading article text/images on the physical iPhone after restarting in Airplane Mode with Wi-Fi off. **Naturally scheduled physical-device background execution, TestFlight, and ChatGPT/Claude connections are not yet verified.** See [validation](docs/VALIDATION.md).
 
 ## Local development
 
@@ -57,6 +57,7 @@ xcodebuild -project ios/OfflineReader.xcodeproj -scheme OfflineReader \
 
 - [Supabase and Northflank Free setup](docs/DEPLOYMENT.md)
 - [HTTP, Telegram assistant, ChatGPT and Claude](docs/INTEGRATIONS.md)
+- [Framework-neutral agent adapter handoff](docs/AGENT_ADAPTER.md)
 - [Architecture and tradeoffs](docs/ARCHITECTURE.md)
 - [Validation and device acceptance checklist](docs/VALIDATION.md)
 
@@ -67,6 +68,8 @@ node scripts/verify-backend.mjs
 ```
 
 It prompts for your app password without echoing or storing it, saves a demonstration brief through MCP and a public article, verifies file hashes and duplicate retries, then checks agent restrictions and revocation. It retains the two demonstration items for phone testing and revokes its temporary credential/session. It never needs database or Supabase service keys. Optional `READER_URL`, `READER_EMAIL`, and `READER_ARTICLE_URL` environment values select another backend, account, or public source. This command checks the server; the phone's offline behavior still requires device acceptance.
+
+Appearance is configurable in Settings → Appearance: Light (the default), Dark, or System. Light uses a white reading background for downloaded articles and briefs, including existing cached content.
 
 ## Background behavior
 

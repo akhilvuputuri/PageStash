@@ -1,5 +1,7 @@
 # Assistant connections
 
+For a framework-neutral handoff to another implementing agent, start with [the reader adapter contract](AGENT_ADAPTER.md). It includes the deployed MCP URL, API-credential/OAuth choices, tool schemas, result decoding, durable retries, HTTP fallback and host acceptance checks. No Chief Agent code has been changed.
+
 The backend origin must be HTTPS and publicly reachable for hosted ChatGPT/Claude connections. Saving means captured/processing on the server, not necessarily downloaded to the iPhone.
 
 ## Existing Telegram assistant: HTTP

@@ -2,10 +2,26 @@ import SwiftUI
 import WebKit
 
 struct ArticleWebView: UIViewRepresentable {
+  @Environment(\.colorScheme) private var colorScheme
   let url: URL
   let progress: Double
   let fontSize: Double
   let onProgress: (Double) -> Void
+  private var appearance: String { colorScheme == .dark ? "dark" : "light" }
+  private var styleScript: String {
+    let dark = colorScheme == .dark
+    let background = dark ? "#111111" : "#ffffff"
+    let foreground = dark ? "#eeeeee" : "#1c1c1e"
+    return """
+      document.documentElement.style.colorScheme='\(appearance)';
+      document.documentElement.style.backgroundColor='\(background)';
+      if (document.body) {
+        document.body.style.backgroundColor='\(background)';
+        document.body.style.color='\(foreground)';
+        document.body.style.fontSize='\(fontSize)px';
+      }
+      """
+  }
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   func makeUIView(context: Context) -> WKWebView {
     let configuration = WKWebViewConfiguration()
@@ -25,9 +41,12 @@ struct ArticleWebView: UIViewRepresentable {
       context.coordinator.restoring = true
       web.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
     }
-    if context.coordinator.fontSize != fontSize {
+    web.backgroundColor = colorScheme == .dark ? UIColor(white: 0.067, alpha: 1) : .white
+    web.scrollView.backgroundColor = web.backgroundColor
+    if context.coordinator.fontSize != fontSize || context.coordinator.appearance != appearance {
       context.coordinator.fontSize = fontSize
-      web.evaluateJavaScript("document.body.style.fontSize='\(fontSize)px'")
+      context.coordinator.appearance = appearance
+      web.evaluateJavaScript(styleScript)
     }
   }
   final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
@@ -35,10 +54,11 @@ struct ArticleWebView: UIViewRepresentable {
     var restoring = true
     var loaded: URL?
     var fontSize: Double = 20
+    var appearance: String?
     var lastSaved = Date.distantPast
     init(_ parent: ArticleWebView) { self.parent = parent }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-      webView.evaluateJavaScript("document.body.style.fontSize='\(parent.fontSize)px'")
+      webView.evaluateJavaScript(parent.styleScript)
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
         let height = max(
           0, webView.scrollView.contentSize.height - webView.scrollView.bounds.height)

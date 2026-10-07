@@ -93,13 +93,21 @@ Build date: 6 October 2026. This record separates completed checks from required
 - The installed Release bundle uses the production HTTPS backend, includes the `fetch` background mode, and disallows arbitrary HTTP. The production health endpoint returned 200.
 - Production app-user creation/sign-in and physical offline/background acceptance remain pending. Installation/launch success does not establish those behaviors.
 
+### Owner acceptance and appearance: 7–8 October 2026
+
+- The owner reported successful production sign-in and confirmed an article's text and images remained readable on the physical iPhone after enabling Airplane Mode, disabling Wi-Fi, and closing/reopening the app. This is owner-reported device acceptance, not an instrumented device-screen capture.
+- Added a persistent Light/Dark/System appearance preference. Light is the default and explicitly uses a white reading background. Styles are applied by the native reader at display time, so existing cached HTML does not require downloading again.
+- Signed Release and simulator builds pass. The theme update was successfully installed and launched on the physical iPhone.
+- Interactive simulator checks switched the same previously downloaded brief to Dark and back to Light. Both native controls and cached HTML followed the preference; Light rendered black text on a white background. System is also offered in the picker.
+- Published a host-neutral MCP/HTTP adapter contract for another implementing agent. Chief Agent was not changed or connected by this task. Live MCP discovery still exposes exactly the three documented save/status tools.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
 - Complete SwiftUI accessibility/layout coverage and physical-device rendering. Main simulator flows have passed interactive checks.
-- An actual article with images reopening on the iPhone after a restart in airplane mode.
+- Further physical-device coverage beyond the owner's successful article/image offline restart check.
 - Naturally scheduled background refresh over multiple days, low-power restrictions, reboot/force-quit behavior and background transfer relaunch callbacks.
-- Live Supabase authentication/private storage; production PostgreSQL startup and health have passed, while ingestion tests still use embedded PostgreSQL.
+- Instrumented production MCP integration and production auth/storage failure recovery. The owner confirmed the production phone sign-in/save/download path.
 - Northflank restart/crash recovery and provider access-log configuration. Render is an unprovisioned alternative.
 - Real ChatGPT/Claude OAuth linking and token refresh.
 - Existing Telegram assistant configuration and a real save request through that assistant.
