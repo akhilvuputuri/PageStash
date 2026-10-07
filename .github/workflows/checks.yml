@@ -29,3 +29,5 @@ jobs:
         run: swift test
       - name: Compile iPhone app
         run: xcodebuild -quiet -project ios/OfflineReader.xcodeproj -scheme OfflineReader -destination 'generic/platform=iOS' -derivedDataPath work/DerivedData CODE_SIGNING_ALLOWED=NO build
+      - name: Compile simulator app
+        run: xcodebuild -quiet -project ios/OfflineReader.xcodeproj -scheme OfflineReader -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath work/SimulatorDerivedData ARCHS="$(uname -m)" CODE_SIGNING_ALLOWED=NO build
