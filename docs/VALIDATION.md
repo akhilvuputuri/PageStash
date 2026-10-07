@@ -69,10 +69,24 @@ Build date: 6 October 2026. This record separates completed checks from required
 - All 14 Swift tests pass. New cases cover coordinated full/incremental syncs, cancellation across logins, recovery after failure, same-size hash corruption, stale-version downloads, sync-page transaction rollback, and offline edits/download pauses surviving a restart.
 - Unsigned Release iPhone and Debug simulator builds pass after this change. Backend code and deployment are unchanged.
 
+### Interactive simulator acceptance: 7 October 2026
+
+- The Mac became available for UI interaction. Used an isolated loopback backend and a synthetic development account, with no Supabase service keys or real app password.
+- The unsigned simulator initially failed to save its session in Keychain. Rebuilt with normal ad-hoc simulator signing; login and session persistence then passed. Keychain storage was preserved rather than bypassed.
+- Submitted Wikipedia's Airplane mode URL through the app. The backend captured six images; the app reached Available offline and rendered text/images. Larger text worked.
+- Stopped the loopback backend and confirmed its health endpoint was unreachable. Restarted the app; the library, cached article, images and reading position remained usable. This is a simulator cache/restart check, not physical iPhone airplane-mode or naturally scheduled background execution.
+- Body-text search matched handheld; a nonsense query returned no matches. Offline collection and archive edits survived another restart, then reached the local backend with the reading-position edit after reconnection/manual refresh.
+- Saved an agent brief through authenticated MCP. It appeared as AGENT BRIEF in the app, rendered as AGENT-CREATED BRIEF with its source reference, and reached Available offline.
+- Removing the article download retained the bookmark and displayed Not downloaded. Explicit Download now restored all assets and Available offline.
+- Foreground refresh now restarts its shorter import-polling loop immediately when a save introduces pending imports. Updated Xcode-generated scheme metadata and documented simulator signing.
+- Apple Account sign-in is now visible in Xcode. No physical iPhone or valid development signing identity was detected; Xcode's empty certificate panel currently shows disabled creation entries. Supabase application-user creation is still pending.
+- Apple Developer portal confirms active individual membership and accepted developer agreements. Registered the explicit App ID `com.akhilvuputuri.offlinereader` under team `U44PG44XMJ`; configured that team in the Xcode project and its generator. No additional capabilities were enabled beyond Apple's default App ID settings.
+- App Store Connect's apps page displays its navigation but fails to load its Apple-hosted preflight module. Its private app record has not yet been created. No build has been uploaded or submitted for review.
+
 ## Not yet tested
 
 - Signed installation or TestFlight upload.
-- SwiftUI visual layout on a running iPhone or simulator; a simulator is now available but screen interaction has been blocked by the locked Mac.
+- Complete SwiftUI accessibility/layout coverage and physical-device rendering. Main simulator flows have passed interactive checks.
 - An actual article with images reopening on the iPhone after a restart in airplane mode.
 - Naturally scheduled background refresh over multiple days, low-power restrictions, reboot/force-quit behavior and background transfer relaunch callbacks.
 - Live Supabase authentication/private storage; production PostgreSQL startup and health have passed, while ingestion tests still use embedded PostgreSQL.

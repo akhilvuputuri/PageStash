@@ -8,7 +8,7 @@ Native SwiftUI app · TypeScript backend · PostgreSQL · private object storage
 
 Implemented: sign-in, library, URL submission, asynchronous article extraction and supported images, Markdown briefs, local reader, persistent download queue, background refresh registration, integrity verification, reading position, search, collections, archive/delete, download removal, credential creation/revocation, OAuth and the three MCP tools.
 
-The backend is deployed on Northflank Free with Supabase PostgreSQL; live health, anonymous-access rejection, and MCP discovery pass. The native app compiles for both a simulator and an unsigned iPhone build. Automated tests cover backend authorization, extraction fixtures, OAuth, MCP, durable jobs, local persistence, interrupted updates, and offline edit races. **Production sign-in/storage ingestion, running app UI, physical-device background execution, TestFlight, and ChatGPT/Claude connections are not yet verified.** See [validation](docs/VALIDATION.md).
+The backend is deployed on Northflank Free with Supabase PostgreSQL; live health, anonymous-access rejection, and MCP discovery pass. The native app compiles for both a simulator and an unsigned iPhone build. Simulator checks passed for sign-in, article text/images, an MCP-created brief, cached reading after restarting with the local server stopped, reading position, search, offline edits and download removal/retry. Automated tests cover backend authorization, extraction fixtures, OAuth, MCP, durable jobs, local persistence, interrupted updates, and offline edit races. **Production sign-in/storage ingestion, physical-device airplane-mode/background execution, TestFlight, and ChatGPT/Claude connections are not yet verified.** See [validation](docs/VALIDATION.md).
 
 ## Local development
 
@@ -42,6 +42,15 @@ Unsigned device compilation from the repository root:
 xcodebuild -project ios/OfflineReader.xcodeproj -scheme OfflineReader \
   -destination 'generic/platform=iOS' -derivedDataPath work/DerivedData \
   CODE_SIGNING_ALLOWED=NO build
+```
+
+Unsigned compilation is a build check. To run the simulator and exercise Keychain session storage, build normally in Xcode, or use ad-hoc simulator signing:
+
+```sh
+xcodebuild -project ios/OfflineReader.xcodeproj -scheme OfflineReader \
+  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath work/SimulatorDerivedData ARCHS="$(uname -m)" \
+  CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES build
 ```
 
 ## Deployment and integration

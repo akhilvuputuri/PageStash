@@ -82,7 +82,8 @@ struct LibraryView: View {
           Text("Archived").tag("Archived")
         }.pickerStyle(.segmented).padding()
         HStack {
-          Text("\(filtered.count) items").font(.caption).foregroundStyle(.secondary)
+          Text(filtered.count == 1 ? "1 item" : "\(filtered.count) items")
+            .font(.caption).foregroundStyle(.secondary)
           Spacer()
           Menu {
             Button("All collections") { collection = "All" }

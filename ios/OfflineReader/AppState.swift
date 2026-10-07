@@ -215,7 +215,11 @@ import SwiftUI
   @Environment(\.scenePhase) private var phase
   var body: some Scene {
     WindowGroup {
-      RootView().environmentObject(state).task(id: phase) {
+      RootView().environmentObject(state).task(
+        id: ForegroundRefreshKey(
+          phase: phase, generation: state.session?.generation,
+          importsPending: state.items.contains { ["queued", "processing"].contains($0.status) })
+      ) {
         guard phase == .active else { return }
         while !Task.isCancelled {
           if state.session != nil { try? await state.sync() }
@@ -229,4 +233,10 @@ import SwiftUI
       }
     }
   }
+}
+
+private struct ForegroundRefreshKey: Equatable {
+  let phase: ScenePhase
+  let generation: String?
+  let importsPending: Bool
 }
