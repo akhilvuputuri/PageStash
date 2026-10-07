@@ -59,6 +59,8 @@ Build date: 6 October 2026. This record separates completed checks from required
 - Cellular changes now cancel/requeue requests under the new policy without discarding verified files. Download enqueue operations are serialized, late failures from an old login are ignored, and article version changes restore the saved reading position.
 - The deployed origin is prefilled on login. Settings displays its MCP endpoint even without existing connections, with account controls in their own section.
 - UI interaction remains blocked while the Mac is locked. No physical iPhone is connected and no local signing identity is available at this check.
+- Redeployed commit `4cc6e36` to Northflank Free. The new instance is Running (1/1); live health returned 200, anonymous library access 401, and an empty JSON DELETE request 400. Independent CI passed: https://github.com/akhilvuputuri/offline-reader/actions/runs/37565183768.
+- Added simulator compilation to CI; the exact command passes locally without requiring a simulator runtime on the CI runner.
 
 ## Not yet tested
 
@@ -80,6 +82,7 @@ Build date: 6 October 2026. This record separates completed checks from required
 4. Reconnect. Verify queued changes arrive once and do not regress on refresh.
 5. Put the app in the background without swiping it away. Save a second article externally. Confirm a **naturally scheduled** run downloads it; record save/refresh/completion times. Repeat with Wi-Fi, cellular disabled, Low Power Mode and Background App Refresh disabled.
 6. Interrupt an image transfer, restart the app, refresh and verify recovery. Test expired download capabilities and a changed content version.
+   While transfers are pending, toggle cellular access on and off; confirm existing requests restart under the selected policy and verified files remain readable.
 7. Remove a download and verify it stays removed during automatic sync. Explicit download must restore it.
 8. Sign out while downloads are active; verify late callbacks cannot restore content. Sign in again and verify a fresh local library.
 9. From each assistant host save an article and labelled brief, check status, retry identical submissions and revoke access. Verify library management fails using that agent credential.
