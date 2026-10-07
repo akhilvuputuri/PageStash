@@ -28,7 +28,9 @@ The repository retains `render.yaml` as an optional paid-hosting alternative, bu
 
 ## 3. iPhone signing and TestFlight
 
-The personal developer team `U44PG44XMJ` is configured in the project and generator. The explicit App ID `com.akhilvuputuri.offlinereader` is registered under that team, and a valid Apple Development signing identity is available on the Mac. A connected trusted device and its provisioning profile are still required for a signed device installation; simulator ad-hoc signing does not satisfy that requirement.
+The personal developer team `U44PG44XMJ` is configured in the project and generator. The explicit App ID `com.akhilvuputuri.offlinereader` is registered under that team, and a valid Apple Development signing identity is available on the Mac. The personal iPhone has now been provisioned and the signed Release build installed and launched. Production sign-in and physical offline/background acceptance remain pending.
+
+With Xcode 26.3 and this iOS 27 device, device-specific asset thinning failed. The successful installation used a generic signed Release build (`-configuration Release -destination 'generic/platform=iOS' -allowProvisioningUpdates`) followed by `xcrun devicectl device install app --device <connected-device> <Release-iphoneos/OfflineReader.app>`. This preserves signing and the full asset set.
 
 1. Open `ios/OfflineReader.xcodeproj` in Xcode.
 2. In Signing & Capabilities, select your enrolled Apple development team. Confirm the bundle ID `com.akhilvuputuri.offlinereader` is available; update it if needed and keep the refresh identifier in Info.plist/AppDelegate consistent if changing identifiers.

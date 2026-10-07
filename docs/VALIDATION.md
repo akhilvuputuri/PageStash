@@ -85,9 +85,17 @@ Build date: 6 October 2026. This record separates completed checks from required
 - A later Xcode refresh shows the Mac's Apple Development certificate. Signing-identity metadata checked outside the shell sandbox confirms one valid identity. No private keys were exported. A physical iPhone is still not connected, so device provisioning/installation remain pending.
 - Independent CI passed for the simulator acceptance/polling/team configuration commit: https://github.com/akhilvuputuri/offline-reader/actions/runs/37619218742.
 
+### Signed iPhone installation: 7 October 2026
+
+- The iPhone 17 running iOS 27 reports Developer Mode enabled and development services available.
+- Xcode registered/provisioned the connected device for the existing app ID. A device-targeted Debug build failed in asset-catalog thinning for iOS 27 with Xcode 26.3; a generic iOS Release build succeeded with the Apple Development identity and device provisioning profile.
+- `devicectl` confirmed successful installation of `com.akhilvuputuri.offlinereader` and successful foreground launch on the physical iPhone.
+- The installed Release bundle uses the production HTTPS backend, includes the `fetch` background mode, and disallows arbitrary HTTP. The production health endpoint returned 200.
+- Production app-user creation/sign-in and physical offline/background acceptance remain pending. Installation/launch success does not establish those behaviors.
+
 ## Not yet tested
 
-- Signed installation or TestFlight upload.
+- TestFlight upload. Signed physical-device installation and launch have passed.
 - Complete SwiftUI accessibility/layout coverage and physical-device rendering. Main simulator flows have passed interactive checks.
 - An actual article with images reopening on the iPhone after a restart in airplane mode.
 - Naturally scheduled background refresh over multiple days, low-power restrictions, reboot/force-quit behavior and background transfer relaunch callbacks.
