@@ -104,4 +104,76 @@ final class LocalStoreTests: XCTestCase {
       filename: "../../outside", url: URL(string: "https://reader.example")!)
     XCTAssertFalse(content.safeFilename)
   }
+  func testSameSizeCorruptionCannotReplaceReadableContent() throws {
+    let original = Data("<p>Original</p>".utf8)
+    let replacement = Data("<p>Replaced</p>".utf8)
+    let corrupt = Data("<p>Corrupt!</p>".utf8)
+    XCTAssertEqual(replacement.count, corrupt.count)
+    let id = UUID().uuidString
+    let firstAsset = asset(original), nextAsset = asset(replacement)
+    let first = ReadingItem(id: id, title: "Original", assets: [firstAsset])
+    let next = ReadingItem(id: id, title: "Replacement", contentVersion: 2, assets: [nextAsset])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [first], cursor: 1))
+    try install(original, asset: firstAsset, item: first, store: store)
+    try store.apply(LibraryPage(items: [next], cursor: 2))
+    XCTAssertThrowsError(try install(corrupt, asset: nextAsset, item: next, store: store))
+    XCTAssertEqual(try Data(contentsOf: store.readerURL(id)!), original)
+    XCTAssertFalse(store.hasAsset(next, nextAsset))
+    try install(replacement, asset: nextAsset, item: next, store: store)
+    XCTAssertEqual(try Data(contentsOf: store.readerURL(id)!), replacement)
+  }
+
+  func testLateOlderVersionDownloadCannotReplaceNewVersion() throws {
+    let olderBytes = Data("<p>Older</p>".utf8), newerBytes = Data("<p>Current</p>".utf8)
+    let olderAsset = asset(olderBytes), newerAsset = asset(newerBytes)
+    let id = UUID().uuidString
+    let older = ReadingItem(id: id, title: "Older", assets: [olderAsset])
+    let newer = ReadingItem(id: id, title: "Current", contentVersion: 2, assets: [newerAsset])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [older], cursor: 1))
+    try store.apply(LibraryPage(items: [newer], cursor: 2))
+    try install(newerBytes, asset: newerAsset, item: newer, store: store)
+    XCTAssertThrowsError(try install(olderBytes, asset: olderAsset, item: older, store: store))
+    XCTAssertEqual(try store.installedVersion(id), 2)
+    XCTAssertEqual(try Data(contentsOf: store.readerURL(id)!), newerBytes)
+  }
+
+  func testRejectedSyncPageDoesNotAdvanceCursorOrPartiallyChangeLibrary() throws {
+    let id = UUID().uuidString
+    let first = ReadingItem(id: id, title: "Original", assets: [])
+    let changed = ReadingItem(id: id, title: "Changed", revision: 2, assets: [])
+    let invalid = ReadingItem(id: "invalid-id", title: "Invalid", assets: [])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [first], cursor: 1))
+    try store.edit(id, ItemPatch(progress: 0.6, collections: ["Research"]))
+    XCTAssertThrowsError(try store.apply(LibraryPage(items: [changed, invalid], cursor: 3)))
+    XCTAssertEqual(store.cursor, 1)
+    XCTAssertEqual(try store.item(id)?.title, "Original")
+    XCTAssertEqual(try store.item(id)?.progress, 0.6)
+    XCTAssertEqual(try store.pendingEdits().count, 1)
+    XCTAssertTrue(try store.search("Original").contains(id))
+    XCTAssertFalse(try store.search("Changed").contains(id))
+    try store.apply(LibraryPage(items: [changed], cursor: 3))
+    XCTAssertEqual(store.cursor, 3)
+    XCTAssertEqual(try store.item(id)?.collections, ["Research"])
+  }
+
+  func testOfflineEditsAndDownloadPauseSurviveRestartAndRefresh() throws {
+    let item = ReadingItem(id: UUID().uuidString, title: "Reading", assets: [])
+    var store: LocalStore? = try LocalStore(root: root)
+    try store!.apply(LibraryPage(items: [item], cursor: 1))
+    try store!.edit(item.id, ItemPatch(progress: 0.7, archived: true, collections: ["Later"]))
+    try store!.removeDownload(item.id)
+    store = nil
+    let reopened = try LocalStore(root: root)
+    XCTAssertTrue(reopened.isPaused(item.id))
+    XCTAssertEqual(try reopened.pendingEdits().count, 1)
+    try reopened.apply(LibraryPage(items: [item], cursor: 2))
+    let restored = try XCTUnwrap(reopened.item(item.id))
+    XCTAssertEqual(restored.progress, 0.7)
+    XCTAssertTrue(restored.archived)
+    XCTAssertEqual(restored.collections, ["Later"])
+    XCTAssertTrue(reopened.isPaused(item.id))
+  }
 }

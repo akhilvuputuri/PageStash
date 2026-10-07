@@ -11,7 +11,7 @@ import SwiftUI
   @Published var lastSync: String =
     UserDefaults.standard.string(forKey: "lastSync") ?? "Not yet synced"
   private(set) var store: LocalStore?
-  private var syncing: Task<Void, Error>?
+  private let syncCoordinator = SyncCoordinator()
   var backendURL: String {
     get {
       UserDefaults.standard.string(forKey: "backendURL")
@@ -65,43 +65,47 @@ import SwiftUI
     if let error = UserDefaults.standard.string(forKey: "downloadError") { message = error }
   }
   func sync(forceManifest: Bool = false) async throws {
-    if let syncing { return try await syncing.value }
     guard let api, let store, let generation = session?.generation else { return }
-    refreshing = true
-    let task = Task { @MainActor in
-      for edit in try store.pendingEdits() {
-        try Task.checkCancellation()
-        try await api.patch(edit.itemID, edit.patch)
-        try store.acknowledge(edit)
-      }
-      var cursor = forceManifest ? 0 : store.cursor
-      repeat {
-        try Task.checkCancellation()
-        let page = try await api.library(cursor: cursor)
-        guard self.session?.generation == generation else { throw CancellationError() }
-        try store.apply(page)
-        cursor = page.cursor
-        if !page.hasMore { break }
-      } while true
-      try Task.checkCancellation()
-      guard self.session?.generation == generation else { throw CancellationError() }
-      self.reload()
-      await Downloads.shared.enqueue(items: self.items)
-      self.lastSync = Date().formatted(date: .abbreviated, time: .shortened)
-      UserDefaults.standard.set(self.lastSync, forKey: "lastSync")
-    }
-    syncing = task
-    defer {
-      syncing = nil
-      refreshing = false
-      scheduleRefresh()
-    }
     do {
-      try await task.value
+      try await syncCoordinator.run(fullManifest: forceManifest) { fullManifest in
+        guard self.session?.generation == generation else { throw CancellationError() }
+        self.refreshing = true
+        defer {
+          if self.session?.generation == generation {
+            self.refreshing = false
+            self.scheduleRefresh()
+          }
+        }
+        for edit in try store.pendingEdits() {
+          try Task.checkCancellation()
+          try await api.patch(edit.itemID, edit.patch)
+          try Task.checkCancellation()
+          guard self.session?.generation == generation else { throw CancellationError() }
+          try store.acknowledge(edit)
+        }
+        var cursor = fullManifest ? 0 : store.cursor
+        repeat {
+          try Task.checkCancellation()
+          let page = try await api.library(cursor: cursor)
+          guard self.session?.generation == generation else { throw CancellationError() }
+          try store.apply(page)
+          cursor = page.cursor
+          if !page.hasMore { break }
+        } while true
+        try Task.checkCancellation()
+        guard self.session?.generation == generation else { throw CancellationError() }
+        self.reload()
+        await Downloads.shared.enqueue(items: self.items)
+        try Task.checkCancellation()
+        guard self.session?.generation == generation else { throw CancellationError() }
+        self.lastSync = Date().formatted(date: .abbreviated, time: .shortened)
+        UserDefaults.standard.set(self.lastSync, forKey: "lastSync")
+      }
+      guard self.session?.generation == generation else { return }
       message = nil
       UserDefaults.standard.removeObject(forKey: "downloadError")
     } catch {
-      message = error.localizedDescription
+      if self.session?.generation == generation { message = error.localizedDescription }
       throw error
     }
   }
@@ -149,7 +153,8 @@ import SwiftUI
     clearLocal()
   }
   private func clearLocal() {
-    syncing?.cancel()
+    syncCoordinator.cancel()
+    refreshing = false
     BGTaskScheduler.shared.cancelAllTaskRequests()
     Downloads.shared.reset()
     Vault.clear()
@@ -179,7 +184,7 @@ import SwiftUI
     }
     task.expirationHandler = {
       operation.cancel()
-      Task { @MainActor in self.syncing?.cancel() }
+      Task { @MainActor in self.syncCoordinator.cancel() }
     }
   }
 }

@@ -62,6 +62,13 @@ Build date: 6 October 2026. This record separates completed checks from required
 - Redeployed commit `4cc6e36` to Northflank Free. The new instance is Running (1/1); live health returned 200, anonymous library access 401, and an empty JSON DELETE request 400. Independent CI passed: https://github.com/akhilvuputuri/offline-reader/actions/runs/37565183768.
 - Added simulator compilation to CI; the exact command passes locally without requiring a simulator runtime on the CI runner.
 
+### Offline sync verification: 7 October 2026
+
+- Fixed a manual-download race: full-manifest requests now follow an active incremental sync rather than incorrectly treating it as sufficient. Concurrent retries share that follow-up refresh instead of duplicating it.
+- Sync cancellation is isolated by run identity, so a cancelled old login cannot clear a newer login's sync. Added generation/cancellation checks after edit uploads and download enqueueing before acknowledging edits or updating the last-sync state.
+- All 14 Swift tests pass. New cases cover coordinated full/incremental syncs, cancellation across logins, recovery after failure, same-size hash corruption, stale-version downloads, sync-page transaction rollback, and offline edits/download pauses surviving a restart.
+- Unsigned Release iPhone and Debug simulator builds pass after this change. Backend code and deployment are unchanged.
+
 ## Not yet tested
 
 - Signed installation or TestFlight upload.
