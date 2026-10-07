@@ -20,6 +20,8 @@
 
 The production service does not store articles on the container's ephemeral disk. Restarting or redeploying must retain jobs, articles, and images in PostgreSQL/Supabase Storage. No persistent volume is needed for this server.
 
+The container adds Supabase's public database CA to Node's trusted roots using `NODE_EXTRA_CA_CERTS`, while keeping `sslmode=verify-full`. The certificate is downloaded from the dashboard's Database Settings link (`https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt`). Refresh this public certificate if Supabase rotates its CA. For local production connections, set `NODE_EXTRA_CA_CERTS` to the absolute path of `backend/supabase-ca.crt` before starting Node.
+
 The service processes up to three imports per worker cycle, with one active import per process. Saves wake the worker immediately. Empty queues are checked once per minute and expiry cleanup runs hourly. Queue leases expire after 10 minutes and allow crash recovery. Fetches are bounded; deploy interruption can leave an unreferenced uploaded file. Before expanding the beta, add a scheduled orphan-object audit with a retention window, and verify PostgreSQL upgrades using a backed-up project.
 
 The repository retains `render.yaml` as an optional paid-hosting alternative, but Northflank Free is the selected target. No paid alternative should be provisioned without an explicit hosting decision.
