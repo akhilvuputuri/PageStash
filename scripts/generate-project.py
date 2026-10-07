@@ -34,7 +34,7 @@ frameworkPhase = obj('frameworks', f'isa = PBXFrameworksBuildPhase; buildActionM
 resourcePhase = obj('resources', f'isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ({assetBuild},{privacyBuild}); runOnlyForDeploymentPostprocessing = 0;')
 def config(name, app):
     debug = name == 'Debug'
-    settings = {'IPHONEOS_DEPLOYMENT_TARGET':'17.0','SDKROOT':'iphoneos','SWIFT_VERSION':'5.0','CLANG_ENABLE_MODULES':'YES', 'SWIFT_OPTIMIZATION_LEVEL':'-Onone' if debug else '-O'}
+    settings = {'IPHONEOS_DEPLOYMENT_TARGET':'17.0','SDKROOT':'iphoneos','SWIFT_VERSION':'5.0','CLANG_ENABLE_MODULES':'YES', 'SWIFT_OPTIMIZATION_LEVEL':'-Onone' if debug else '-O', 'ONLY_ACTIVE_ARCH':'YES' if debug else 'NO'}
     if app:
         settings.update({'PRODUCT_BUNDLE_IDENTIFIER':'com.akhilvuputuri.offlinereader','PRODUCT_NAME':'$(TARGET_NAME)','INFOPLIST_FILE':'OfflineReader/Info-Debug.plist' if debug else 'OfflineReader/Info.plist','GENERATE_INFOPLIST_FILE':'NO','CURRENT_PROJECT_VERSION':'1','MARKETING_VERSION':'0.1.0','TARGETED_DEVICE_FAMILY':'1','CODE_SIGN_STYLE':'Automatic','ASSETCATALOG_COMPILER_APPICON_NAME':'AppIcon','SWIFT_ACTIVE_COMPILATION_CONDITIONS':'DEBUG' if debug else '', 'ENABLE_USER_SCRIPT_SANDBOXING':'YES'})
     return obj(('app' if app else 'project')+name, f'isa = XCBuildConfiguration; buildSettings = {{'+''.join(f'{key} = {q(value)};' for key,value in settings.items())+f'}}; name = {name};')

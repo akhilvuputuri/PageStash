@@ -71,6 +71,9 @@ export async function buildServer(service: Service) {
       return reply.code(400).send({ error: "Invalid request fields." });
     if ((error as { statusCode?: number }).statusCode === 429)
       return reply.code(429).send({ error: "Too many requests. Try later." });
+    const status = (error as { statusCode?: number }).statusCode;
+    if (status && status >= 400 && status < 500)
+      return reply.code(status).send({ error: "Invalid request." });
     return reply.code(500).send({ error: "Request could not complete." });
   });
   const auth = (request: { headers: { authorization?: string } }) =>

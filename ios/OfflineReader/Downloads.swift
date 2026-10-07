@@ -12,6 +12,8 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
   private let lock = NSRecursiveLock()
   private var store: LocalStore?
   private var generation: String?
+  private var enqueuing = false
+  private var enqueueWaiters: [CheckedContinuation<Void, Never>] = []
   private var progressByItem: [String: Double] = [:]
   private var lastProgressNotification = Date.distantPast
   var completion: (() -> Void)?
@@ -22,7 +24,9 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
     config.sessionSendsLaunchEvents = true
     config.isDiscretionary = false
     config.waitsForConnectivity = true
-    config.allowsCellularAccess = UserDefaults.standard.bool(forKey: "cellular")
+    // Keep the session eligible; each request enforces the current user choice.
+    // A session created with cellular disabled cannot be relaxed by its requests.
+    config.allowsCellularAccess = true
     config.timeoutIntervalForResource = 86400
     return URLSession(configuration: config, delegate: self, delegateQueue: nil)
   }()
@@ -48,7 +52,10 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
     _ = session
   }
   func enqueue(items: [ReadingItem], manual: Set<String> = []) async {
-    let tasks = await session.allTasks
+    await beginEnqueue()
+    defer { endEnqueue() }
+    guard !Task.isCancelled else { return }
+    let tasks = await session.allTasks.filter { $0.state != .canceling && $0.state != .completed }
     let existing = Set(
       tasks.compactMap { task -> String? in
         guard let description = task.taskDescription, let data = description.data(using: .utf8),
@@ -105,6 +112,35 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
     lock.lock()
     defer { lock.unlock() }
     return (store, generation)
+  }
+  private func beginEnqueue() async {
+    await withCheckedContinuation { continuation in
+      lock.lock()
+      if enqueuing {
+        enqueueWaiters.append(continuation)
+        lock.unlock()
+      } else {
+        enqueuing = true
+        lock.unlock()
+        continuation.resume()
+      }
+    }
+  }
+  private func endEnqueue() {
+    lock.lock()
+    let next = enqueueWaiters.isEmpty ? nil : enqueueWaiters.removeFirst()
+    if next == nil { enqueuing = false }
+    lock.unlock()
+    next?.resume()
+  }
+  func updateCellularPolicy() async {
+    let allowed = UserDefaults.standard.bool(forKey: "cellular")
+    // Existing URLSession requests are immutable. Cancel and requeue them with
+    // the new policy, retaining files already verified in the local store.
+    for task in await session.allTasks
+    where task.originalRequest?.allowsCellularAccess != allowed {
+      task.cancel()
+    }
   }
   func progress(itemID: String) -> Double? {
     lock.lock()
@@ -163,6 +199,12 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
     DispatchQueue.main.async { self.completion?() }
   }
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    lock.lock()
+    defer { lock.unlock() }
+    guard let description = task.taskDescription, let data = description.data(using: .utf8),
+      let transfer = try? JSONDecoder().decode(Transfer.self, from: data),
+      transfer.generation == generation
+    else { return }
     if let error, (error as NSError).code != NSURLErrorCancelled {
       UserDefaults.standard.set(
         "A download was interrupted. Refresh to retry.", forKey: "downloadError")

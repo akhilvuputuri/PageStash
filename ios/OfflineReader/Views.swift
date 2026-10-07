@@ -323,7 +323,12 @@ struct SettingsView: View {
     NavigationStack {
       Form {
         Section("Downloads") {
-          Toggle("Allow cellular downloads", isOn: $cellular)
+          Toggle("Allow cellular downloads", isOn: $cellular).onChange(of: cellular) { _, _ in
+            Task {
+              await Downloads.shared.updateCellularPolicy()
+              try? await state.sync(forceManifest: true)
+            }
+          }
           Picker("Storage limit", selection: $storageLimit) {
             Text("512 MB").tag(512_000_000)
             Text("1 GB").tag(1_000_000_000)
@@ -372,38 +377,39 @@ struct SettingsView: View {
               Button("Revoke", role: .destructive) {
                 Task {
                   do {
-                    let _: OK = try await state.api!.request(
+                    guard let api = state.api else { return }
+                    let _: OK = try await api.request(
                       "/v1/connections/\(connection.id)", method: "DELETE")
                     await loadConnections()
                   } catch { self.error = error.localizedDescription }
                 }
               }
             }
-            Text("MCP endpoint: \(state.backendURL)/mcp").font(.caption).textSelection(.enabled)
           }
-          if let error { Section { Text(error).foregroundStyle(.red) } }
-          Section {
-            Button("Sign out", role: .destructive) {
-              Task {
-                await state.logout()
-                dismiss()
-              }
-            }
-            Button("Delete account and library", role: .destructive) { confirmDelete = true }
-          }
-        }.navigationTitle("Settings").toolbar {
-          ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-        }.task { await loadConnections() }.confirmationDialog(
-          "Permanently delete your account and all saved articles?", isPresented: $confirmDelete,
-          titleVisibility: .visible
-        ) {
-          Button("Delete account", role: .destructive) {
+          Text("MCP endpoint: \(state.backendURL)/mcp").font(.caption).textSelection(.enabled)
+        }
+        if let error { Section { Text(error).foregroundStyle(.red) } }
+        Section("Account") {
+          Button("Sign out", role: .destructive) {
             Task {
-              do {
-                try await state.deleteAccount()
-                dismiss()
-              } catch { self.error = error.localizedDescription }
+              await state.logout()
+              dismiss()
             }
+          }
+          Button("Delete account and library", role: .destructive) { confirmDelete = true }
+        }
+      }.navigationTitle("Settings").toolbar {
+        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+      }.task { await loadConnections() }.confirmationDialog(
+        "Permanently delete your account and all saved articles?", isPresented: $confirmDelete,
+        titleVisibility: .visible
+      ) {
+        Button("Delete account", role: .destructive) {
+          Task {
+            do {
+              try await state.deleteAccount()
+              dismiss()
+            } catch { self.error = error.localizedDescription }
           }
         }
       }

@@ -22,6 +22,7 @@ struct ArticleWebView: UIViewRepresentable {
     context.coordinator.parent = self
     if context.coordinator.loaded != url {
       context.coordinator.loaded = url
+      context.coordinator.restoring = true
       web.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
     }
     if context.coordinator.fontSize != fontSize {

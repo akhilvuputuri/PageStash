@@ -49,10 +49,21 @@ Build date: 6 October 2026. This record separates completed checks from required
 - GitHub CI passed for the deployed commit: https://github.com/akhilvuputuri/offline-reader/actions/runs/37563016494.
 - Personal Supabase application-user creation remains a human handoff. Authenticated ingestion, private asset upload/download and restart recovery on this host remain unverified.
 
+### Additional acceptance work: 7 October 2026
+
+- The end-to-end verification script caught bodyless DELETE requests incorrectly carrying a JSON content type in the iPhone client. Fixed the client request headers; malformed client requests now retain their proper 4xx status instead of appearing as server failures.
+- Added a regression covering HTTP credential revocation, session logout, expired download capabilities and retained library items. All 17 backend tests pass.
+- `scripts/verify-backend.mjs` passed against an isolated local backend: an MCP-created brief, a public article with six images, eight size/hash-verified files, idempotent retries, agent library rejection and revoked-agent rejection. This is real extraction and local storage, not a Supabase production ingestion test.
+- iOS Debug simulator compilation passed after aligning the app's active architecture with its Swift package. An iOS 26.3 simulator runtime is now installed; no new runtime download was needed.
+- Final unsigned Release device compilation also passed. Installed and launched the Debug build on the existing iPhone 17 Pro simulator; launch returned a running process, but visual rendering/sign-in remain unverified while the Mac is locked.
+- Cellular changes now cancel/requeue requests under the new policy without discarding verified files. Download enqueue operations are serialized, late failures from an old login are ignored, and article version changes restore the saved reading position.
+- The deployed origin is prefilled on login. Settings displays its MCP endpoint even without existing connections, with account controls in their own section.
+- UI interaction remains blocked while the Mac is locked. No physical iPhone is connected and no local signing identity is available at this check.
+
 ## Not yet tested
 
 - Signed installation or TestFlight upload.
-- SwiftUI visual layout on a running iPhone or simulator; no simulator runtime was installed and no iPhone was connected when implementation began.
+- SwiftUI visual layout on a running iPhone or simulator; a simulator is now available but screen interaction has been blocked by the locked Mac.
 - An actual article with images reopening on the iPhone after a restart in airplane mode.
 - Naturally scheduled background refresh over multiple days, low-power restrictions, reboot/force-quit behavior and background transfer relaunch callbacks.
 - Live Supabase authentication/private storage; production PostgreSQL startup and health have passed, while ingestion tests still use embedded PostgreSQL.

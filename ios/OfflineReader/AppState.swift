@@ -13,7 +13,10 @@ import SwiftUI
   private(set) var store: LocalStore?
   private var syncing: Task<Void, Error>?
   var backendURL: String {
-    get { UserDefaults.standard.string(forKey: "backendURL") ?? "" }
+    get {
+      UserDefaults.standard.string(forKey: "backendURL")
+        ?? Bundle.main.object(forInfoDictionaryKey: "ReaderBackendURL") as? String ?? ""
+    }
     set {
       UserDefaults.standard.set(
         newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "backendURL")
@@ -51,6 +54,7 @@ import SwiftUI
       backendURL = base
       try Vault.save(session)
       self.session = session
+      // The download delegate reads the configured origin from UserDefaults.
       configure(session)
       scheduleRefresh()
       try await sync()

@@ -193,6 +193,35 @@ test("HTTP agent token cannot manage library or credentials", async () => {
   ]);
   await assert.rejects(() => service.authenticate(credential.token), /invalid/);
 });
+test("HTTP revocation and logout invalidate credentials and download grants", async () => {
+  const login = await service.login("reader@example.test", "local-test-password");
+  const identity = await service.authenticate(login.token);
+  const credential = await service.credential(identity.owner_id, "api", "HTTP revoke check");
+  const agentIdentity = await service.authenticate(credential.token);
+  const saved = await service.save(agentIdentity, {
+    title: "Revocation check", markdown: "A private brief", sources: [],
+    idempotency_key: randomUUID(),
+  });
+  await service.runOne();
+  const page = await service.library(identity, 0);
+  const asset = page.items.find(item => item.id === saved.submission_id)!.assets[0];
+  const authHeader = { authorization: `Bearer ${login.token}` };
+  const revoke = await app.inject({ method: "DELETE",
+    url: `/v1/connections/${credential.connection_id}`, headers: authHeader });
+  assert.equal(revoke.statusCode, 200);
+  const denied = await app.inject({ method: "GET", url: `/v1/saves/${saved.submission_id}`,
+    headers: {authorization: `Bearer ${credential.token}`} });
+  assert.equal(denied.statusCode, 401);
+  const logout = await app.inject({ method: "DELETE", url: "/v1/session", headers: authHeader });
+  assert.equal(logout.statusCode, 200);
+  assert.equal((await app.inject({ method: "GET", url: "/v1/library", headers: authHeader })).statusCode, 401);
+  assert.equal((await app.inject({ method: "GET", url: new URL(asset.url).pathname })).statusCode, 404);
+  // Logging out revokes capabilities but preserves the account's saved article.
+  assert.equal((await service.status(owner, saved.submission_id!)).status, "ready");
+  const malformed = await app.inject({ method: "DELETE", url: "/v1/session",
+    headers: { ...authHeader, "content-type": "application/json" } });
+  assert.equal(malformed.statusCode, 400);
+});
 test("OAuth consent, S256, one-time code, rotation and revocation", async () => {
   const registration = await app.inject({
     method: "POST",

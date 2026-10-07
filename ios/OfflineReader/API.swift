@@ -54,7 +54,7 @@ struct API: Sendable {
     request.httpMethod = method
     request.httpBody = body
     request.timeoutInterval = 20
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
     let (data, response) = try await URLSession.shared.data(for: request)
     guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode)
