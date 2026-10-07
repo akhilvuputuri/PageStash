@@ -240,6 +240,12 @@ struct ReaderScreen: View {
   @EnvironmentObject var state: AppState
   let itemID: String
   @AppStorage("readerFontSize") private var fontSize = 20.0
+  @AppStorage("appearance") private var appearance = "light"
+  private var readerBackground: Color {
+    appearance == "sepia"
+      ? Color(red: 246 / 255, green: 240 / 255, blue: 228 / 255)
+      : Color(.systemBackground)
+  }
   @State private var collection = ""
   @State private var showCollection = false
   private var item: ReadingItem? { state.items.first { $0.id == itemID } }
@@ -313,10 +319,12 @@ struct ReaderScreen: View {
       } else {
         ContentUnavailableView("Item removed", systemImage: "book")
       }
-    }.navigationBarTitleDisplayMode(.inline).onDisappear {
-      state.reload()
-      Task { try? await state.sync() }
-    }
+    }.background(readerBackground.ignoresSafeArea())
+      .toolbarBackground(readerBackground, for: .navigationBar)
+      .navigationBarTitleDisplayMode(.inline).onDisappear {
+        state.reload()
+        Task { try? await state.sync() }
+      }
   }
 }
 struct SettingsView: View {
@@ -336,10 +344,11 @@ struct SettingsView: View {
         Section("Appearance") {
           Picker("Theme", selection: $appearance) {
             Text("Light").tag("light")
+            Text("Sepia").tag("sepia")
             Text("Dark").tag("dark")
             Text("System").tag("system")
           }
-          Text("Light uses a white reading background.")
+          Text("Light uses white pages. Sepia uses warm off-white pages with softer brown text.")
             .font(.footnote).foregroundStyle(.secondary)
         }
         Section("Downloads") {

@@ -3,23 +3,35 @@ import WebKit
 
 struct ArticleWebView: UIViewRepresentable {
   @Environment(\.colorScheme) private var colorScheme
+  @AppStorage("appearance") private var selectedAppearance = "light"
   let url: URL
   let progress: Double
   let fontSize: Double
   let onProgress: (Double) -> Void
-  private var appearance: String { colorScheme == .dark ? "dark" : "light" }
+  private var appearance: String {
+    selectedAppearance == "sepia" ? "sepia" : (colorScheme == .dark ? "dark" : "light")
+  }
+  private var pageBackground: UIColor {
+    if appearance == "sepia" {
+      return UIColor(red: 246 / 255, green: 240 / 255, blue: 228 / 255, alpha: 1)
+    }
+    return appearance == "dark" ? UIColor(white: 0.067, alpha: 1) : .white
+  }
   private var styleScript: String {
-    let dark = colorScheme == .dark
-    let background = dark ? "#111111" : "#ffffff"
-    let foreground = dark ? "#eeeeee" : "#1c1c1e"
+    let dark = appearance == "dark"
+    let sepia = appearance == "sepia"
+    let background = sepia ? "#f6f0e4" : (dark ? "#111111" : "#ffffff")
+    let foreground = sepia ? "#3d352b" : (dark ? "#eeeeee" : "#1c1c1e")
+    let link = sepia ? "#86512d" : (dark ? "#8ab4f8" : "#4685c5")
     return """
-      document.documentElement.style.colorScheme='\(appearance)';
+      document.documentElement.style.colorScheme='\(dark ? "dark" : "light")';
       document.documentElement.style.backgroundColor='\(background)';
       if (document.body) {
         document.body.style.backgroundColor='\(background)';
         document.body.style.color='\(foreground)';
         document.body.style.fontSize='\(fontSize)px';
       }
+      document.querySelectorAll('a').forEach(link => link.style.color='\(link)');
       """
   }
   func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -41,7 +53,7 @@ struct ArticleWebView: UIViewRepresentable {
       context.coordinator.restoring = true
       web.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
     }
-    web.backgroundColor = colorScheme == .dark ? UIColor(white: 0.067, alpha: 1) : .white
+    web.backgroundColor = pageBackground
     web.scrollView.backgroundColor = web.backgroundColor
     if context.coordinator.fontSize != fontSize || context.coordinator.appearance != appearance {
       context.coordinator.fontSize = fontSize

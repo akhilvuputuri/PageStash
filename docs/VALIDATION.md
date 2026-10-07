@@ -101,6 +101,12 @@ Build date: 6 October 2026. This record separates completed checks from required
 - Interactive simulator checks switched the same previously downloaded brief to Dark and back to Light. Both native controls and cached HTML followed the preference; Light rendered black text on a white background. System is also offered in the picker.
 - Published a host-neutral MCP/HTTP adapter contract for another implementing agent. Chief Agent was not changed or connected by this task. Live MCP discovery still exposes exactly the three documented save/status tools.
 
+### Pending phone release: Sepia, 8 October 2026
+
+- Added Sepia to the appearance picker, using warm off-white pages, dark brown text and brown links. The reader header and navigation background match the page.
+- Release and simulator builds passed. Visually verified the new option on a previously downloaded brief in the simulator.
+- Per the owner's request, this update has **not** been installed on the physical iPhone; it is reserved for the next release. The phone retains its Light/Dark/System build.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.

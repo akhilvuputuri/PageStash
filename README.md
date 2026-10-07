@@ -69,7 +69,7 @@ node scripts/verify-backend.mjs
 
 It prompts for your app password without echoing or storing it, saves a demonstration brief through MCP and a public article, verifies file hashes and duplicate retries, then checks agent restrictions and revocation. It retains the two demonstration items for phone testing and revokes its temporary credential/session. It never needs database or Supabase service keys. Optional `READER_URL`, `READER_EMAIL`, and `READER_ARTICLE_URL` environment values select another backend, account, or public source. This command checks the server; the phone's offline behavior still requires device acceptance.
 
-Appearance is configurable in Settings → Appearance: Light (the default), Dark, or System. Light uses a white reading background for downloaded articles and briefs, including existing cached content.
+Appearance is configurable in Settings → Appearance: Light (the default), Sepia, Dark, or System. Light uses white pages; Sepia uses warm off-white pages with brown text. Both apply to existing cached articles and briefs. Sepia is prepared for the next phone release.
 
 ## Background behavior
 
