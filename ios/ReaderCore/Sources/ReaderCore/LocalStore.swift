@@ -201,9 +201,12 @@ public final class LocalStore: @unchecked Sendable {
         ["position:\(id)", String(value)])
     }
   }
-  @discardableResult public func finishReading(_ id: String) throws -> ReadingUndo {
+  @discardableResult public func finishReading(_ id: String) throws -> ReadingUndo? {
     try synchronized {
       guard let current = try item(id), !current.deleted else { throw ReaderError.missingItem }
+      if current.archived && current.progress == 1 {
+        return try readingUndo().flatMap { $0.itemId == id ? $0 : nil }
+      }
       let undo = ReadingUndo(
         id: UUID().uuidString, itemId: id, previousProgress: current.progress,
         previousArchived: current.archived)

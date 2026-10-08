@@ -223,8 +223,9 @@ import SwiftUI
     guard session != nil, !previewMode else { return }
     let request = BGAppRefreshTaskRequest(identifier: AppDelegate.refreshID)
     request.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
-    do { try BGTaskScheduler.shared.submit(request) } catch
-    { /* Foreground and manual refresh remain available. */  }
+    do { try BGTaskScheduler.shared.submit(request) } catch {
+      // Foreground and manual refresh remain available.
+    }
   }
   func backgroundRefresh(_ task: BGAppRefreshTask) {
     scheduleRefresh()
