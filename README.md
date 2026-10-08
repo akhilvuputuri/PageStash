@@ -85,6 +85,6 @@ Do not swipe the app away while evaluating automatic refresh. Test Low Power Mod
 
 This is a personal beta with one allowed production email, designed with account ownership throughout. No LLM runs on the backend. There are no public feeds, PDF/EPUB imports, paywall bypassing, or built-in AI. The initial Markdown renderer supports headings, paragraphs, bold, fenced code, and links; advanced Markdown formatting and embedded images are deliberately deferred. The app does not promise a freshness deadline.
 
-## Library UI candidate (issue 1)
+## Library UI (issue 1)
 
-The current implementation branch replaces Inbox/Offline/Archived tabs with one Library and a secondary Archive destination. Done reading marks read and archives with Undo, while preserving installed files and the device reading position. It trims reader actions and moves connection/account management into secondary settings screens. See [candidate validation](docs/VALIDATION.md#issue-1-implementation-candidate-library-and-completion-8-october-2026); this is not a new installed phone release.
+The Library UI replaces Inbox/Offline/Archived tabs with one Library and a secondary Archive destination. Done reading marks read and archives with Undo, while preserving installed files and the device reading position. It trims reader actions and moves connection/account management into secondary settings screens. See [implementation validation](docs/VALIDATION.md#issue-1-library-and-completion-8-october-2026); this is not a new installed phone release.

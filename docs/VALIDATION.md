@@ -107,14 +107,18 @@ Build date: 6 October 2026. This record separates completed checks from required
 - Release and simulator builds passed. Visually verified the new option on a previously downloaded brief in the simulator.
 - Per the owner's request, this update has **not** been installed on the physical iPhone; it is reserved for the next release. The phone retains its Light/Dark/System build.
 
-### Issue 1 implementation candidate: library and completion, 8 October 2026
+### Issue 1: library and completion, 8 October 2026
 
 - One Library replaces the Inbox/Offline/Archived segmented navigation; Archive is reachable through Library options. Device download icons distinguish preparing, missing, partial and verified available-offline content.
 - Done reading archives and marks read, returns to the library and offers persisted Undo. Archive/restore retain installed assets. Text size is one control; download actions depend on state; connection/account management have secondary settings screens.
 - All 22 local Swift storage/sync tests passed, including eight new restart/position/asset-retention, synced Undo, stale Undo, repeated Done, collection-edit and old-acknowledgement cases. Swift syntax and changed-file formatting checks passed.
 - An initial local Swift build failed when the Mac ran out of space. Only task-generated build/archive files were removed; the isolated no-index rebuild passed. Full native device/simulator compilation is delegated to existing macOS CI.
 - The debug-only `--preview-library` mode creates a new synthetic store, skips Keychain access and all API calls, and schedules no refresh. CI provides a separate preview bundle identifier for safe visual review. Release builds cannot activate this fixture mode.
-- Hosted checks and visual review remain pending for this candidate. The physical iPhone is unavailable; no phone installation, live library edit or backend deployment was performed. Server/MCP contracts, refresh scheduling and the separately tracked title/theme/import-policy issues are unchanged.
+- Hosted push and PR checks passed on `d5d82e7`, including backend tests/audit, all 22 storage/sync tests, unsigned iPhone and simulator compilation, and the isolated preview build. Interactive iPhone 17 Pro / iOS 26.3 simulator validation passed: Library → options → Archive takes two taps; Done returns to Library with Undo; Undo restores the cached article and its reading progress; reopening/returning retains that position; Archive restoration returns an item to Library. Downloaded, text-only and preparing indicators were visually checked, and the fully downloaded reader offers no redundant Download/Retry action. The screenshots below contain synthetic data only. The physical iPhone is unavailable; no phone installation, live library edit or backend deployment was performed. Server/MCP contracts, refresh scheduling and the separately tracked title/theme/import-policy issues are unchanged.
+
+![Synthetic Library preview](images/library-preview.png)
+
+![Synthetic Done reading and Undo](images/done-reading-undo.png)
 
 ## Not yet tested
 
