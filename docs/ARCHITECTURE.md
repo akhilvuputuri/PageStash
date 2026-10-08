@@ -30,7 +30,7 @@ Images and HTML are immutable assets with cryptographic hashes. Download URLs la
 
 The Library shows unarchived items; Archive is a secondary menu destination. Done reading explicitly sets the existing server read marker (`progress = 1`) and archives the item in one local transaction. Scrolling to the bottom alone never archives. Archiving retains installed content and images.
 
-Actual scroll position is stored separately on the device, preserving it when the server read marker is set and when a completed article is revisited. This requires no backend schema/API change. The position survives app restart and sync, but remains device-local and is cleared with the local cache on logout.
+Actual scroll position is stored separately on the device, preserving it when the server read marker is set and when a completed article is revisited. Cached article metadata shares the article scroll document, so the title leaves the viewport with the body. Saved progress excludes that header, and text-size/theme changes restore the relative body position. This requires no backend schema/API change. The position survives app restart and sync, but remains device-local and is cleared with the local cache on logout.
 
 The latest Done action has a persisted Undo record. Undo restores prior completion/archive fields, merges with newer collection edits, and keeps installed files and the current device position. Later completion/archive/deletion edits or differing synced state invalidate it; old acknowledgements cannot remove a newer Undo patch. Dismissal or another Done action replaces that one-action affordance.
 
