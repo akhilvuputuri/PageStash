@@ -125,7 +125,11 @@ Build date: 6 October 2026. This record separates completed checks from required
 - Cached article title, author, source, offline status and warnings are inserted as text into one header inside the existing WKWebView document. No competing native scroll view wraps cached content; the no-download screen has its own single native ScrollView.
 - Exact duplicate leading title headings are removed. Metadata uses JSON and textContent; source links require HTTP(S). Publisher scripts remain disabled and cached files stay immutable.
 - Header height is excluded from saved article progress. Presentation/font/theme updates restore the relative body position after styling, with generation checks against stale callbacks.
-- All 26 local storage/sync/progress tests pass, including four new header/position geometry cases. Swift syntax, formatting and whitespace checks pass. Hosted compilation and the long-title synthetic simulator check remain pending; no physical phone update has occurred.
+- All 26 local storage/sync/progress tests pass, including four new header/position geometry cases. Swift syntax, formatting and whitespace checks pass. Hosted push/PR checks passed on `1188e74`, including device/simulator and isolated preview compilation. Synthetic simulator validation showed a long title and metadata once at the top, then fully scrolled away to leave the body viewport. A quick keyboard-scroll/exit initially failed to persist the final offset; the subsequent fix flushes position before exiting or finishing. In the final preview, the saved body progress appeared in Library and reopening returned to the same paragraph. Larger-text checking was interrupted by the Mac locking; no physical phone update has occurred.
+
+![Synthetic long title before scrolling](images/scrolling-title-header.png)
+
+![Synthetic article body after the title scrolls away](images/scrolling-title-body.png)
 
 ## Not yet tested
 

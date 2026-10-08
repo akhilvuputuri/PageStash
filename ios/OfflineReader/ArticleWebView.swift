@@ -57,7 +57,7 @@ struct ArticleWebView: UIViewRepresentable {
       let header = document.getElementById('reader-header');
       if (!header) {
         const heading = body.querySelector('h1,h2');
-        if (heading && heading.textContent.replace(/\\s+/g,' ').trim() === metadata.title.replace(/\\s+/g,' ').trim()) heading.remove();
+        if (heading) { const prior=document.createRange(); prior.setStart(body,0); prior.setEndBefore(heading); if (!prior.toString().trim() && heading.textContent.replace(/\\s+/g,' ').trim() === metadata.title.replace(/\\s+/g,' ').trim()) heading.remove(); }
         header = document.createElement('header'); header.id='reader-header'; body.prepend(header);
       }
       header.replaceChildren();
@@ -147,7 +147,11 @@ struct ArticleWebView: UIViewRepresentable {
       appearance = parent.appearance
       header = parent.header
       web.evaluateJavaScript(parent.styleScript) { value, error in
-        guard current == self.presentation, expected == self.loaded, error == nil else { return }
+        guard current == self.presentation, expected == self.loaded else { return }
+        guard error == nil else {
+          self.restoring = false
+          return
+        }
         self.headerHeight = (value as? NSNumber)?.doubleValue ?? 0
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
           guard current == self.presentation, expected == self.loaded else { return }
