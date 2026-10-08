@@ -142,8 +142,14 @@ Build date: 6 October 2026. This record separates completed checks from required
 - The pre-fix hosted iPhone 16 Pro / iOS 18.5 fixture reproduced Light → Dark leaving the open Settings presentation Light: https://github.com/akhilvuputuri/offline-reader/actions/runs/37784486304.
 - Theme changes now update the containing presentation's native override, including explicitly clearing it for System. Settings, Save and Text size observe the same preference without changing view identity. Sepia paper, rows, text and navigation colors also apply to native settings and the library.
 - Hosted push/PR checks passed on `81c27b4`: backend checks/audit, 26 core tests, device/simulator compilation and two native presentation tests. Settings stays presented across all four choices, retains its form offset, and follows simulated device Light/Dark changes in System mode. Cached HTML backgrounds and reading position follow Light/Dark/Sepia/System. Overlapping style updates previously reset the pending article target; the fix retains it.
-- Synthetic screenshots are retained in the test artifact. Final PR checks also cover editing focus and label retention in the connections form. Evidence and final checks: https://github.com/akhilvuputuri/offline-reader/pull/12.
+- Synthetic Dark/Sepia settings and Sepia Library screenshots were visually reviewed and are retained below and in the test artifact. Final PR checks also cover editing focus and label retention in the connections form. Evidence and final checks: https://github.com/akhilvuputuri/offline-reader/pull/12.
 - Physical-iPhone validation remains deferred to the owner's combined app release. No phone installation, live-account modification or backend deployment was performed.
+
+![Synthetic open Settings in Dark](images/settings-dark.png)
+
+![Synthetic open Settings in Sepia](images/settings-sepia.png)
+
+![Synthetic Library in Sepia](images/library-sepia.png)
 
 ## Not yet tested
 

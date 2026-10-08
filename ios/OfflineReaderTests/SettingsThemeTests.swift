@@ -81,6 +81,8 @@ import XCTest
         host.presentedViewController === sheet, "Changing theme must preserve the open sheet")
       XCTAssertEqual(
         scroll.contentOffset.y, savedOffset, accuracy: 1, "Theme changes must retain form position")
+      // Same-scheme choices (Light/Sepia/System) still need a rendered SwiftUI frame.
+      try await Task.sleep(nanoseconds: 250_000_000)
       snapshot(window, name: "Synthetic settings \(theme)")
     }
     window.overrideUserInterfaceStyle = .dark
@@ -106,7 +108,11 @@ import XCTest
     try await waitFor("credential label field") { self.findField(connections.view) != nil }
     let field = try XCTUnwrap(findField(connections.view))
     XCTAssertTrue(field.becomeFirstResponder())
+    field.selectedTextRange = field.textRange(
+      from: field.beginningOfDocument, to: field.endOfDocument)
+    field.insertText("Synthetic connection label")
     let label = field.text
+    XCTAssertEqual(label, "Synthetic connection label")
     for theme in ["dark", "light", "sepia", "system"] {
       defaults.set(theme, forKey: "appearance")
       let expected: UIUserInterfaceStyle = theme == "dark" ? .dark : .light
