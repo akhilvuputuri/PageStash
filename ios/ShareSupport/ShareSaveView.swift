@@ -37,7 +37,7 @@ import UniformTypeIdentifiers
         loading = false
         return
       }
-      destination = credentials.account.server.host
+      destination = credentials.account.server.absoluteString
       store = try storeSource()
       providers = items.flatMap { $0.attachments ?? [] }
       guard providers.count <= 12 else { throw ShareError.invalidURL }

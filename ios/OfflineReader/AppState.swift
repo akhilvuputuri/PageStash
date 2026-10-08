@@ -113,6 +113,7 @@ import SwiftUI
             self.scheduleRefresh()
           }
         }
+        self.reload()  // Local shares remain visible even when the network is unavailable.
         if let shareStore = self.shareStore, let credentials = ShareVault.load() {
           // A bounded batch also runs in the foreground/background refresh pipeline.
           for _ in 0..<5 {
@@ -165,7 +166,10 @@ import SwiftUI
       message = nil
       UserDefaults.standard.removeObject(forKey: "downloadError")
     } catch {
-      if self.session?.generation == generation { message = error.localizedDescription }
+      if self.session?.generation == generation {
+        reload()
+        message = error.localizedDescription
+      }
       throw error
     }
   }

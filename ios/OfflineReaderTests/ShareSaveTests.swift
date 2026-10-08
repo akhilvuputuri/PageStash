@@ -39,12 +39,6 @@ import XCTest
     XCTAssertTrue(model.message?.contains("Queued on this device") == true)
     let reopened = try SharedSaveStore(root: directory)
     XCTAssertEqual(try reopened.records(account).count, 1)
-    offline = false
-    await model.save()
-    XCTAssertEqual(requests.count, 2)
-    XCTAssertEqual(requests[0], requests[1])
-    XCTAssertEqual(model.record?.state, .accepted)
-    XCTAssertTrue(model.message?.contains("does not mean downloaded") == true)
     let scene = try XCTUnwrap(
       UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = UIWindow(windowScene: scene)
@@ -57,14 +51,26 @@ import XCTest
       window.rootViewController = nil
     }
     try await Task.sleep(nanoseconds: 300_000_000)
+    attach(window, name: "Synthetic browser share queued offline")
+    offline = false
+    await model.save()
+    XCTAssertEqual(requests.count, 2)
+    XCTAssertEqual(requests[0], requests[1])
+    XCTAssertEqual(model.record?.state, .accepted)
+    XCTAssertTrue(model.message?.contains("does not mean downloaded") == true)
+    try await Task.sleep(nanoseconds: 300_000_000)
+    attach(window, name: "Synthetic browser share submitted for preparation")
+  }
+  private func attach(_ window: UIWindow, name: String) {
     let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
       window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
     }
     let attachment = XCTAttachment(image: image)
-    attachment.name = "Synthetic browser share submitted for preparation"
+    attachment.name = name
     attachment.lifetime = .keepAlways
     add(attachment)
   }
+
   func testAmbiguousWebURLsRequireExplicitSelection() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
