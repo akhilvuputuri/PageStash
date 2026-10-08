@@ -109,13 +109,15 @@ import XCTest
     XCTAssertLessThan(
       coordinator.headerHeight - web.scrollView.contentOffset.y, 0,
       "The long title must leave WKWebView's native scroll viewport")
-    controls.font = 30
-    try await waitFor { coordinator.fontSize == 30 && !coordinator.restoring }
-    let bodyFont = try await evaluate(web, "document.body.style.fontSize") as? String
-    XCTAssertEqual(bodyFont, "30px")
-    XCTAssertEqual(
-      coordinator.currentProgress(web.scrollView), desired, accuracy: 0.02,
-      "Text resizing must retain the relative body position")
+    for size in [30.0, 14.0, 26.0, 20.0, 30.0] {
+      controls.font = size
+      try await waitFor { coordinator.fontSize == size && !coordinator.restoring }
+      let bodyFont = try await evaluate(web, "document.body.style.fontSize") as? String
+      XCTAssertEqual(bodyFont, "\(Int(size))px")
+      XCTAssertEqual(
+        coordinator.currentProgress(web.scrollView), desired, accuracy: 0.02,
+        "Text resizing must retain the relative body position at \(size) points")
+    }
     controls.dark = true
     try await waitFor { coordinator.appearance == "dark" && !coordinator.restoring }
     let scheme = try await evaluate(web, "document.documentElement.style.colorScheme") as? String

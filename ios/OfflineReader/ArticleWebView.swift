@@ -83,7 +83,7 @@ struct ArticleWebView: UIViewRepresentable {
         document.body.style.padding='18px'; document.body.style.maxWidth='720px'; document.body.style.margin='auto'; document.body.style.overflowWrap='anywhere';
       }
       document.querySelectorAll('a').forEach(link => link.style.color='\(link)');
-      return header.offsetTop + header.offsetHeight + 24;
+      return {headerHeight: header.offsetTop + header.offsetHeight + 24, contentHeight: document.documentElement.scrollHeight};
       })();
       """
   }
@@ -135,12 +135,15 @@ struct ArticleWebView: UIViewRepresentable {
     var headerHeight = 0.0
     var position = 0.0
     var presentation = 0
+    var layoutObservation: NSKeyValueObservation?
     init(_ parent: ArticleWebView) { self.parent = parent }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
       present(webView, progress: parent.progress)
     }
     func present(_ web: WKWebView, progress: Double) {
       restoring = true
+      layoutObservation?.invalidate()
+      layoutObservation = nil
       presentation += 1
       let current = presentation
       let expected = loaded
@@ -153,10 +156,27 @@ struct ArticleWebView: UIViewRepresentable {
           self.restoring = false
           return
         }
-        self.headerHeight = (value as? NSNumber)?.doubleValue ?? 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-          guard current == self.presentation, expected == self.loaded else { return }
-          web.scrollView.layoutIfNeeded()
+        guard let dimensions = value as? [String: NSNumber],
+          let measuredHeader = dimensions["headerHeight"]?.doubleValue,
+          let measuredContent = dimensions["contentHeight"]?.doubleValue
+        else {
+          self.restoring = false
+          return
+        }
+        self.headerHeight = measuredHeader
+        // WebKit's DOM layout and its native scroll content size update separately.
+        // Restore only when the native viewport reflects the styled document.
+        let restore: () -> Void = { [weak self, weak web] in
+          guard let self, let web, current == self.presentation, expected == self.loaded else {
+            return
+          }
+          let scale = web.scrollView.zoomScale
+          guard web.scrollView.bounds.height > 0,
+            abs(web.scrollView.contentSize.height - measuredContent * scale) < 2 * scale
+          else { return }
+          self.headerHeight = measuredHeader * scale
+          self.layoutObservation?.invalidate()
+          self.layoutObservation = nil
           let offset = ReadingScrollPosition.offset(
             progress: progress, contentHeight: web.scrollView.contentSize.height,
             viewportHeight: web.scrollView.bounds.height, headerHeight: self.headerHeight)
@@ -165,6 +185,10 @@ struct ArticleWebView: UIViewRepresentable {
           self.lastSaved = Date()
           self.restoring = false
         }
+        self.layoutObservation = web.scrollView.observe(\.contentSize, options: [.new]) { _, _ in
+          restore()
+        }
+        restore()
       }
     }
 
