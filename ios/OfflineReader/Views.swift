@@ -305,6 +305,7 @@ struct ReaderScreen: View {
   @Environment(\.dismiss) private var dismiss
   @State private var showTextSize = false
   @State private var finished = false
+  @StateObject private var scrollState = ArticleScrollState()
   let itemID: String
   @AppStorage("readerFontSize") private var fontSize = 20.0
   @AppStorage("appearance") private var appearance = "light"
@@ -328,6 +329,7 @@ struct ReaderScreen: View {
                 source: URL(string: item.sourceUrl ?? ""),
                 status: state.store?.offlineState(item).rawValue ?? "Not downloaded",
                 error: item.error),
+              scrollState: scrollState,
               progress: (try? state.store?.readingPosition(item.id)) ?? item.progress,
               fontSize: fontSize
             ) { progress in
@@ -361,6 +363,7 @@ struct ReaderScreen: View {
               Button("Text size") { showTextSize = true }
               if !item.archived, (try? state.store?.readerURL(item.id)) != nil {
                 Button("Done reading") {
+                  scrollState.flush?()
                   if state.finishReading(item.id) {
                     finished = true
                     dismiss()
@@ -422,6 +425,7 @@ struct ReaderScreen: View {
     }.background(readerBackground.ignoresSafeArea())
       .toolbarBackground(readerBackground, for: .navigationBar)
       .navigationBarTitleDisplayMode(.inline).onAppear { finished = false }.onDisappear {
+        if !finished { scrollState.flush?() }
         finished = true
         state.reload()
         Task { try? await state.sync() }

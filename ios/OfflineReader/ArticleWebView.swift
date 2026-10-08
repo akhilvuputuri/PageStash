@@ -22,11 +22,15 @@ struct ArticleHeader: Equatable {
       as: UTF8.self)
   }
 }
+@MainActor final class ArticleScrollState: ObservableObject {
+  var flush: (() -> Void)?
+}
 struct ArticleWebView: UIViewRepresentable {
   @Environment(\.colorScheme) private var colorScheme
   @AppStorage("appearance") private var selectedAppearance = "light"
   let url: URL
   let header: ArticleHeader
+  let scrollState: ArticleScrollState
   let progress: Double
   let fontSize: Double
   let onProgress: (Double) -> Void
@@ -97,6 +101,10 @@ struct ArticleWebView: UIViewRepresentable {
   }
   func updateUIView(_ web: WKWebView, context: Context) {
     context.coordinator.parent = self
+    scrollState.flush = { [weak web, weak coordinator = context.coordinator] in
+      guard let web else { return }
+      coordinator?.save(web.scrollView)
+    }
     if context.coordinator.loaded != url {
       context.coordinator.loaded = url
       context.coordinator.restoring = true
@@ -179,7 +187,7 @@ struct ArticleWebView: UIViewRepresentable {
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
       if !decelerate { save(scrollView) }
     }
-    private func save(_ scroll: UIScrollView) {
+    func save(_ scroll: UIScrollView) {
       guard !restoring else { return }
       guard scroll.contentSize.height > scroll.bounds.height else { return }
       lastSaved = Date()
