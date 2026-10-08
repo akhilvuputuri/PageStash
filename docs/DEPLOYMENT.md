@@ -28,7 +28,7 @@ The repository retains `render.yaml` as an optional paid-hosting alternative, bu
 
 ## 3. iPhone signing and TestFlight
 
-The personal developer team `U44PG44XMJ` is configured in the project and generator. The explicit App ID `com.akhilvuputuri.offlinereader` is registered under that team, and a valid Apple Development signing identity is available on the Mac. The personal iPhone is provisioned. Reader 0.2.0 (build 2) with its embedded Share Extension installed and launched on 9 October 2026. The owner previously confirmed production sign-in and article/image offline reading; new-release share/theme acceptance and natural background execution remain pending.
+The personal developer team `U44PG44XMJ` is configured in the project and generator. The explicit App ID `com.akhilvuputuri.offlinereader` is registered under that team, and a valid Apple Development signing identity is available on the Mac. The personal iPhone is provisioned. Reader 0.2.0 (build 2) with its embedded Share Extension installed and launched on 9 October 2026. The owner previously confirmed production sign-in and article/image offline reading; the owner confirmed the new-release Sepia and browser-share flow. Natural background execution remains pending.
 
 With Xcode 26.3 and this iOS 27 device, device-specific asset thinning failed. The successful installation used a generic signed Release build (`-configuration Release -destination 'generic/platform=iOS' -allowProvisioningUpdates`) followed by `xcrun devicectl device install app --device <connected-device> <Release-iphoneos/OfflineReader.app>`. This preserves signing and the full asset set.
 
