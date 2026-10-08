@@ -137,5 +137,21 @@ import XCTest
     attachment.name = "Synthetic large-text reader after header scroll"
     attachment.lifetime = .keepAlways
     add(attachment)
+    for (theme, dark, expected) in [
+      ("sepia", true, "sepia"), ("light", false, "light"),
+      ("system", true, "dark"), ("system", false, "light"),
+    ] {
+      defaults.set(theme, forKey: "appearance")
+      controls.dark = dark
+      try await waitFor { coordinator.appearance == expected && !coordinator.restoring }
+      XCTAssertEqual(
+        coordinator.currentProgress(web.scrollView), desired, accuracy: 0.02,
+        "Changing to \(theme) must retain article position")
+      let background = try await evaluate(web, "document.body.style.backgroundColor") as? String
+      XCTAssertEqual(
+        background,
+        expected == "sepia"
+          ? "rgb(246, 240, 228)" : expected == "dark" ? "rgb(17, 17, 17)" : "rgb(255, 255, 255)")
+    }
   }
 }

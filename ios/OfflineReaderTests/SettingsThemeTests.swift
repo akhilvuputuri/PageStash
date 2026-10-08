@@ -26,6 +26,12 @@ import XCTest
       domain: "SettingsThemeTest", code: 1,
       userInfo: [NSLocalizedDescriptionKey: "Timed out: \(label)"])
   }
+  func findScroll(_ view: UIView) -> UIScrollView? {
+    if let scroll = view as? UIScrollView, scroll.contentSize.height > scroll.bounds.height {
+      return scroll
+    }
+    return view.subviews.compactMap { findScroll($0) }.first
+  }
   func snapshot(_ window: UIWindow, name: String) {
     let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
       window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
@@ -56,6 +62,11 @@ import XCTest
     let sheet = try XCTUnwrap(host.presentedViewController)
     try await waitFor("initial light") { sheet.traitCollection.userInterfaceStyle == .light }
     snapshot(window, name: "Synthetic settings light")
+    try await waitFor("settings scroll layout") { self.findScroll(sheet.view) != nil }
+    let scroll = try XCTUnwrap(findScroll(sheet.view))
+    scroll.setContentOffset(CGPoint(x: 0, y: 30), animated: false)
+    try await Task.sleep(nanoseconds: 300_000_000)
+    let savedOffset = scroll.contentOffset.y
     for theme in ["dark", "sepia", "light", "system"] {
       defaults.set(theme, forKey: "appearance")
       let expected: UIUserInterfaceStyle = theme == "dark" ? .dark : .light
@@ -64,6 +75,8 @@ import XCTest
       }
       XCTAssertTrue(
         host.presentedViewController === sheet, "Changing theme must preserve the open sheet")
+      XCTAssertEqual(
+        scroll.contentOffset.y, savedOffset, accuracy: 1, "Theme changes must retain form position")
       snapshot(window, name: "Synthetic settings \(theme)")
     }
     window.overrideUserInterfaceStyle = .dark
