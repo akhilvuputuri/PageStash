@@ -167,7 +167,9 @@ struct ArticleWebView: UIViewRepresentable {
         // WebKit's DOM layout and its native scroll content size update separately.
         // Restore only when the native viewport reflects the styled document.
         let restore: () -> Void = { [weak self, weak web] in
-          guard let self, let web, current == self.presentation, expected == self.loaded else {
+          guard let self, let web, self.restoring, current == self.presentation,
+            expected == self.loaded
+          else {
             return
           }
           let scale = web.scrollView.zoomScale
@@ -186,9 +188,10 @@ struct ArticleWebView: UIViewRepresentable {
           self.restoring = false
         }
         self.layoutObservation = web.scrollView.observe(\.contentSize, options: [.new]) { _, _ in
-          restore()
+          // Leave the native size setter before restoring; it may clamp the old offset.
+          DispatchQueue.main.async(execute: restore)
         }
-        restore()
+        DispatchQueue.main.async(execute: restore)
       }
     }
 
