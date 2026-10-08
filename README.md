@@ -77,6 +77,12 @@ Only prepared readable articles enter Library. Pending and failed submissions ap
 
 The HTTP/MCP status value `bookmark` is retained for compatibility but now describes a failed submission outside the normal article list. A new intentional save of the same owned failed URL retries its retained submission; repeating a known request key never silently starts another attempt. The server adds a private retry-receipt registry on startup. These changes await the combined app/backend release.
 
+## Browser sharing
+
+The embedded Offline Reader share destination accepts a webpage URL from Safari/Chrome. It displays the Reader destination and queues the selected link before submitting. Multiple shared links require an explicit choice. Offline shares remain queued on this device and are sent when the app next has connectivity and a valid sign-in; background scheduling is controlled by iOS.
+
+Open the updated app once before first use. Logout clears queued shares. After re-signing in, old queued links require explicit Retry with the same account/destination; installed readable content is retained. Submitted/prepared status is separate from verified offline availability. Signing/build checks are complete, while real Safari/Chrome iPhone acceptance awaits the combined release.
+
 ## Background behavior
 
 The server worker wakes immediately after a save, polls once per minute when idle for crash/retry recovery, and removes expired credentials/download grants hourly. One import runs at a time; small batches yield between cycles. This avoids constant database housekeeping for the single-user beta.

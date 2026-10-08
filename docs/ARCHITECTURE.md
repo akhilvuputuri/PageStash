@@ -44,6 +44,18 @@ The additive private `save_requests` table maps operation keys to retained submi
 
 Root and modal presentations observe the same stored theme. Light/Sepia explicitly use Light native controls, Dark uses Dark, and System clears the presentation's native override so device appearance can propagate. A small attached UIKit view updates only its containing presentation controller; it does not replace the sheet, navigation stack or fields. Native forms and the library share the Sepia paper/row/ink palette with the cached reader. Overlapping HTML style updates carry the pending body-position target through restoration.
 
+## Browser sharing
+
+The containing app embeds `ReaderShare.appex`. It reads standard URL/text item providers, validates HTTP(S) links and preserves ambiguity until the user chooses a link. The selected signed-in HTTPS Reader destination is displayed before Save. The extension never copies browser cookies or attempts to launch the containing app through unsupported APIs.
+
+An App Group SQLite queue commits the URL and one operation UUID before any request. Its files inherit protected-until-first-authentication data protection and are excluded from backup; bearer credentials live only in a device-only protected shared Keychain item. SQLite transactions and expiring claim tokens serialize app/extension writers. Offline or uncertain responses retain the same operation key. The app drains pending shares during existing foreground/background refresh opportunities; iOS scheduling remains opportunistic.
+
+Queue entries bind owner, server and credential generation. Logout clears the shared queue/profile. Credential rotation on the same account/destination leaves pending links paused for explicit Retry; changing owner/destination removes old links. Late responses cannot acknowledge a newer claim or session. An already-dispatched request may have reached its original server before logout; it is never reassigned to a new account. Reauthentication retains installed cache through `storageId`, while a fresh session generation fences old sync/download callbacks.
+
+Accepted means a server submission, not an offline download. Server failures remain in Imports under the existing policy. Verified main-app assets alone establish offline availability. API credentials are not forwarded through HTTP redirects. App Group membership and the embedded extension have matching signed provisioning; physical Safari/Chrome acceptance remains a release gate.
+
+Apple references: [Share extensions](https://developer.apple.com/library/archive/documentation/General/Conceptual/ExtensibilityPG/Share.html), [App Groups](https://developer.apple.com/documentation/xcode/configuring-app-groups), [shared Keychain access](https://developer.apple.com/documentation/security/sharing-access-to-keychain-items-among-a-collection-of-apps).
+
 ## Authentication and authorization
 
 Supabase Auth validates the application's single allowed, confirmed user email. The backend then issues a hashed, revocable app session, stored on-device in Keychain with access after first unlock. An app session lasts 30 days; sign in again after expiry. Development login is local-only and cannot start in production.
