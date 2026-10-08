@@ -163,6 +163,18 @@ Build date: 6 October 2026. This record separates completed checks from required
 
 ![Synthetic failed import explanation and Retry](images/import-failure-retry.png)
 
+### Issue 5: browser Share Extension, 8–9 October 2026
+
+- Embedded `ReaderShare` receives standard URL/text providers, validates HTTP(S) links and requires a choice for ambiguous input. It displays the selected HTTPS Reader destination before Save. Typed URL loading fixed a hosted regression where standard NSURL providers initially yielded no candidate.
+- One durable operation UUID is committed in a protected App Group SQLite queue before submission. Network failures/uncertain responses retain that key. Foreground/background app refresh drains eligible shares; local queue status remains visible even when library refresh fails offline. Accepted/prepared UI never claims a verified offline download.
+- Shared credentials use a device-only protected Keychain item. Owner/server/credential generations and expiring claims fence parallel extension/app sends and late responses. Logout clears shared work; reauthentication requires explicit Retry for older same-owner/destination links and keeps installed content through a stable storage ID. API credentials are never forwarded through redirects.
+- All 35 local Core/storage tests pass. Native hosted checks passed on `b89c583`: backend audit, device/simulator/isolated-preview compilation and seven presentation tests without skips. Four new native cases cover browser URL providers, ambiguity, offline→online same-key delivery, revocation/stale completion and legacy session compatibility. The synthetic queued/submitted screenshots were visually reviewed. CI: https://github.com/akhilvuputuri/offline-reader/actions/runs/37805745471. Final checks: https://github.com/akhilvuputuri/offline-reader/pull/14.
+- Generic signed Release builds passed for the app and embedded extension, including the final implementation. Both signatures and provisioning profiles permit `group.com.akhilvuputuri.offlinereader`. No app installation, distribution, backend deployment or production library save was performed. The Mac's local interactive UI remained unavailable; real Safari/Chrome sharing on the physical iPhone and naturally scheduled background delivery remain acceptance gates for the owner's combined release.
+
+![Synthetic browser share queued offline](images/share-queued-offline.png)
+
+![Synthetic browser share submitted for preparation](images/share-submitted.png)
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
