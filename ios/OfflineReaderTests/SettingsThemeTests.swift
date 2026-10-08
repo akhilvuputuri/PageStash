@@ -27,7 +27,7 @@ import XCTest
       userInfo: [NSLocalizedDescriptionKey: "Timed out: \(label)"])
   }
   func findScroll(_ view: UIView) -> UIScrollView? {
-    if let scroll = view as? UIScrollView, scroll.contentSize.height > scroll.bounds.height {
+    if let scroll = view as? UIScrollView, scroll.contentSize.height > 0, scroll.bounds.height > 0 {
       return scroll
     }
     return view.subviews.compactMap { findScroll($0) }.first
@@ -64,7 +64,11 @@ import XCTest
     snapshot(window, name: "Synthetic settings light")
     try await waitFor("settings scroll layout") { self.findScroll(sheet.view) != nil }
     let scroll = try XCTUnwrap(findScroll(sheet.view))
-    scroll.setContentOffset(CGPoint(x: 0, y: 30), animated: false)
+    let minimum = -scroll.adjustedContentInset.top
+    let maximum =
+      scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom
+    scroll.setContentOffset(
+      CGPoint(x: 0, y: max(minimum, min(minimum + 30, maximum))), animated: false)
     try await Task.sleep(nanoseconds: 300_000_000)
     let savedOffset = scroll.contentOffset.y
     for theme in ["dark", "sepia", "light", "system"] {
