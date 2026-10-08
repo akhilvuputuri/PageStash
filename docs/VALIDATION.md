@@ -151,6 +151,18 @@ Build date: 6 October 2026. This record separates completed checks from required
 
 ![Synthetic Library in Sepia](images/library-sepia.png)
 
+### Issue 4: import acceptance and recovery, 8 October 2026
+
+- Failed/preparing submissions are retained in secondary Imports with a bounded explanation and Retry for article URLs. Normal Library/Archive include prepared articles; previously readable copies remain accessible. Source-image warnings retain readable text and report incomplete images instead of complete offline availability.
+- Backend validation rejects non-success HTTP responses, known HTML-200 challenge/login/error-page signatures, unsupported content and unusable sanitized text. Empty rendered Markdown also fails. Positive fixtures retain real reporting about errors, including an ambiguous “Access denied” headline. These signatures are conservative; custom publisher barriers and older captures are not comprehensively audited.
+- The additive private `save_requests` table backfills original keys and preserves recovery aliases. Initial registration/recovery and queue entries commit atomically; known-key replays do not restart a failed attempt. Concurrent fresh retries create one queue entry, preserve connection ownership and recover the original submission. No rows are reset or silently deleted. Existing MCP names/result fields/status values remain; `bookmark` is documented as a failed submission, not a readable save.
+- All 25 local backend tests, TypeScript check/build and 29 Swift storage/sync/position tests pass. The Swift regressions verify history across restart, promotion of the same submission, readable image placeholders and preservation of old bytes after failed metadata/transfer updates. Hosted push/PR checks passed on `7328f0e`, including backend audit, device/simulator builds and three native presentation tests. The synthetic iPhone 16 Pro / iOS 18.5 Library/Imports screenshots below were visually reviewed. CI: https://github.com/akhilvuputuri/offline-reader/actions/runs/37796650397. Final checks: https://github.com/akhilvuputuri/offline-reader/pull/13.
+- App installation, physical-iPhone acceptance and backend/schema deployment remain held for the owner's combined release. The registry is created/backfilled on the future backend startup; no production database was changed in this task.
+
+![Synthetic Library with pending/failed import summary](images/library-import-summary.png)
+
+![Synthetic failed import explanation and Retry](images/import-failure-retry.png)
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
