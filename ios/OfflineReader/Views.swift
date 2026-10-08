@@ -4,18 +4,8 @@ import SwiftUI
 
 struct RootView: View {
   @EnvironmentObject var state: AppState
-  @AppStorage("appearance") private var appearance = "light"
-  private var preferredScheme: ColorScheme? {
-    switch appearance {
-    case "dark": return .dark
-    case "system": return nil
-    default: return .light
-    }
-  }
   var body: some View {
-    Group { if state.session == nil { LoginView() } else { LibraryView() } }.tint(
-      Color(red: 0.78, green: 0.30, blue: 0.15)
-    ).preferredColorScheme(preferredScheme)
+    Group { if state.session == nil { LoginView() } else { LibraryView() } }.readerTheme()
   }
 }
 struct LoginView: View {
@@ -68,6 +58,7 @@ struct LibraryView: View {
   @State private var collection = "All"
   @State private var showSave = false
   @State private var showSettings = false
+  @AppStorage("appearance") private var appearance = "light"
   private var collections: [String] { Array(Set(state.items.flatMap(\.collections))).sorted() }
   private var filtered: [ReadingItem] {
     let matches = query.isEmpty ? nil : (try? state.store?.search(query))
@@ -112,6 +103,7 @@ struct LibraryView: View {
             } label: {
               ArticleRow(item: item)
             }
+            .readerRowBackground()
             .listRowSeparator(.hidden).listRowInsets(
               EdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20)
             )
@@ -128,8 +120,12 @@ struct LibraryView: View {
               }.tint(.gray)
             }
           }
-        }.listStyle(.plain).refreshable { try? await state.sync(forceManifest: true) }
-      }.navigationTitle(archived ? "Archive" : "Library")
+        }.listStyle(.plain)
+          .scrollContentBackground(appearance == "sepia" ? .hidden : .visible)
+          .background(appearance == "sepia" ? ReaderTheme.sepiaPage : Color(.systemBackground))
+          .refreshable { try? await state.sync(forceManifest: true) }
+      }.background(appearance == "sepia" ? ReaderTheme.sepiaPage : Color(.systemBackground))
+        .navigationTitle(archived ? "Archive" : "Library")
         .searchable(text: $query, prompt: "Search \(archived ? "archive" : "library")")
         .toolbar {
           if archived {
@@ -275,14 +271,14 @@ struct SaveView: View {
         Section("Article URL") {
           TextField("https://…", text: $url).keyboardType(.URL).textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-        }
+        }.readerRowBackground()
         Section {
           Text(
             "Articles are prepared on the server, then downloaded to this phone. Failed extraction keeps a bookmark."
           ).font(.footnote).foregroundStyle(.secondary)
-        }
+        }.readerRowBackground()
         if let error { Text(error).foregroundStyle(.red) }
-      }.navigationTitle("Save an article").toolbar {
+      }.readerFormBackground().navigationTitle("Save an article").toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         ToolbarItem(placement: .confirmationAction) {
           Button(busy ? "Saving…" : "Save") {
@@ -297,7 +293,7 @@ struct SaveView: View {
           }.disabled(busy || url.isEmpty)
         }
       }
-    }
+    }.readerTheme()
   }
 }
 struct ReaderScreen: View {
@@ -398,14 +394,14 @@ struct ReaderScreen: View {
                 Slider(value: $fontSize, in: 14...32, step: 2).accessibilityLabel("Text size")
                 Text("Article text · \(Int(fontSize)) pt").font(
                   .system(size: fontSize, design: .serif))
-              }
-            }.navigationTitle("Text size")
+              }.readerRowBackground()
+            }.readerFormBackground().navigationTitle("Text size")
               .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                   Button("Done") { showTextSize = false }
                 }
               }
-          }.presentationDetents([.medium])
+          }.readerTheme().presentationDetents([.medium])
         }.alert("Add to collection", isPresented: $showCollection) {
           TextField("Collection name", text: $collection)
           Button("Add") {
@@ -470,7 +466,7 @@ struct SettingsView: View {
           }
           Text("Light uses white pages. Sepia uses warm off-white pages with softer brown text.")
             .font(.footnote).foregroundStyle(.secondary)
-        }
+        }.readerRowBackground()
         Section("Downloads") {
           Toggle("Allow cellular downloads", isOn: $cellular).onChange(of: cellular) { _, _ in
             Task {
@@ -486,7 +482,7 @@ struct SettingsView: View {
           Text(
             "Used: \(ByteCountFormatter.string(fromByteCount:state.store?.diskUsage ?? 0,countStyle:.file))"
           )
-        }
+        }.readerRowBackground()
         Section("Background refresh") {
           Text(
             UIApplication.shared.backgroundRefreshStatus == .available
@@ -496,15 +492,15 @@ struct SettingsView: View {
           ).font(.footnote).foregroundStyle(.secondary)
           Text("Last sync: \(state.lastSync)")
           Button("Sync now") { Task { try? await state.sync(forceManifest: true) } }
-        }
+        }.readerRowBackground()
         Section {
           NavigationLink("Assistant connections") { ConnectionsView() }
           NavigationLink("Account") { AccountView() }
-        }
-      }.navigationTitle("Settings").toolbar {
+        }.readerRowBackground()
+      }.readerFormBackground().navigationTitle("Settings").toolbar {
         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
       }
-    }
+    }.readerTheme()
   }
 }
 struct ConnectionsView: View {
@@ -552,9 +548,11 @@ struct ConnectionsView: View {
           }
         }
         Text("MCP endpoint: \(state.backendURL)/mcp").font(.caption).textSelection(.enabled)
-      }
-      if let error { Section { Text(error).foregroundStyle(.red) } }
-    }.navigationTitle("Assistant connections").task { await loadConnections() }
+      }.readerRowBackground()
+      if let error { Section { Text(error).foregroundStyle(.red) }.readerRowBackground() }
+    }.readerFormBackground().navigationTitle("Assistant connections").task {
+      await loadConnections()
+    }
   }
   private func loadConnections() async {
     do {
@@ -580,9 +578,9 @@ struct AccountView: View {
           }
         }
         Button("Delete account and library", role: .destructive) { confirmDelete = true }
-      }
-      if let error { Section { Text(error).foregroundStyle(.red) } }
-    }.navigationTitle("Account").confirmationDialog(
+      }.readerRowBackground()
+      if let error { Section { Text(error).foregroundStyle(.red) }.readerRowBackground() }
+    }.readerFormBackground().navigationTitle("Account").confirmationDialog(
       "Permanently delete your account and all saved articles?", isPresented: $confirmDelete,
       titleVisibility: .visible
     ) {

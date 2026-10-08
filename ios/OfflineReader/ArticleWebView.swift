@@ -108,6 +108,7 @@ struct ArticleWebView: UIViewRepresentable {
     }
     if context.coordinator.loaded != url {
       context.coordinator.loaded = url
+      context.coordinator.position = progress
       context.coordinator.restoring = true
       web.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
     }
@@ -120,7 +121,7 @@ struct ArticleWebView: UIViewRepresentable {
       context.coordinator.present(
         web,
         progress: context.coordinator.restoring
-          ? progress : context.coordinator.currentProgress(web.scrollView))
+          ? context.coordinator.position : context.coordinator.currentProgress(web.scrollView))
     }
   }
 
@@ -141,6 +142,8 @@ struct ArticleWebView: UIViewRepresentable {
       present(webView, progress: parent.progress)
     }
     func present(_ web: WKWebView, progress: Double) {
+      // Carry the pending target through overlapping appearance/environment updates.
+      position = progress
       restoring = true
       layoutObservation?.invalidate()
       layoutObservation = nil

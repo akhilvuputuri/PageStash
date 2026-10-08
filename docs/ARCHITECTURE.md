@@ -34,6 +34,10 @@ Actual scroll position is stored separately on the device, preserving it when th
 
 The latest Done action has a persisted Undo record. Undo restores prior completion/archive fields, merges with newer collection edits, and keeps installed files and the current device position. Later completion/archive/deletion edits or differing synced state invalidate it; old acknowledgements cannot remove a newer Undo patch. Dismissal or another Done action replaces that one-action affordance.
 
+## Native appearance
+
+Root and modal presentations observe the same stored theme. Light/Sepia explicitly use Light native controls, Dark uses Dark, and System clears the presentation's native override so device appearance can propagate. A small attached UIKit view updates only its containing presentation controller; it does not replace the sheet, navigation stack or fields. Native forms and the library share the Sepia paper/row/ink palette with the cached reader. Overlapping HTML style updates carry the pending body-position target through restoration.
+
 ## Authentication and authorization
 
 Supabase Auth validates the application's single allowed, confirmed user email. The backend then issues a hashed, revocable app session, stored on-device in Keychain with access after first unlock. An app session lasts 30 days; sign in again after expiry. Development login is local-only and cannot start in production.
