@@ -4,6 +4,7 @@ import { Readability } from "@mozilla/readability";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
 import { safeFetch } from "./fetch.js";
+import { ImportFailure } from "./import-error.js";
 
 const purifierWindow = new JSDOM("").window;
 const purify = createDOMPurify(purifierWindow);
@@ -69,25 +70,92 @@ export interface Prepared {
   missingImages: number;
   images: { id: string; bytes: Buffer }[];
 }
+function rejectBarrier(document: Document, text: string) {
+  const labels = [
+    document.title,
+    document.querySelector("main h1,article h1,h1")?.textContent ?? "",
+  ].map((value) =>
+    value
+      .replace(/\s+/g, " ")
+      .split(/\s+[|—–]\s+/)[0]
+      .trim()
+      .toLowerCase()
+      .replace(/[.!?]+$/, ""),
+  );
+  const challenge = labels.some((label) =>
+    /^(just a moment|checking your browser|verify (?:that )?you are human|security check|attention required)$/.test(
+      label,
+    ),
+  );
+  const failure = labels.some(
+    (label) =>
+      /^(?:error\s*)?(?:40[1348]|50[0234])(?:[ :–-]+(?:error|not found|page not found|forbidden|unauthorized|access denied|service unavailable|internal server error|bad gateway|gateway timeout|request timeout))?$/.test(
+        label,
+      ) ||
+      /^(access denied|request blocked|forbidden|unauthorized|page not found|not found|something went wrong|service unavailable|internal server error|sign in|log in|login)$/.test(
+        label,
+      ),
+  );
+  const instruction =
+    /verify (?:that )?you are human|enable javascript and cookies|checking your browser|you (?:do not|don't) have permission|sign in to (?:continue|read)|log in to (?:continue|read)|page (?:you requested |could )?(?:was |is )?not (?:be )?found|request (?:has been |was )?blocked|access (?:is |was )denied/i.test(
+      text.slice(0, 1500),
+    );
+  let intro = text.toLowerCase().trim();
+  for (const label of labels)
+    if (label && intro.startsWith(label))
+      intro = intro.slice(label.length).trim();
+  const directed =
+    /^(?:[.!?:–-]\s*)?(sorry|please|you\b|your\b|the page\b|this page\b|sign in\b|log in\b|verify\b|enable javascript\b|checking your browser\b)/.test(
+      intro,
+    );
+  const challengeMarkup =
+    document.querySelector(
+      '#challenge-form, #cf-challenge-running, input[name="cf-turnstile-response"]',
+    ) ||
+    [...document.querySelectorAll("script[src]")].some((script) =>
+      script.getAttribute("src")?.includes("/cdn-cgi/challenge-platform/"),
+    );
+  const password = document.querySelector('input[type="password"]');
+  if (
+    (challenge && (instruction || challengeMarkup)) ||
+    (failure && ((instruction && directed) || text.length < 600 || password))
+  ) {
+    throw new ImportFailure(
+      "The source returned an error, sign-in or access-check page instead of readable article text.",
+    );
+  }
+}
+
 export async function extract(
   url: string,
   fetcher = safeFetch,
 ): Promise<Prepared> {
   const page = await fetcher(url, 3 * 1024 * 1024);
   if (!["text/html", "application/xhtml+xml"].includes(page.mime))
-    throw new Error("This source is not an HTML article.");
+    throw new ImportFailure("This source is not an HTML article.");
   const html = page.bytes.toString("utf8");
   if ((html.match(/<[A-Za-z][^>]*>/g)?.length ?? 0) > 20_000)
-    throw new Error("Source HTML exceeds the element limit.");
+    throw new ImportFailure("Source HTML exceeds the element limit.");
   const dom = new JSDOM(html, { url: page.url });
-  const article = new Readability(dom.window.document, {
-    maxElemsToParse: 20_000,
-  }).parse();
-  if (!article || (article.textContent?.length ?? 0) < 100)
-    throw new Error(
-      "Readable article text could not be extracted. The bookmark has been retained.",
-    );
+  const article = new Readability(
+    dom.window.document.cloneNode(true) as Document,
+    {
+      maxElemsToParse: 20_000,
+    },
+  ).parse();
+  const sourceText =
+    dom.window.document.body.textContent?.replace(/\s+/g, " ").trim() ?? "";
+  rejectBarrier(
+    dom.window.document,
+    article?.textContent?.replace(/\s+/g, " ").trim() || sourceText,
+  );
+  if (!article)
+    throw new ImportFailure("Readable article text could not be extracted.");
   const result = new JSDOM(sanitize(article.content ?? ""));
+  const text =
+    result.window.document.body.textContent?.replace(/\s+/g, " ").trim() ?? "";
+  if (text.length < 100 || (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0) < 40)
+    throw new ImportFailure("Readable article text could not be extracted.");
   const images: Prepared["images"] = [];
   let missingImages = 0;
   let total = 0;

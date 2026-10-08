@@ -124,7 +124,7 @@ import SwiftUI
     }
   }
   func save(_ url: String, key: String) async throws {
-    guard let api else { return }
+    guard let api else { throw APIError(message: "Reconnect before submitting an article.") }
     let _: SaveResponse = try await api.save(url: url, key: key)
     try await sync()
   }
@@ -289,7 +289,12 @@ import SwiftUI
           id: UUID().uuidString, title: "An earlier finished article",
           sourceUrl: "https://example.com/earlier", capturedAt: "2026-10-07T12:00:00Z", progress: 1,
           archived: true, assets: [])
-        try store.apply(LibraryPage(items: [ready, partial, waiting, archived], cursor: 1))
+        let failed = ReadingItem(
+          id: UUID().uuidString, title: "An article that couldn't be prepared",
+          status: "bookmark",
+          error: "The source returned an access-check page instead of readable article text.",
+          sourceUrl: "https://example.com/unavailable", contentVersion: 0, assets: [])
+        try store.apply(LibraryPage(items: [ready, partial, waiting, archived, failed], cursor: 1))
         for (item, data, asset) in [(ready, bytes, asset), (partial, partialBytes, partialAsset)] {
           let temporary = root.appendingPathComponent("preview.html")
           try data.write(to: temporary)

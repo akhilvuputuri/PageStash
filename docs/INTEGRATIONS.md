@@ -29,7 +29,7 @@ GET /v1/saves/SUBMISSION_UUID
 Authorization: Bearer YOUR_AGENT_CREDENTIAL
 ```
 
-Typical save response: `{"submission_id":"UUID","status":"queued","duplicate":false}`. Poll with backoff; reuse the exact idempotency key when retrying a request whose outcome is unknown. Server status becomes `ready` or `bookmark` (failure retained). `already_saved` with a null ID means an existing item belongs to another connection; the agent cannot inspect it. Do not include secrets in Markdown, title or references.
+Typical save response: `{"submission_id":"UUID","status":"queued","duplicate":false}`. Poll with backoff; reuse the exact idempotency key when retrying a request whose outcome is unknown. Server status becomes `ready` (usable content prepared) or `bookmark` (only failed-submission metadata retained in Imports). A fresh intentional save of an owned failed URL requeues the same submission; replaying any known operation key does not restart it. `already_saved` with a null ID means an existing item belongs to another connection; the agent cannot inspect it. Do not include secrets in Markdown, title or references.
 
 An optional local command adapter for the existing assistant is `scripts/assistant-save.mjs`. It reads `READER_URL` and `READER_AGENT_TOKEN` from the environment, accepts `link URL REQUEST_ID`, `document FILE TITLE REQUEST_ID [SOURCE_URL...]`, or `status UUID`, and prints only the API result. Configure it as an existing assistant tool; no changes to the bot's messaging code are required.
 

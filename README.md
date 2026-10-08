@@ -71,6 +71,12 @@ It prompts for your app password without echoing or storing it, saves a demonstr
 
 Appearance is configurable in Settings → Appearance: Light (the default), Sepia, Dark, or System. Light uses white pages; Sepia uses warm off-white pages with brown text. Both apply to existing cached articles and briefs. Sepia is prepared for the next phone release.
 
+## Import failures
+
+Only prepared readable articles enter Library. Pending and failed submissions appear under Imports with their status and a Retry action when an original article URL is available. Missing optional images keep readable text, with warnings and placeholders. Existing records are retained; this does not retrospectively audit or delete older captures.
+
+The HTTP/MCP status value `bookmark` is retained for compatibility but now describes a failed submission outside the normal article list. A new intentional save of the same owned failed URL retries its retained submission; repeating a known request key never silently starts another attempt. The server adds a private retry-receipt registry on startup. These changes await the combined app/backend release.
+
 ## Background behavior
 
 The server worker wakes immediately after a save, polls once per minute when idle for crash/retry recovery, and removes expired credentials/download grants hourly. One import runs at a time; small batches yield between cycles. This avoids constant database housekeeping for the single-user beta.

@@ -58,18 +58,42 @@ struct LibraryView: View {
   @State private var collection = "All"
   @State private var showSave = false
   @State private var showSettings = false
+  @State private var showImports = false
+  private var imports: [ReadingItem] { state.items.filter(\.needsImportReview) }
+  private var importSummary: String {
+    let failed = imports.filter { $0.status == "bookmark" }.count
+    let waiting = imports.count - failed
+    return [
+      waiting > 0 ? "\(waiting) preparing" : nil, failed > 0 ? "\(failed) couldn't prepare" : nil,
+    ]
+    .compactMap { $0 }.joined(separator: " · ")
+  }
   @AppStorage("appearance") private var appearance = "light"
-  private var collections: [String] { Array(Set(state.items.flatMap(\.collections))).sorted() }
+  private var collections: [String] {
+    Array(Set(state.items.filter(\.hasPreparedContent).flatMap(\.collections))).sorted()
+  }
   private var filtered: [ReadingItem] {
     let matches = query.isEmpty ? nil : (try? state.store?.search(query))
     return state.items.filter {
-      $0.archived == archived && (collection == "All" || $0.collections.contains(collection))
+      $0.hasPreparedContent && $0.archived == archived
+        && (collection == "All" || $0.collections.contains(collection))
         && (query.isEmpty || matches?.contains($0.id) == true)
     }
   }
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
+        if !imports.isEmpty {
+          Button {
+            showImports = true
+          } label: {
+            HStack {
+              Text(importSummary)
+              Spacer()
+              Image(systemName: "chevron.right")
+            }.font(.caption).padding(.horizontal).padding(.vertical, 8)
+          }.accessibilityIdentifier("Review imports")
+        }
         HStack {
           Text(filtered.count == 1 ? "1 item" : "\(filtered.count) items")
           Spacer()
@@ -148,6 +172,9 @@ struct LibraryView: View {
           }
           ToolbarItem(placement: .topBarTrailing) {
             Menu {
+              if !imports.isEmpty {
+                Button("Imports") { showImports = true }
+              }
               if !archived {
                 Button {
                   archived = true
@@ -194,6 +221,7 @@ struct LibraryView: View {
           }
         }.sheet(isPresented: $showSave) { SaveView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showImports) { ImportsView() }
         .onChange(of: collections) { _, names in
           if collection != "All" && !names.contains(collection) { collection = "All" }
         }
@@ -219,6 +247,11 @@ struct ArticleRow: View {
       }
       Text(item.title).font(.system(size: 23, weight: .medium, design: .serif)).lineLimit(3)
       if let author = item.author { Text(author).font(.caption).foregroundStyle(.secondary) }
+      if let warning = item.error {
+        Label(warning, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(
+          .secondary
+        ).lineLimit(2)
+      }
       if let progress = Downloads.shared.progress(itemID: item.id), progress < 1,
         state.store?.offlineState(item) != .ready
       {
@@ -274,14 +307,14 @@ struct SaveView: View {
         }.readerRowBackground()
         Section {
           Text(
-            "Articles are prepared on the server, then downloaded to this phone. Failed extraction keeps a bookmark."
+            "Only readable articles enter your Library. Preparation and failed attempts appear in Imports, with Retry when available. Readable text is kept if optional images are missing."
           ).font(.footnote).foregroundStyle(.secondary)
         }.readerRowBackground()
         if let error { Text(error).foregroundStyle(.red) }
       }.readerFormBackground().navigationTitle("Save an article").toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         ToolbarItem(placement: .confirmationAction) {
-          Button(busy ? "Saving…" : "Save") {
+          Button(busy ? "Submitting…" : "Save") {
             busy = true
             Task {
               do {
@@ -593,5 +626,56 @@ struct AccountView: View {
         }
       }
     }
+  }
+}
+
+struct ImportsView: View {
+  @EnvironmentObject var state: AppState
+  @Environment(\.dismiss) private var dismiss
+  @State private var retrying: Set<String> = []
+  private var imports: [ReadingItem] { state.items.filter(\.needsImportReview) }
+  var body: some View {
+    NavigationStack {
+      List {
+        if imports.isEmpty {
+          ContentUnavailableView(
+            "No pending imports", systemImage: "checkmark.circle",
+            description: Text("Prepared articles appear in Library."))
+        }
+        ForEach(imports) { item in
+          VStack(alignment: .leading, spacing: 8) {
+            Text(item.title).font(.headline)
+            if let source = item.sourceUrl {
+              Text(source).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Label(
+              item.status == "bookmark" ? "Couldn't prepare" : "Preparing · not saved yet",
+              systemImage: item.status == "bookmark" ? "exclamationmark.triangle" : "clock"
+            )
+            .font(.subheadline).foregroundStyle(.secondary)
+            if let error = item.error { Text(String(error.prefix(240))).font(.callout) }
+            if item.hasPreparedContent {
+              Text("Your earlier readable copy is still in Library.").font(.caption)
+            }
+            if item.status == "bookmark", item.sourceUrl != nil {
+              Button(retrying.contains(item.id) ? "Retrying…" : "Retry") {
+                retrying.insert(item.id)
+                Task {
+                  await state.retryImport(item)
+                  retrying.remove(item.id)
+                }
+              }.disabled(retrying.contains(item.id))
+            }
+          }.padding(.vertical, 8).readerRowBackground()
+            .swipeActions {
+              Button("Remove", role: .destructive) { state.edit(item, ItemPatch(deleted: true)) }
+            }
+        }
+      }.listStyle(.insetGrouped).readerFormBackground()
+        .refreshable { try? await state.sync(forceManifest: true) }
+        .navigationTitle("Imports").toolbar {
+          ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+        }
+    }.readerTheme()
   }
 }

@@ -53,6 +53,13 @@ CREATE TABLE IF NOT EXISTS items (
  revision bigint NOT NULL DEFAULT nextval('library_revision'),
  UNIQUE(owner_id, idempotency_key)
 );
+CREATE TABLE IF NOT EXISTS save_requests (
+ owner_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+ idempotency_key text NOT NULL, submission_id uuid NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+ PRIMARY KEY(owner_id,idempotency_key)
+);
+INSERT INTO save_requests(owner_id,idempotency_key,submission_id)
+ SELECT owner_id,idempotency_key,id FROM items ON CONFLICT DO NOTHING;
 CREATE UNIQUE INDEX IF NOT EXISTS unique_saved_url ON items(owner_id, normalized_url)
  WHERE normalized_url IS NOT NULL AND deleted=false;
 CREATE INDEX IF NOT EXISTS sync_owner ON items(owner_id, revision);
@@ -91,6 +98,7 @@ export async function migrate(db: Database) {
     "accounts",
     "credentials",
     "items",
+    "save_requests",
     "jobs",
     "assets",
     "download_grants",
