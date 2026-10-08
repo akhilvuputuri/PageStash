@@ -58,7 +58,7 @@ enum ShareVault {
     let updated = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
     if updated == errSecItemNotFound {
       var item = query
-      attributes.forEach { item[$0.key] = $0.value }
+      for (key, value) in attributes { item[key] = value }
       guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else {
         throw ShareError.unavailable
       }

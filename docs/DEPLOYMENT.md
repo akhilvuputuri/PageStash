@@ -39,6 +39,12 @@ With Xcode 26.3 and this iOS 27 device, device-specific asset thinning failed. T
 5. Create an App Store Connect app with that bundle ID and personal seller account. Archive a Release build and upload using Xcode Organizer. Review the privacy declarations and encryption/export questions yourself; do not assume these declarations from the repository.
 6. Add only yourself as an internal TestFlight tester initially. Each beta build needs renewal within Apple's TestFlight lifetime. Increment `CURRENT_PROJECT_VERSION` for each upload.
 
+## Browser Share Extension signing
+
+The app and embedded `ReaderShare` target use `group.com.akhilvuputuri.offlinereader`. Both signed generic Release products have matching App Group entitlements and provisioning profiles verified locally. Automatic provisioning registered/configured the required group and extension on the existing team; no device installation or distribution was performed. The main/extension bundle IDs are based on `READER_BUNDLE_IDENTIFIER`, so an isolated CI preview uses its own identifiers/group instead of sharing a real app container.
+
+The containing app must be opened once after update to migrate its existing private Keychain session into the protected shared Keychain item. Sign in in the main app if necessary; the extension does not request or copy passwords. Check Safari and Chrome's real iPhone share sheet during combined-release acceptance, including an offline share, foreground/background delivery, logout during submission and explicit Retry after reauthentication. Compiling or signing an extension alone does not prove host-browser delivery.
+
 ## Operations
 
 - Health endpoint tests database access but does not establish worker throughput or extraction success.

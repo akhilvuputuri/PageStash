@@ -45,16 +45,29 @@ import UniformTypeIdentifiers
       var texts: [String] = []
       for provider in providers {
         try Task.checkCancellation()
-        if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+        if provider.canLoadObject(ofClass: NSURL.self) {
+          let raw = try await loadURL(provider)
+          urls.append(raw ?? "")
+        } else if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
           let item = try await load(provider, type: UTType.url.identifier)
           if let url = item as? URL {
             urls.append(url.absoluteString)
           } else if let string = item as? String {
             urls.append(string)
+          } else if let data = item as? Data, data.count <= 8192 {
+            urls.append(String(data: data, encoding: .utf8) ?? "")
+          } else {
+            urls.append("")
           }
         } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
           let item = try await load(provider, type: UTType.plainText.identifier)
-          if let string = item as? String { texts.append(string) }
+          if let string = item as? String {
+            texts.append(string)
+          } else if let data = item as? Data, data.count <= 8192,
+            let text = String(data: data, encoding: .utf8)
+          {
+            texts.append(text)
+          }
         }
       }
       candidates = SharedLink.candidates(urls: urls, texts: texts)
@@ -71,6 +84,17 @@ import UniformTypeIdentifiers
         : "The shared link could not be read. Try sharing the webpage URL."
     }
     loading = false
+  }
+  private func loadURL(_ provider: NSItemProvider) async throws -> String? {
+    try await withCheckedThrowingContinuation { continuation in
+      provider.loadObject(ofClass: NSURL.self) { value, error in
+        if let error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume(returning: (value as? NSURL)?.absoluteString)
+        }
+      }
+    }
   }
   private func load(_ provider: NSItemProvider, type: String) async throws -> NSSecureCoding? {
     try await withCheckedThrowingContinuation { continuation in
