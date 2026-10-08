@@ -5,13 +5,9 @@ import XCTest
 
 @MainActor final class SettingsThemeTests: XCTestCase {
   struct Presenter: View {
-    @AppStorage("appearance") private var appearance = "light"
     @State private var presented = true
-    private var scheme: ColorScheme? {
-      appearance == "system" ? nil : appearance == "dark" ? .dark : .light
-    }
     var body: some View {
-      Color.clear.preferredColorScheme(scheme)
+      Color.clear.readerTheme()
         .sheet(isPresented: $presented) {
           SettingsView().environmentObject(AppState.shared)
         }
@@ -92,5 +88,12 @@ import XCTest
       sheet.traitCollection.userInterfaceStyle == .light
     }
     XCTAssertTrue(host.presentedViewController === sheet)
+    host.dismiss(animated: false)
+    defaults.set("sepia", forKey: "appearance")
+    let library = UIHostingController(rootView: RootView().environmentObject(AppState.shared))
+    window.rootViewController = library
+    try await waitFor("synthetic library") { library.view.window != nil }
+    try await Task.sleep(nanoseconds: 300_000_000)
+    snapshot(window, name: "Synthetic sepia library")
   }
 }

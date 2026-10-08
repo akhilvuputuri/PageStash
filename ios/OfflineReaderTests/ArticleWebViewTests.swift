@@ -20,7 +20,7 @@ import XCTest
         url: file, header: header, scrollState: state, progress: 0, fontSize: controls.font,
         onProgress: { _ in }
       )
-      .preferredColorScheme(controls.dark ? .dark : .light)
+      .environment(\.colorScheme, controls.dark ? .dark : .light)
     }
   }
   func evaluate(_ web: WKWebView, _ script: String) async throws -> Any? {
