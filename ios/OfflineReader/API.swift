@@ -4,7 +4,24 @@ import ReaderCore
 struct Session: Codable, Sendable {
   let token: String
   let ownerId: String
-  var generation: String = UUID().uuidString
+  var generation: String
+  var storageId: String?
+  init(
+    token: String, ownerId: String, generation: String = UUID().uuidString, storageId: String? = nil
+  ) {
+    self.token = token
+    self.ownerId = ownerId
+    self.generation = generation
+    self.storageId = storageId
+  }
+  private enum CodingKeys: String, CodingKey { case token, ownerId, generation, storageId }
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    token = try values.decode(String.self, forKey: .token)
+    ownerId = try values.decode(String.self, forKey: .ownerId)
+    generation = try values.decodeIfPresent(String.self, forKey: .generation) ?? UUID().uuidString
+    storageId = try values.decodeIfPresent(String.self, forKey: .storageId)
+  }
 }
 struct LoginResponse: Decodable {
   let token: String
@@ -12,6 +29,7 @@ struct LoginResponse: Decodable {
 }
 struct APIError: Error, LocalizedError {
   let message: String
+  var status: Int? = nil
   var errorDescription: String? { message }
 }
 struct Failure: Decodable { let error: String }
@@ -37,7 +55,9 @@ struct NewConnection: Decodable {
 struct API: Sendable {
   let base: URL
   let token: String?
-  func request<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil) async throws
+  func request<T: Decodable>(
+    _ path: String, method: String = "GET", body: Data? = nil, timeout: TimeInterval = 20
+  ) async throws
     -> T
   {
     guard base.scheme == "https" || permitsLocalHTTP(base) else {
@@ -53,15 +73,16 @@ struct API: Sendable {
     var request = URLRequest(url: url)
     request.httpMethod = method
     request.httpBody = body
-    request.timeoutInterval = 20
+    request.timeoutInterval = timeout
     if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-    let (data, response) = try await URLSession.shared.data(for: request)
+    let (data, response) = try await APITransport.session.data(for: request)
     guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode)
     else {
       throw APIError(
         message: (try? JSONDecoder().decode(Failure.self, from: data).error)
-          ?? "The server could not complete this request.")
+          ?? "The server could not complete this request.",
+        status: (response as? HTTPURLResponse)?.statusCode)
     }
     return try Wire.decoder().decode(T.self, from: data)
   }
@@ -77,10 +98,11 @@ struct API: Sendable {
     let _: OK = try await request(
       "/v1/items/\(id)", method: "PATCH", body: Wire.encoder().encode(patch))
   }
-  func save(url: String, key: String) async throws -> SaveResponse {
+  func save(url: String, key: String, timeout: TimeInterval = 20) async throws -> SaveResponse {
     try await request(
       "/v1/saves/link", method: "POST",
-      body: JSONSerialization.data(withJSONObject: ["url": url, "idempotency_key": key]))
+      body: JSONSerialization.data(withJSONObject: ["url": url, "idempotency_key": key]),
+      timeout: timeout)
   }
 }
 private func permitsLocalHTTP(_ url: URL) -> Bool {
@@ -89,4 +111,21 @@ private func permitsLocalHTTP(_ url: URL) -> Bool {
   #else
     return false
   #endif
+}
+
+// Authenticate only to the selected API origin; never follow a redirect with a credential.
+private enum APITransport {
+  static let delegate = RedirectPolicy()
+  static let session: URLSession = {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.httpShouldSetCookies = false
+    return URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+  }()
+  final class RedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+      _ session: URLSession, task: URLSessionTask,
+      willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+      completionHandler: @escaping (URLRequest?) -> Void
+    ) { completionHandler(nil) }
+  }
 }

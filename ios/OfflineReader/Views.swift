@@ -65,6 +65,7 @@ struct LibraryView: View {
     let waiting = imports.count - failed
     return [
       waiting > 0 ? "\(waiting) preparing" : nil, failed > 0 ? "\(failed) couldn't prepare" : nil,
+      !state.sharedSaves.isEmpty ? "\(state.sharedSaves.count) shared links to review" : nil,
     ]
     .compactMap { $0 }.joined(separator: " · ")
   }
@@ -83,7 +84,7 @@ struct LibraryView: View {
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
-        if !imports.isEmpty {
+        if !imports.isEmpty || !state.sharedSaves.isEmpty {
           Button {
             showImports = true
           } label: {
@@ -172,7 +173,7 @@ struct LibraryView: View {
           }
           ToolbarItem(placement: .topBarTrailing) {
             Menu {
-              if !imports.isEmpty {
+              if !imports.isEmpty || !state.sharedSaves.isEmpty {
                 Button("Imports") { showImports = true }
               }
               if !archived {
@@ -500,6 +501,9 @@ struct SettingsView: View {
           Text("Light uses white pages. Sepia uses warm off-white pages with softer brown text.")
             .font(.footnote).foregroundStyle(.secondary)
         }.readerRowBackground()
+        if let message = state.sharingMessage {
+          Section("Browser sharing") { Text(message).font(.footnote) }.readerRowBackground()
+        }
         Section("Downloads") {
           Toggle("Allow cellular downloads", isOn: $cellular).onChange(of: cellular) { _, _ in
             Task {
@@ -601,9 +605,11 @@ struct AccountView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var confirmDelete = false
   @State private var error: String?
+  @State private var reconnect = false
   var body: some View {
     Form {
       Section("Account") {
+        Button("Sign in again") { reconnect = true }
         Button("Sign out", role: .destructive) {
           Task {
             await state.logout()
@@ -613,19 +619,23 @@ struct AccountView: View {
         Button("Delete account and library", role: .destructive) { confirmDelete = true }
       }.readerRowBackground()
       if let error { Section { Text(error).foregroundStyle(.red) }.readerRowBackground() }
-    }.readerFormBackground().navigationTitle("Account").confirmationDialog(
-      "Permanently delete your account and all saved articles?", isPresented: $confirmDelete,
-      titleVisibility: .visible
-    ) {
-      Button("Delete account", role: .destructive) {
-        Task {
-          do {
-            try await state.deleteAccount()
-            dismiss()
-          } catch { self.error = error.localizedDescription }
+    }.readerFormBackground().navigationTitle("Account")
+      .sheet(isPresented: $reconnect) {
+        LoginView().onChange(of: state.session?.generation) { _, _ in reconnect = false }
+          .readerTheme()
+      }.confirmationDialog(
+        "Permanently delete your account and all saved articles?", isPresented: $confirmDelete,
+        titleVisibility: .visible
+      ) {
+        Button("Delete account", role: .destructive) {
+          Task {
+            do {
+              try await state.deleteAccount()
+              dismiss()
+            } catch { self.error = error.localizedDescription }
+          }
         }
       }
-    }
   }
 }
 
@@ -634,13 +644,44 @@ struct ImportsView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var retrying: Set<String> = []
   private var imports: [ReadingItem] { state.items.filter(\.needsImportReview) }
+  private func sharedStatus(_ item: SharedSave) -> String {
+    switch item.state {
+    case .queued: return "Queued on this device · not submitted yet"
+    case .sending: return "Submitting · result not confirmed"
+    case .authenticationRequired: return "Sign-in required · not sent with the current sign-in"
+    case .rejected: return "Request could not be accepted"
+    case .accepted:
+      return item.serverStatus == "ready"
+        ? "Prepared on server · download not verified"
+        : item.serverStatus == "bookmark"
+          ? "Preparation failed · refresh for details" : "Submitted · waiting for preparation"
+    }
+  }
   var body: some View {
     NavigationStack {
       List {
-        if imports.isEmpty {
+        if imports.isEmpty && state.sharedSaves.isEmpty {
           ContentUnavailableView(
             "No pending imports", systemImage: "checkmark.circle",
             description: Text("Prepared articles appear in Library."))
+        }
+        ForEach(state.sharedSaves) { item in
+          VStack(alignment: .leading, spacing: 8) {
+            Text(item.url.absoluteString).font(.headline).lineLimit(3)
+            Text(sharedStatus(item)).font(.subheadline).foregroundStyle(.secondary)
+            if let error = item.error { Text(error).font(.callout) }
+            if item.state != .accepted && item.state != .sending {
+              Button("Retry with current sign-in") { Task { await state.retrySharedSave(item) } }
+            }
+            if item.state == .authenticationRequired {
+              Text(
+                "Use Account → Sign in again, then Retry. The old sign-in's links are never sent automatically with a new credential."
+              ).font(.caption).foregroundStyle(.secondary)
+            }
+          }.padding(.vertical, 8).readerRowBackground()
+            .swipeActions {
+              Button("Remove", role: .destructive) { state.removeSharedSave(item.id) }
+            }
         }
         ForEach(imports) { item in
           VStack(alignment: .leading, spacing: 8) {

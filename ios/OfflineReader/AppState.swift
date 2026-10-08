@@ -9,6 +9,9 @@ import SwiftUI
   @Published var message: String?
   @Published var refreshing = false
   @Published var readingUndo: ReadingUndo?
+  @Published var sharedSaves: [SharedSave] = []
+  @Published var sharingMessage: String?
+  private var shareStore: SharedSaveStore?
   @Published var lastSync: String =
     UserDefaults.standard.string(forKey: "lastSync") ?? "Not yet synced"
   private(set) var store: LocalStore?
@@ -38,13 +41,13 @@ import SwiftUI
       }
     #endif
     session = Vault.load()
-    if let session { configure(session) }
+    if let session { configure(session) } else { ShareServices.deactivate() }
     Downloads.shared.completion = { [weak self] in self?.reload() }
   }
   private func configure(_ session: Session) {
     do {
       var root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("OfflineReader/\(session.generation)")
+        .appendingPathComponent("OfflineReader/\(session.storageId ?? session.generation)")
       let store = try LocalStore(root: root)
       var protection = URLResourceValues()
       protection.isExcludedFromBackup = true
@@ -53,6 +56,14 @@ import SwiftUI
         [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
         ofItemAtPath: root.path)
       self.store = store
+      do {
+        shareStore = try ShareServices.activate(session, server: backendURL)
+        sharingMessage = nil
+      } catch {
+        ShareServices.deactivate()
+        shareStore = nil
+        sharingMessage = "Browser sharing isn't configured for this build."
+      }
       Downloads.shared.configure(store: store, generation: session.generation)
       reload()
     } catch { message = error.localizedDescription }
@@ -61,7 +72,16 @@ import SwiftUI
     guard !previewMode else { return }
     do {
       guard let url = URL(string: base) else { throw APIError(message: "Enter your backend URL.") }
-      let session = try await API(base: url, token: nil).login(email: email, password: password)
+      var session = try await API(base: url, token: nil).login(email: email, password: password)
+      if let previous = self.session, previous.ownerId == session.ownerId,
+        let oldServer = try? ShareContainer.server(backendURL),
+        let newServer = try? ShareContainer.server(base),
+        oldServer == newServer
+      {
+        session.storageId = previous.storageId ?? previous.generation
+      }
+      syncCoordinator.cancel()
+      Downloads.shared.reset()
       backendURL = base
       try Vault.save(session)
       self.session = session
@@ -75,6 +95,9 @@ import SwiftUI
     do {
       items = try store?.items() ?? []
       readingUndo = try store?.readingUndo()
+      if let shareStore = self.shareStore, let credentials = ShareVault.load() {
+        sharedSaves = try shareStore.records(credentials.account)
+      }
     } catch { message = error.localizedDescription }
     if let error = UserDefaults.standard.string(forKey: "downloadError") { message = error }
   }
@@ -88,6 +111,26 @@ import SwiftUI
           if self.session?.generation == generation {
             self.refreshing = false
             self.scheduleRefresh()
+          }
+        }
+        if let shareStore = self.shareStore, let credentials = ShareVault.load() {
+          // A bounded batch also runs in the foreground/background refresh pipeline.
+          for _ in 0..<5 {
+            try Task.checkCancellation()
+            guard self.session?.generation == generation else { throw CancellationError() }
+            guard
+              (try? shareStore.records(credentials.account).contains {
+                $0.account == credentials.account && [.queued, .sending].contains($0.state)
+              }) == true
+            else { break }
+            do { try await ShareServices.deliver(shareStore, credentials: credentials) } catch {
+              break
+            }
+            if (try? shareStore.records(credentials.account).contains { $0.state == .queued })
+              == true
+            {
+              break
+            }
           }
         }
         for edit in try store.pendingEdits() {
@@ -108,6 +151,9 @@ import SwiftUI
         } while true
         try Task.checkCancellation()
         guard self.session?.generation == generation else { throw CancellationError() }
+        if let shareStore = self.shareStore, let credentials = ShareVault.load() {
+          try shareStore.acknowledge(Set(try store.items().map(\.id)), account: credentials.account)
+        }
         self.reload()
         await Downloads.shared.enqueue(items: self.items)
         try Task.checkCancellation()
@@ -184,6 +230,24 @@ import SwiftUI
       try await sync()
     } catch { message = error.localizedDescription }
   }
+  func retrySharedSave(_ item: SharedSave) async {
+    do {
+      guard let shareStore, let credentials = ShareVault.load() else {
+        throw ShareError.authenticationRequired
+      }
+      try shareStore.retry(item.id, account: credentials.account)
+      try await ShareServices.deliver(shareStore, credentials: credentials, id: item.id)
+      try await sync()
+      reload()
+    } catch { message = error.localizedDescription }
+  }
+  func removeSharedSave(_ id: String) {
+    do {
+      guard let shareStore, let credentials = ShareVault.load() else { return }
+      try shareStore.remove(id, account: credentials.account)
+      reload()
+    } catch { message = error.localizedDescription }
+  }
   func logout() async {
     if previewMode {
       let root = store?.root
@@ -208,6 +272,10 @@ import SwiftUI
     refreshing = false
     BGTaskScheduler.shared.cancelAllTaskRequests()
     Downloads.shared.reset()
+    ShareServices.deactivate()
+    shareStore = nil
+    sharedSaves = []
+    sharingMessage = nil
     Vault.clear()
     let root = store?.root
     store = nil
@@ -338,12 +406,15 @@ import SwiftUI
       RootView().environmentObject(state).task(
         id: ForegroundRefreshKey(
           phase: phase, generation: state.session?.generation,
-          importsPending: state.items.contains { ["queued", "processing"].contains($0.status) })
+          importsPending: state.items.contains { ["queued", "processing"].contains($0.status) }
+            || !state.sharedSaves.isEmpty)
       ) {
         guard phase == .active else { return }
         while !Task.isCancelled {
           if state.session != nil { try? await state.sync() }
-          let pending = state.items.contains { ["queued", "processing"].contains($0.status) }
+          let pending =
+            state.items.contains { ["queued", "processing"].contains($0.status) }
+            || state.sharedSaves.contains { [.queued, .sending].contains($0.state) }
           do { try await Task.sleep(for: .seconds(pending ? 3 : 60)) } catch { return }
         }
       }.onChange(of: phase) { _, value in
