@@ -110,7 +110,8 @@ final class LocalStoreTests: XCTestCase {
     let corrupt = Data("<p>Corrupt!</p>".utf8)
     XCTAssertEqual(replacement.count, corrupt.count)
     let id = UUID().uuidString
-    let firstAsset = asset(original), nextAsset = asset(replacement)
+    let firstAsset = asset(original)
+    let nextAsset = asset(replacement)
     let first = ReadingItem(id: id, title: "Original", assets: [firstAsset])
     let next = ReadingItem(id: id, title: "Replacement", contentVersion: 2, assets: [nextAsset])
     let store = try LocalStore(root: root)
@@ -125,8 +126,10 @@ final class LocalStoreTests: XCTestCase {
   }
 
   func testLateOlderVersionDownloadCannotReplaceNewVersion() throws {
-    let olderBytes = Data("<p>Older</p>".utf8), newerBytes = Data("<p>Current</p>".utf8)
-    let olderAsset = asset(olderBytes), newerAsset = asset(newerBytes)
+    let olderBytes = Data("<p>Older</p>".utf8)
+    let newerBytes = Data("<p>Current</p>".utf8)
+    let olderAsset = asset(olderBytes)
+    let newerAsset = asset(newerBytes)
     let id = UUID().uuidString
     let older = ReadingItem(id: id, title: "Older", assets: [olderAsset])
     let newer = ReadingItem(id: id, title: "Current", contentVersion: 2, assets: [newerAsset])
@@ -175,5 +178,106 @@ final class LocalStoreTests: XCTestCase {
     XCTAssertTrue(restored.archived)
     XCTAssertEqual(restored.collections, ["Later"])
     XCTAssertTrue(reopened.isPaused(item.id))
+  }
+  func testFinishAndUndoSurviveRestartAndRetainPositionAndFiles() throws {
+    let bytes = Data("<p>Keep reading this cached article</p>".utf8)
+    let content = asset(bytes)
+    let item = ReadingItem(id: UUID().uuidString, title: "Keep", assets: [content])
+    var store: LocalStore? = try LocalStore(root: root)
+    try store!.apply(LibraryPage(items: [item], cursor: 1))
+    try install(bytes, asset: content, item: item, store: store!)
+    try store!.recordReadingPosition(item.id, 0.42)
+    let undo = try store!.finishReading(item.id)
+    XCTAssertEqual(try store!.item(item.id)?.progress, 1)
+    XCTAssertTrue(try XCTUnwrap(store!.item(item.id)).archived)
+    XCTAssertEqual(try store!.readingPosition(item.id), 0.42)
+    store = nil
+    let reopened = try LocalStore(root: root)
+    XCTAssertEqual(try reopened.readingUndo(), undo)
+    XCTAssertEqual(reopened.offlineState(try XCTUnwrap(reopened.item(item.id))), .ready)
+    XCTAssertEqual(try Data(contentsOf: reopened.readerURL(item.id)!), bytes)
+    XCTAssertTrue(try reopened.undoReading(undo.id))
+    XCTAssertEqual(try reopened.item(item.id)?.progress, 0.42)
+    XCTAssertFalse(try XCTUnwrap(reopened.item(item.id)).archived)
+    XCTAssertEqual(try reopened.readingPosition(item.id), 0.42)
+    XCTAssertNil(try reopened.readingUndo())
+  }
+  func testUndoPreservesNewCollectionsAndSurvivesAnOlderAcknowledgement() throws {
+    let item = ReadingItem(id: UUID().uuidString, title: "Reading", assets: [])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [item], cursor: 1))
+    try store.recordReadingPosition(item.id, 0.6)
+    let undo = try store.finishReading(item.id)
+    let sent = try XCTUnwrap(store.pendingEdits().first)
+    try store.edit(item.id, ItemPatch(collections: ["Research"]))
+    XCTAssertTrue(try store.undoReading(undo.id))
+    try store.acknowledge(sent)
+    XCTAssertEqual(try store.pendingEdits().count, 1)
+    let remote = ItemPatch(progress: 1, archived: true).applying(to: item)
+    try store.apply(LibraryPage(items: [remote], cursor: 2))
+    let restored = try XCTUnwrap(store.item(item.id))
+    XCTAssertEqual(restored.progress, 0.6)
+    XCTAssertFalse(restored.archived)
+    XCTAssertEqual(restored.collections, ["Research"])
+    XCTAssertEqual(try store.readingPosition(item.id), 0.6)
+  }
+  func testUndoStillWorksAfterItsFinishPatchWasSynced() throws {
+    let item = ReadingItem(id: UUID().uuidString, title: "Reading", progress: 0.7, assets: [])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [item], cursor: 1))
+    let undo = try store.finishReading(item.id)
+    try store.acknowledge(XCTUnwrap(store.pendingEdits().first))
+    try store.apply(
+      LibraryPage(items: [ItemPatch(progress: 1, archived: true).applying(to: item)], cursor: 2))
+    XCTAssertTrue(try store.undoReading(undo.id))
+    XCTAssertEqual(try store.item(item.id)?.progress, 0.7)
+    XCTAssertEqual(try store.readingPosition(item.id), 0.7)
+    XCTAssertEqual(try store.pendingEdits().count, 1)
+  }
+  func testNewerArchiveOrReadEditsAndDeletionInvalidateUndo() throws {
+    for patch in [ItemPatch(archived: false), ItemPatch(progress: 0.8), ItemPatch(deleted: true)] {
+      let item = ReadingItem(id: UUID().uuidString, title: "Reading", assets: [])
+      let store = try LocalStore(root: root.appendingPathComponent(UUID().uuidString))
+      try store.apply(LibraryPage(items: [item], cursor: 1))
+      let undo = try store.finishReading(item.id)
+      try store.edit(item.id, patch)
+      XCTAssertFalse(try store.undoReading(undo.id))
+      XCTAssertNil(try store.readingUndo())
+    }
+  }
+  func testRemoteArchiveChangeInvalidatesUndoWithoutResurrectingItem() throws {
+    let item = ReadingItem(id: UUID().uuidString, title: "Reading", assets: [])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [item], cursor: 1))
+    let undo = try store.finishReading(item.id)
+    try store.acknowledge(XCTUnwrap(store.pendingEdits().first))
+    try store.apply(
+      LibraryPage(items: [ItemPatch(progress: 1, archived: false).applying(to: item)], cursor: 2))
+    XCTAssertFalse(try store.undoReading(undo.id))
+    XCTAssertFalse(try XCTUnwrap(store.item(item.id)).archived)
+  }
+  func testBottomScrollDoesNotArchiveAndRevisitPreservesReadMarker() throws {
+    let item = ReadingItem(id: UUID().uuidString, title: "Reading", assets: [])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [item], cursor: 1))
+    try store.recordReadingPosition(item.id, 1)
+    XCTAssertFalse(try XCTUnwrap(store.item(item.id)).archived)
+    XCTAssertNil(try store.readingUndo())
+    try store.recordReadingPosition(item.id, 0.3)
+    XCTAssertEqual(try store.item(item.id)?.progress, 1)
+    XCTAssertEqual(try store.readingPosition(item.id), 0.3)
+  }
+  func testOnlyLatestFinishCanBeUndoneAndDismissIsPersistent() throws {
+    let first = ReadingItem(id: UUID().uuidString, title: "First", assets: [])
+    let second = ReadingItem(id: UUID().uuidString, title: "Second", assets: [])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [first, second], cursor: 1))
+    let old = try store.finishReading(first.id)
+    let latest = try store.finishReading(second.id)
+    XCTAssertFalse(try store.undoReading(old.id))
+    XCTAssertEqual(try store.readingUndo(), latest)
+    try store.dismissReadingUndo()
+    XCTAssertNil(try LocalStore(root: root).readingUndo())
+    XCTAssertFalse(try store.undoReading(latest.id))
   }
 }

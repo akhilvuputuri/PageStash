@@ -8,10 +8,12 @@ import SwiftUI
   @Published var items: [ReadingItem] = []
   @Published var message: String?
   @Published var refreshing = false
+  @Published var readingUndo: ReadingUndo?
   @Published var lastSync: String =
     UserDefaults.standard.string(forKey: "lastSync") ?? "Not yet synced"
   private(set) var store: LocalStore?
   private let syncCoordinator = SyncCoordinator()
+  private var previewMode = false
   var backendURL: String {
     get {
       UserDefaults.standard.string(forKey: "backendURL")
@@ -23,10 +25,18 @@ import SwiftUI
     }
   }
   var api: API? {
+    guard !previewMode else { return nil }
     guard let url = URL(string: backendURL), let session else { return nil }
     return API(base: url, token: session.token)
   }
   private init() {
+    #if DEBUG
+      if ProcessInfo.processInfo.arguments.contains("--preview-library") {
+        previewMode = true
+        configurePreview()
+        return
+      }
+    #endif
     session = Vault.load()
     if let session { configure(session) }
     Downloads.shared.completion = { [weak self] in self?.reload() }
@@ -48,6 +58,7 @@ import SwiftUI
     } catch { message = error.localizedDescription }
   }
   func login(base: String, email: String, password: String) async {
+    guard !previewMode else { return }
     do {
       guard let url = URL(string: base) else { throw APIError(message: "Enter your backend URL.") }
       let session = try await API(base: url, token: nil).login(email: email, password: password)
@@ -61,7 +72,10 @@ import SwiftUI
     } catch { message = error.localizedDescription }
   }
   func reload() {
-    do { items = try store?.items() ?? [] } catch { message = error.localizedDescription }
+    do {
+      items = try store?.items() ?? []
+      readingUndo = try store?.readingUndo()
+    } catch { message = error.localizedDescription }
     if let error = UserDefaults.standard.string(forKey: "downloadError") { message = error }
   }
   func sync(forceManifest: Bool = false) async throws {
@@ -129,6 +143,34 @@ import SwiftUI
       await Downloads.shared.enqueue(items: items, manual: [item.id])
     } catch { message = error.localizedDescription }
   }
+  func finishReading(_ id: String) -> Bool {
+    do {
+      guard let store else { return false }
+      try store.finishReading(id)
+      reload()
+      Task { try? await sync() }
+      return true
+    } catch {
+      message = error.localizedDescription
+      return false
+    }
+  }
+  func undoFinishedReading() {
+    do {
+      guard let undo = readingUndo, let store else { return }
+      if !(try store.undoReading(undo.id)) {
+        message = "This item changed. Undo is no longer available."
+      }
+      reload()
+      Task { try? await sync() }
+    } catch { message = error.localizedDescription }
+  }
+  func dismissReadingUndo() {
+    do {
+      try store?.dismissReadingUndo()
+      reload()
+    } catch { message = error.localizedDescription }
+  }
   func removeDownload(_ item: ReadingItem) {
     Downloads.shared.cancel(itemID: item.id)
     do {
@@ -143,6 +185,15 @@ import SwiftUI
     } catch { message = error.localizedDescription }
   }
   func logout() async {
+    if previewMode {
+      let root = store?.root
+      session = nil
+      store = nil
+      items = []
+      readingUndo = nil
+      if let root { try? FileManager.default.removeItem(at: root) }
+      return
+    }
     let oldAPI = api
     clearLocal()
     if let oldAPI { let _: OK? = try? await oldAPI.request("/v1/session", method: "DELETE") }
@@ -162,13 +213,14 @@ import SwiftUI
     store = nil
     session = nil
     items = []
+    readingUndo = nil
     lastSync = "Not yet synced"
     UserDefaults.standard.removeObject(forKey: "lastSync")
     UserDefaults.standard.removeObject(forKey: "downloadError")
     if let root { try? FileManager.default.removeItem(at: root) }
   }
   func scheduleRefresh() {
-    guard session != nil else { return }
+    guard session != nil, !previewMode else { return }
     let request = BGAppRefreshTaskRequest(identifier: AppDelegate.refreshID)
     request.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
     do { try BGTaskScheduler.shared.submit(request) } catch
@@ -187,6 +239,63 @@ import SwiftUI
       Task { @MainActor in self.syncCoordinator.cancel() }
     }
   }
+  #if DEBUG
+    private func configurePreview() {
+      // This preview bypasses Keychain and every API call. Its store is a new synthetic directory.
+      do {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+          "LibraryPreview-\(UUID().uuidString)")
+        let store = try LocalStore(root: root)
+        func content(_ title: String) -> (Data, Asset) {
+          let body = (1...24).map {
+            "<p>Paragraph \($0). This is synthetic reading content for checking layout, text size and the finished-reading flow.</p>"
+          }.joined()
+          let bytes = Data(
+            "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head><body><h2>\(title)</h2>\(body)</body></html>"
+              .utf8)
+          return (
+            bytes,
+            Asset(
+              id: UUID().uuidString, role: "content", mime: "text/html", size: bytes.count,
+              sha256: digest(bytes), filename: "article.html",
+              url: URL(string: "https://example.com/content")!)
+          )
+        }
+        let (bytes, asset) = content("A calmer reading library")
+        let ready = ReadingItem(
+          id: UUID().uuidString, title: "A calmer reading library",
+          sourceUrl: "https://example.com/reading", capturedAt: "2026-10-08T12:00:00Z",
+          progress: 0.35, assets: [asset])
+        let (partialBytes, partialAsset) = content("An article with images still pending")
+        let imageID = UUID().uuidString
+        let image = Asset(
+          id: imageID, role: "image", mime: "image/webp", size: 10,
+          sha256: "uninstalled-preview-image", filename: "\(imageID).webp",
+          url: URL(string: "https://example.com/image")!)
+        let partial = ReadingItem(
+          id: UUID().uuidString, title: "An article with images still pending",
+          sourceUrl: "https://example.com/images", capturedAt: "2026-10-08T11:00:00Z",
+          assets: [partialAsset, image])
+        let waiting = ReadingItem(
+          id: UUID().uuidString, title: "A saved reading brief", kind: "brief", status: "queued",
+          capturedAt: "2026-10-08T10:00:00Z", assets: [])
+        let archived = ReadingItem(
+          id: UUID().uuidString, title: "An earlier finished article",
+          sourceUrl: "https://example.com/earlier", capturedAt: "2026-10-07T12:00:00Z", progress: 1,
+          archived: true, assets: [])
+        try store.apply(LibraryPage(items: [ready, partial, waiting, archived], cursor: 1))
+        for (item, data, asset) in [(ready, bytes, asset), (partial, partialBytes, partialAsset)] {
+          let temporary = root.appendingPathComponent("preview.html")
+          try data.write(to: temporary)
+          try store.accept(temporary, itemID: item.id, version: item.contentVersion, asset: asset)
+          try FileManager.default.removeItem(at: temporary)
+        }
+        self.store = store
+        self.session = Session(token: "synthetic-preview-session", ownerId: UUID().uuidString)
+        reload()
+      } catch { message = "Preview could not be prepared." }
+    }
+  #endif
 }
 @MainActor final class AppDelegate: NSObject, UIApplicationDelegate {
   static let refreshID = "com.akhilvuputuri.offlinereader.refresh"
