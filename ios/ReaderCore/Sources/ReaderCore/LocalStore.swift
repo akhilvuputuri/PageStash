@@ -102,6 +102,11 @@ public final class LocalStore: @unchecked Sendable {
           if let edit = try rows("SELECT json FROM edits WHERE id=?", [item.id]).first?.first {
             item = try decoder.decode(ItemPatch.self, from: Data(edit.utf8)).applying(to: item)
           }
+          if let undo = try storedReadingUndo(), undo.itemId == item.id,
+            item.deleted || !item.archived || item.progress != 1
+          {
+            try execute("DELETE FROM meta WHERE key='readingUndo'")
+          }
           try write(item)
           try execute("DELETE FROM search WHERE id=?", [item.id])
           if !item.deleted {
@@ -134,6 +139,11 @@ public final class LocalStore: @unchecked Sendable {
       }
       try execute("BEGIN IMMEDIATE")
       do {
+        if patch.progress != nil || patch.archived != nil || patch.deleted == true,
+          let undo = try storedReadingUndo(), undo.itemId == id
+        {
+          try execute("DELETE FROM meta WHERE key='readingUndo'")
+        }
         try write(patch.applying(to: current))
         try execute(
           "INSERT INTO edits(id,revision,json) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,json=excluded.json",
@@ -147,6 +157,92 @@ public final class LocalStore: @unchecked Sendable {
         try? FileManager.default.removeItem(at: root.appendingPathComponent(id))
         try execute("DELETE FROM search WHERE id=?", [id])
       }
+    }
+  }
+  private func storedReadingUndo() throws -> ReadingUndo? {
+    guard let json = try rows("SELECT value FROM meta WHERE key='readingUndo'").first?.first else {
+      return nil
+    }
+    return try decoder.decode(ReadingUndo.self, from: Data(json.utf8))
+  }
+  public func readingUndo() throws -> ReadingUndo? {
+    try synchronized {
+      guard let undo = try storedReadingUndo(), let current = try item(undo.itemId),
+        !current.deleted, current.archived, current.progress == 1
+      else { return nil }
+      return undo
+    }
+  }
+  public func dismissReadingUndo() throws {
+    try synchronized { try execute("DELETE FROM meta WHERE key='readingUndo'") }
+  }
+  public func readingPosition(_ id: String) throws -> Double {
+    try synchronized {
+      if let saved = try rows("SELECT value FROM meta WHERE key=?", ["position:\(id)"]).first?
+        .first,
+        let value = Double(saved), value.isFinite
+      {
+        return min(1, max(0, value))
+      }
+      return try item(id)?.progress ?? 0
+    }
+  }
+  public func recordReadingPosition(_ id: String, _ progress: Double) throws {
+    try synchronized {
+      guard progress.isFinite, let current = try item(id), !current.deleted else {
+        throw ReaderError.missingItem
+      }
+      let value = min(1, max(0, progress))
+      // Keep the server's established progress==1 read marker when revisiting a finished item.
+      // The actual position remains device-local and survives archive, sync and app restart.
+      if current.progress < 1 { try edit(id, ItemPatch(progress: value)) }
+      try execute(
+        "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        ["position:\(id)", String(value)])
+    }
+  }
+  @discardableResult public func finishReading(_ id: String) throws -> ReadingUndo? {
+    try synchronized {
+      guard let current = try item(id), !current.deleted else { throw ReaderError.missingItem }
+      if current.archived && current.progress == 1 {
+        return try readingUndo().flatMap { $0.itemId == id ? $0 : nil }
+      }
+      let undo = ReadingUndo(
+        id: UUID().uuidString, itemId: id, previousProgress: current.progress,
+        previousArchived: current.archived)
+      var combined = ItemPatch(progress: 1, archived: true)
+      if let json = try rows("SELECT json FROM edits WHERE id=?", [id]).first?.first {
+        combined = try decoder.decode(ItemPatch.self, from: Data(json.utf8))
+        combined.merge(ItemPatch(progress: 1, archived: true))
+      }
+      let position = try readingPosition(id)
+      try execute("BEGIN IMMEDIATE")
+      do {
+        try write(ItemPatch(progress: 1, archived: true).applying(to: current))
+        try execute(
+          "INSERT INTO edits(id,revision,json) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,json=excluded.json",
+          [id, UUID().uuidString, String(decoding: try encoder.encode(combined), as: UTF8.self)])
+        try execute(
+          "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+          ["position:\(id)", String(position)])
+        try execute(
+          "INSERT INTO meta(key,value) VALUES('readingUndo',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+          [String(decoding: try encoder.encode(undo), as: UTF8.self)])
+        try execute("COMMIT")
+      } catch {
+        try? execute("ROLLBACK")
+        throw error
+      }
+      return undo
+    }
+  }
+  @discardableResult public func undoReading(_ token: String) throws -> Bool {
+    try synchronized {
+      guard let undo = try readingUndo(), undo.id == token else { return false }
+      // edit merges only completion/archive fields, preserving newer collection changes and position.
+      try edit(
+        undo.itemId, ItemPatch(progress: undo.previousProgress, archived: undo.previousArchived))
+      return true
     }
   }
   public func pendingEdits() throws -> [PendingEdit] {
@@ -227,8 +323,8 @@ public final class LocalStore: @unchecked Sendable {
         let parent = root.appendingPathComponent(itemID)
         for older
           in (try? FileManager.default.contentsOfDirectory(
-            at: parent, includingPropertiesForKeys: nil)) ?? [] where older.standardizedFileURL.path != dir.standardizedFileURL.path
-        {
+            at: parent, includingPropertiesForKeys: nil)) ?? []
+        where older.standardizedFileURL.path != dir.standardizedFileURL.path {
           try? FileManager.default.removeItem(at: older)
         }
         try execute("DELETE FROM verified WHERE item=? AND version<>?", [itemID, String(version)])

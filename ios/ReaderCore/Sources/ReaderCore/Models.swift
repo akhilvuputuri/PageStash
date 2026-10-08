@@ -113,6 +113,12 @@ public struct PendingEdit: Sendable {
   public let revision: String
   public let patch: ItemPatch
 }
+public struct ReadingUndo: Codable, Equatable, Sendable {
+  public let id: String
+  public let itemId: String
+  public let previousProgress: Double
+  public let previousArchived: Bool
+}
 public enum OfflineState: String, Sendable {
   case notDownloaded = "Not downloaded"
   case downloading = "Downloading"

@@ -64,61 +64,58 @@ struct LoginView: View {
 struct LibraryView: View {
   @EnvironmentObject var state: AppState
   @State private var query = ""
-  @State private var filter = "Inbox"
+  @State private var archived = false
   @State private var collection = "All"
   @State private var showSave = false
   @State private var showSettings = false
+  private var collections: [String] { Array(Set(state.items.flatMap(\.collections))).sorted() }
   private var filtered: [ReadingItem] {
     let matches = query.isEmpty ? nil : (try? state.store?.search(query))
-    return state.items.filter { item in
-      (filter == "Archived" ? item.archived : !item.archived)
-        && (filter != "Offline" || (try? state.store?.readerURL(item.id)) != nil)
-        && (collection == "All" || item.collections.contains(collection))
-        && (query.isEmpty || matches?.contains(item.id) == true)
+    return state.items.filter {
+      $0.archived == archived && (collection == "All" || $0.collections.contains(collection))
+        && (query.isEmpty || matches?.contains($0.id) == true)
     }
   }
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
         HStack {
-          Text("YOUR READING SPACE").font(.caption.weight(.semibold)).tracking(2)
-          Spacer()
-          if state.refreshing { ProgressView() }
-        }.foregroundStyle(.secondary).padding(.horizontal).padding(.top, 8)
-        Picker("Library", selection: $filter) {
-          Text("Inbox").tag("Inbox")
-          Text("Offline").tag("Offline")
-          Text("Archived").tag("Archived")
-        }.pickerStyle(.segmented).padding()
-        HStack {
           Text(filtered.count == 1 ? "1 item" : "\(filtered.count) items")
-            .font(.caption).foregroundStyle(.secondary)
           Spacer()
-          Menu {
-            Button("All collections") { collection = "All" }
-            ForEach(Array(Set(state.items.flatMap(\.collections))).sorted(), id: \.self) { name in
-              Button(name) { collection = name }
+          if state.refreshing { ProgressView().accessibilityLabel("Syncing library") }
+          if !collections.isEmpty {
+            Menu {
+              Button("All collections") { collection = "All" }
+              ForEach(collections, id: \.self) { name in Button(name) { collection = name } }
+            } label: {
+              Label(collection, systemImage: "folder")
             }
-          } label: {
-            Label(collection, systemImage: "folder")
-          }.font(.caption)
-        }.padding(.horizontal)
-        if filtered.isEmpty {
-          ContentUnavailableView(
-            query.isEmpty ? "Your next good read" : "No matches", systemImage: "book",
-            description: Text(
+          }
+        }.font(.caption).foregroundStyle(.secondary).padding(.horizontal).padding(.vertical, 8)
+        List {
+          if filtered.isEmpty {
+            ContentUnavailableView(
               query.isEmpty
-                ? "Save a link here or send one through your assistant."
-                : "Try a title or words from a downloaded article."))
-        } else {
-          List(filtered) { item in
+                ? (archived ? "No archived reads" : "Your next good read") : "No matches",
+              systemImage: archived ? "archivebox" : "book",
+              description: Text(
+                query.isEmpty
+                  ? (archived
+                    ? "Finished articles remain available here."
+                    : "Save a link here or send one through your assistant.")
+                  : "Try a title or words from a downloaded article.")
+            ).listRowSeparator(.hidden)
+          }
+          ForEach(filtered) { item in
             NavigationLink {
               ReaderScreen(itemID: item.id)
             } label: {
               ArticleRow(item: item)
-            }.listRowSeparator(.hidden).listRowInsets(
+            }
+            .listRowSeparator(.hidden).listRowInsets(
               EdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20)
-            ).swipeActions {
+            )
+            .swipeActions {
               Button(role: .destructive) {
                 state.edit(item, ItemPatch(deleted: true))
               } label: {
@@ -127,24 +124,24 @@ struct LibraryView: View {
               Button {
                 state.edit(item, ItemPatch(archived: !item.archived))
               } label: {
-                Label(item.archived ? "Restore" : "Archive", systemImage: "archivebox")
+                Label(item.archived ? "Move to Library" : "Archive", systemImage: "archivebox")
               }.tint(.gray)
             }
-          }.listStyle(.plain)
-        }
-        VStack(alignment: .leading, spacing: 4) {
-          if let message = state.message { Text(message).foregroundStyle(.orange) }
-          Text("Last sync: \(state.lastSync)")
-        }.font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal).padding(.bottom, 8)
-      }.navigationTitle("Offline Reader").searchable(text: $query, prompt: "Search your library")
-        .refreshable { try? await state.sync(forceManifest: true) }.toolbar {
-          ToolbarItem(placement: .topBarLeading) {
-            Button {
-              showSettings = true
-            } label: {
-              Image(systemName: "gearshape")
-            }.accessibilityLabel("Settings")
+          }
+        }.listStyle(.plain).refreshable { try? await state.sync(forceManifest: true) }
+      }.navigationTitle(archived ? "Archive" : "Library")
+        .searchable(text: $query, prompt: "Search \(archived ? "archive" : "library")")
+        .toolbar {
+          if archived {
+            ToolbarItem(placement: .topBarLeading) {
+              Button {
+                archived = false
+                collection = "All"
+                query = ""
+              } label: {
+                Label("Library", systemImage: "chevron.left")
+              }
+            }
           }
           ToolbarItem(placement: .topBarTrailing) {
             Button {
@@ -153,8 +150,56 @@ struct LibraryView: View {
               Image(systemName: "plus")
             }.accessibilityLabel("Save article")
           }
-        }.sheet(isPresented: $showSave) { SaveView() }.sheet(isPresented: $showSettings) {
-          SettingsView()
+          ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+              if !archived {
+                Button {
+                  archived = true
+                  collection = "All"
+                  query = ""
+                } label: {
+                  Label("Archive", systemImage: "archivebox")
+                }
+              }
+              Button {
+                showSettings = true
+              } label: {
+                Label("Settings", systemImage: "gearshape")
+              }
+            } label: {
+              Image(systemName: "ellipsis.circle")
+            }.accessibilityLabel("Library options")
+          }
+        }.safeAreaInset(edge: .bottom) {
+          if state.readingUndo != nil || state.message != nil {
+            VStack(spacing: 8) {
+              if state.readingUndo != nil {
+                HStack {
+                  Text("Moved to Archive").font(.callout)
+                  Spacer()
+                  Button("Undo") { state.undoFinishedReading() }.font(.callout.weight(.semibold))
+                  Button {
+                    state.dismissReadingUndo()
+                  } label: {
+                    Image(systemName: "xmark")
+                  }
+                  .accessibilityLabel("Dismiss undo")
+                }
+              }
+              if let message = state.message {
+                HStack {
+                  Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                  Spacer()
+                  Button("Retry") { Task { try? await state.sync(forceManifest: true) } }.font(
+                    .caption)
+                }
+              }
+            }.padding().background(.regularMaterial)
+          }
+        }.sheet(isPresented: $showSave) { SaveView() }
+        .sheet(isPresented: $showSettings) { SettingsView() }
+        .onChange(of: collections) { _, names in
+          if collection != "All" && !names.contains(collection) { collection = "All" }
         }
     }
   }
@@ -168,34 +213,53 @@ struct ArticleRow: View {
         Text(
           item.kind == "brief"
             ? "AGENT BRIEF" : URL(string: item.sourceUrl ?? "")?.host?.uppercased() ?? "ARTICLE"
-        ).font(.caption2.weight(.semibold)).tracking(1)
+        )
+        .font(.caption2.weight(.semibold)).tracking(1).foregroundStyle(.secondary).lineLimit(1)
         Spacer()
-        if item.progress >= 1 { Image(systemName: "checkmark.circle.fill") }
-      }.foregroundStyle(.secondary)
+        if item.progress >= 1 {
+          Image(systemName: "checkmark").foregroundStyle(.secondary).accessibilityLabel("Read")
+        }
+        DownloadIndicator(item: item)
+      }
       Text(item.title).font(.system(size: 23, weight: .medium, design: .serif)).lineLimit(3)
       if let author = item.author { Text(author).font(.caption).foregroundStyle(.secondary) }
-      HStack(spacing: 6) {
-        Image(
-          systemName: state.store?.offlineState(item) == .ready
-            ? "checkmark.circle" : "arrow.down.circle")
-        Text(
-          item.status == "ready"
-            ? state.store?.offlineState(item).rawValue ?? "Not downloaded" : item.status.capitalized
-        )
-      }.font(.caption).foregroundStyle(
-        state.store?.offlineState(item) == .ready ? Color.green : Color.secondary)
-      if let progress = Downloads.shared.progress(itemID: item.id),
+      if let progress = Downloads.shared.progress(itemID: item.id), progress < 1,
         state.store?.offlineState(item) != .ready
       {
-        ProgressView(value: progress)
-        Text(
-          "Downloading · \(item.assets.filter { state.store?.hasAsset(item,$0)==true }.count)/\(item.assets.count) files saved"
-        ).font(.caption).foregroundStyle(.secondary)
+        ProgressView(value: progress).accessibilityLabel("Downloading article")
       }
       if item.progress > 0 && item.progress < 1 {
-        ProgressView(value: item.progress).tint(.secondary)
+        ProgressView(value: (try? state.store?.readingPosition(item.id)) ?? item.progress).tint(
+          .secondary
+        )
+        .accessibilityLabel("Reading progress")
       }
     }
+  }
+}
+struct DownloadIndicator: View {
+  @EnvironmentObject var state: AppState
+  let item: ReadingItem
+  private var offline: OfflineState { state.store?.offlineState(item) ?? .notDownloaded }
+  var body: some View {
+    Group {
+      if ["queued", "processing"].contains(item.status) {
+        Label("Preparing", systemImage: "clock").foregroundStyle(.secondary)
+      } else if item.status == "bookmark" {
+        Label("Couldn't prepare", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+      } else if offline == .ready {
+        Image(systemName: "arrow.down.circle.fill").foregroundStyle(.green).accessibilityLabel(
+          "Available offline")
+      } else if offline == .textOnly {
+        Label("Text only", systemImage: "doc.badge.ellipsis").foregroundStyle(.orange)
+          .accessibilityLabel("Text available, images incomplete")
+      } else if offline == .downloading || Downloads.shared.progress(itemID: item.id) != nil {
+        Label("Downloading", systemImage: "arrow.down.circle").foregroundStyle(.secondary)
+      } else {
+        Image(systemName: "arrow.down.circle").foregroundStyle(.secondary).accessibilityLabel(
+          "Not downloaded")
+      }
+    }.font(.caption)
   }
 }
 struct SaveView: View {
@@ -238,6 +302,9 @@ struct SaveView: View {
 }
 struct ReaderScreen: View {
   @EnvironmentObject var state: AppState
+  @Environment(\.dismiss) private var dismiss
+  @State private var showTextSize = false
+  @State private var finished = false
   let itemID: String
   @AppStorage("readerFontSize") private var fontSize = 20.0
   @AppStorage("appearance") private var appearance = "light"
@@ -268,8 +335,11 @@ struct ReaderScreen: View {
               .foregroundStyle(.secondary)
           }.padding(.horizontal)
           if let path = try? state.store?.readerURL(item.id) {
-            ArticleWebView(url: path, progress: item.progress, fontSize: fontSize) { progress in
-              try? state.store?.edit(item.id, ItemPatch(progress: progress))
+            ArticleWebView(
+              url: path, progress: (try? state.store?.readingPosition(item.id)) ?? item.progress,
+              fontSize: fontSize
+            ) { progress in
+              if !finished { try? state.store?.recordReadingPosition(item.id, progress) }
             }
           } else {
             ContentUnavailableView(
@@ -277,9 +347,15 @@ struct ReaderScreen: View {
               systemImage: "arrow.down.circle",
               description: Text(
                 item.error ?? "This article is saved on the server. Download it to read offline."))
-            Button("Download now") { Task { await state.download(item) } }.buttonStyle(
-              .borderedProminent
-            ).frame(maxWidth: .infinity)
+            if item.status == "ready" {
+              Button("Download now") { Task { await state.download(item) } }.buttonStyle(
+                .borderedProminent
+              ).frame(maxWidth: .infinity)
+            } else if item.status == "bookmark" {
+              Button("Retry extraction") { Task { await state.retryImport(item) } }.buttonStyle(
+                .borderedProminent
+              ).frame(maxWidth: .infinity)
+            }
           }
           if let error = item.error {
             Text(error).font(.caption).foregroundStyle(.secondary).padding(.horizontal)
@@ -287,22 +363,51 @@ struct ReaderScreen: View {
         }.toolbar {
           ToolbarItem(placement: .topBarTrailing) {
             Menu {
-              Button("Larger text") { fontSize = min(32, fontSize + 2) }
-              Button("Smaller text") { fontSize = max(14, fontSize - 2) }
-              Button("Mark as read") { state.edit(item, ItemPatch(progress: 1)) }
-              Button(item.archived ? "Restore to inbox" : "Archive") {
-                state.edit(item, ItemPatch(archived: !item.archived))
+              Button("Text size") { showTextSize = true }
+              if !item.archived, (try? state.store?.readerURL(item.id)) != nil {
+                Button("Done reading") {
+                  if state.finishReading(item.id) {
+                    finished = true
+                    dismiss()
+                  }
+                }
+              } else {
+                Button(item.archived ? "Move to Library" : "Archive") {
+                  state.edit(item, ItemPatch(archived: !item.archived))
+                  dismiss()
+                }
               }
               Button("Add to collection") { showCollection = true }
-              Button("Download / retry") { Task { await state.download(item) } }
+              let offline = state.store?.offlineState(item) ?? .notDownloaded
               if item.status == "bookmark" {
                 Button("Retry extraction") { Task { await state.retryImport(item) } }
+              } else if item.status == "ready", offline != .ready {
+                Button(offline == .notDownloaded ? "Download now" : "Retry download") {
+                  Task { await state.download(item) }
+                }
               }
-              Button("Remove download") { state.removeDownload(item) }
+              if (try? state.store?.readerURL(item.id)) != nil || offline == .downloading {
+                Button("Remove download", role: .destructive) { state.removeDownload(item) }
+              }
             } label: {
               Image(systemName: "ellipsis.circle")
-            }
+            }.accessibilityLabel("Reading options")
           }
+        }.sheet(isPresented: $showTextSize) {
+          NavigationStack {
+            Form {
+              Section {
+                Slider(value: $fontSize, in: 14...32, step: 2).accessibilityLabel("Text size")
+                Text("Article text · \(Int(fontSize)) pt").font(
+                  .system(size: fontSize, design: .serif))
+              }
+            }.navigationTitle("Text size")
+              .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                  Button("Done") { showTextSize = false }
+                }
+              }
+          }.presentationDetents([.medium])
         }.alert("Add to collection", isPresented: $showCollection) {
           TextField("Collection name", text: $collection)
           Button("Add") {
@@ -321,7 +426,8 @@ struct ReaderScreen: View {
       }
     }.background(readerBackground.ignoresSafeArea())
       .toolbarBackground(readerBackground, for: .navigationBar)
-      .navigationBarTitleDisplayMode(.inline).onDisappear {
+      .navigationBarTitleDisplayMode(.inline).onAppear { finished = false }.onDisappear {
+        finished = true
         state.reload()
         Task { try? await state.sync() }
       }
@@ -333,11 +439,6 @@ struct SettingsView: View {
   @AppStorage("cellular") private var cellular = false
   @AppStorage("storageLimit") private var storageLimit = 512_000_000
   @AppStorage("appearance") private var appearance = "light"
-  @State private var connections: [Connection] = []
-  @State private var label = "Telegram assistant"
-  @State private var newToken: String?
-  @State private var error: String?
-  @State private var confirmDelete = false
   var body: some View {
     NavigationStack {
       Form {
@@ -366,9 +467,6 @@ struct SettingsView: View {
           Text(
             "Used: \(ByteCountFormatter.string(fromByteCount:state.store?.diskUsage ?? 0,countStyle:.file))"
           )
-          Button("Refresh and retry pending downloads") {
-            Task { try? await state.sync(forceManifest: true) }
-          }
         }
         Section("Background refresh") {
           Text(
@@ -378,71 +476,66 @@ struct SettingsView: View {
             "iOS chooses when to refresh. Keep Background App Refresh enabled. Opening the app also checks for new items."
           ).font(.footnote).foregroundStyle(.secondary)
           Text("Last sync: \(state.lastSync)")
+          Button("Sync now") { Task { try? await state.sync(forceManifest: true) } }
         }
-        Section("Assistant connections") {
-          TextField("Credential label", text: $label)
-          Button("Create API credential") {
-            Task {
-              do {
-                if let api = state.api {
-                  let result: NewConnection = try await api.request(
-                    "/v1/connections", method: "POST",
-                    body: JSONSerialization.data(withJSONObject: ["label": label]))
-                  newToken = result.token
-                  await loadConnections()
-                }
-              } catch { self.error = error.localizedDescription }
-            }
-          }
-          if let newToken {
-            Text("Copy this credential now. It will not be shown again.").font(.footnote)
-            Text(newToken).font(.caption.monospaced()).textSelection(.enabled)
-            Button("Copy credential") { UIPasteboard.general.string = newToken }
-          }
-          ForEach(connections) { connection in
-            HStack {
-              Text(connection.label)
-              Spacer()
-              Button("Revoke", role: .destructive) {
-                Task {
-                  do {
-                    guard let api = state.api else { return }
-                    let _: OK = try await api.request(
-                      "/v1/connections/\(connection.id)", method: "DELETE")
-                    await loadConnections()
-                  } catch { self.error = error.localizedDescription }
-                }
-              }
-            }
-          }
-          Text("MCP endpoint: \(state.backendURL)/mcp").font(.caption).textSelection(.enabled)
-        }
-        if let error { Section { Text(error).foregroundStyle(.red) } }
-        Section("Account") {
-          Button("Sign out", role: .destructive) {
-            Task {
-              await state.logout()
-              dismiss()
-            }
-          }
-          Button("Delete account and library", role: .destructive) { confirmDelete = true }
+        Section {
+          NavigationLink("Assistant connections") { ConnectionsView() }
+          NavigationLink("Account") { AccountView() }
         }
       }.navigationTitle("Settings").toolbar {
         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-      }.task { await loadConnections() }.confirmationDialog(
-        "Permanently delete your account and all saved articles?", isPresented: $confirmDelete,
-        titleVisibility: .visible
-      ) {
-        Button("Delete account", role: .destructive) {
+      }
+    }
+  }
+}
+struct ConnectionsView: View {
+  @EnvironmentObject var state: AppState
+  @State private var connections: [Connection] = []
+  @State private var label = "Telegram assistant"
+  @State private var newToken: String?
+  @State private var error: String?
+  var body: some View {
+    Form {
+      Section("Assistant connections") {
+        TextField("Credential label", text: $label)
+        Button("Create API credential") {
           Task {
             do {
-              try await state.deleteAccount()
-              dismiss()
+              if let api = state.api {
+                let result: NewConnection = try await api.request(
+                  "/v1/connections", method: "POST",
+                  body: JSONSerialization.data(withJSONObject: ["label": label]))
+                newToken = result.token
+                await loadConnections()
+              }
             } catch { self.error = error.localizedDescription }
           }
         }
+        if let newToken {
+          Text("Copy this credential now. It will not be shown again.").font(.footnote)
+          Text(newToken).font(.caption.monospaced()).textSelection(.enabled)
+          Button("Copy credential") { UIPasteboard.general.string = newToken }
+        }
+        ForEach(connections) { connection in
+          HStack {
+            Text(connection.label)
+            Spacer()
+            Button("Revoke", role: .destructive) {
+              Task {
+                do {
+                  guard let api = state.api else { return }
+                  let _: OK = try await api.request(
+                    "/v1/connections/\(connection.id)", method: "DELETE")
+                  await loadConnections()
+                } catch { self.error = error.localizedDescription }
+              }
+            }
+          }
+        }
+        Text("MCP endpoint: \(state.backendURL)/mcp").font(.caption).textSelection(.enabled)
       }
-    }
+      if let error { Section { Text(error).foregroundStyle(.red) } }
+    }.navigationTitle("Assistant connections").task { await loadConnections() }
   }
   private func loadConnections() async {
     do {
@@ -451,5 +544,37 @@ struct SettingsView: View {
         connections = response.connections
       }
     } catch { self.error = error.localizedDescription }
+  }
+}
+struct AccountView: View {
+  @EnvironmentObject var state: AppState
+  @Environment(\.dismiss) private var dismiss
+  @State private var confirmDelete = false
+  @State private var error: String?
+  var body: some View {
+    Form {
+      Section("Account") {
+        Button("Sign out", role: .destructive) {
+          Task {
+            await state.logout()
+            dismiss()
+          }
+        }
+        Button("Delete account and library", role: .destructive) { confirmDelete = true }
+      }
+      if let error { Section { Text(error).foregroundStyle(.red) } }
+    }.navigationTitle("Account").confirmationDialog(
+      "Permanently delete your account and all saved articles?", isPresented: $confirmDelete,
+      titleVisibility: .visible
+    ) {
+      Button("Delete account", role: .destructive) {
+        Task {
+          do {
+            try await state.deleteAccount()
+            dismiss()
+          } catch { self.error = error.localizedDescription }
+        }
+      }
+    }
   }
 }

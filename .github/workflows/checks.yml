@@ -31,3 +31,14 @@ jobs:
         run: xcodebuild -quiet -project ios/OfflineReader.xcodeproj -scheme OfflineReader -destination 'generic/platform=iOS' -derivedDataPath work/DerivedData CODE_SIGNING_ALLOWED=NO build
       - name: Compile simulator app
         run: xcodebuild -quiet -project ios/OfflineReader.xcodeproj -scheme OfflineReader -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath work/SimulatorDerivedData ARCHS="$(uname -m)" CODE_SIGNING_ALLOWED=NO build
+      - name: Compile isolated UI preview
+        if: github.event_name == 'pull_request'
+        run: |
+          xcodebuild -quiet -project ios/OfflineReader.xcodeproj -scheme OfflineReader -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath work/SimulatorDerivedData ARCHS="$(uname -m)" PRODUCT_BUNDLE_IDENTIFIER=com.akhilvuputuri.offlinereader.preview CODE_SIGNING_ALLOWED=NO build
+          ditto -c -k --sequesterRsrc --keepParent work/SimulatorDerivedData/Build/Products/Debug-iphonesimulator/OfflineReader.app work/LibraryPreview.zip
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'pull_request'
+        with:
+          name: library-ui-preview
+          path: work/LibraryPreview.zip
+          retention-days: 7

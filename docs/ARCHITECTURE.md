@@ -26,6 +26,14 @@ Each item has a monotonic revision. The phone persists its sync cursor and items
 
 Images and HTML are immutable assets with cryptographic hashes. Download URLs last 24 hours, are bound to an app credential, and are invalidated by logout/revocation or item deletion. A fresh manifest renews expired capabilities. Every native task persists item ID, content version, asset identity and login generation in its task description. Logout clears the generation before cancelling transfers; stale callbacks cannot write into a later session.
 
+## Library completion and device position
+
+The Library shows unarchived items; Archive is a secondary menu destination. Done reading explicitly sets the existing server read marker (`progress = 1`) and archives the item in one local transaction. Scrolling to the bottom alone never archives. Archiving retains installed content and images.
+
+Actual scroll position is stored separately on the device, preserving it when the server read marker is set and when a completed article is revisited. This requires no backend schema/API change. The position survives app restart and sync, but remains device-local and is cleared with the local cache on logout.
+
+The latest Done action has a persisted Undo record. Undo restores prior completion/archive fields, merges with newer collection edits, and keeps installed files and the current device position. Later completion/archive/deletion edits or differing synced state invalidate it; old acknowledgements cannot remove a newer Undo patch. Dismissal or another Done action replaces that one-action affordance.
+
 ## Authentication and authorization
 
 Supabase Auth validates the application's single allowed, confirmed user email. The backend then issues a hashed, revocable app session, stored on-device in Keychain with access after first unlock. An app session lasts 30 days; sign in again after expiry. Development login is local-only and cannot start in production.
