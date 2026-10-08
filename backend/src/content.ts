@@ -232,6 +232,16 @@ export function markdownDocument(markdown: string): string {
   if (inCode) output.push("</code></pre>");
   return sanitize(output.join("\n"));
 }
+export function briefDocument(markdown: string): string {
+  const html = markdownDocument(markdown);
+  const text = new JSDOM(html).window.document.body.textContent ?? "";
+  if (!/[\p{L}\p{N}]/u.test(text))
+    throw new ImportFailure(
+      "The brief contains no readable text. Submit a corrected brief as a new request.",
+    );
+  return html;
+}
+
 export function readerHTML(content: string, title: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${escapeHTML(title)}</title><style>:root{color-scheme:light dark}body{font:20px/1.65 Georgia,serif;padding:18px;max-width:720px;margin:auto;overflow-wrap:anywhere}img{max-width:100%;height:auto}pre{overflow:auto}a{color:#4685c5}h1,h2,h3{line-height:1.25}table{display:block;overflow:auto}blockquote{border-left:3px solid #888;padding-left:16px;margin-left:0}</style></head><body>${content}</body></html>`;
 }

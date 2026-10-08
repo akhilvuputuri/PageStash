@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { extract } from "../src/content.js";
+import { extract, briefDocument } from "../src/content.js";
 import { ImportFailure } from "../src/import-error.js";
 import { Service } from "../src/service.js";
 import { configuration } from "../src/config.js";
@@ -290,3 +290,9 @@ test("concurrent fresh retry intents register both receipts but enqueue only one
     );
     assert.equal(Number(aliases.rows[0].count), 3);
   }));
+
+test("brief validation rejects empty rendered content, not just empty input strings", () => {
+  for (const value of ["   ", "```\n```", "# ", "***"])
+    assert.throws(() => briefDocument(value), /no readable text/);
+  assert.match(briefDocument("# Short note\nHello"), /Hello/);
+});

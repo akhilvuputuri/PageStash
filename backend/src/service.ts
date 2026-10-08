@@ -11,7 +11,7 @@ import { normalizedURL } from "./fetch.js";
 import { ImportFailure } from "./import-error.js";
 import {
   extract,
-  markdownDocument,
+  briefDocument,
   readerHTML,
   escapeHTML,
   type Prepared,
@@ -490,7 +490,7 @@ export class Service {
           throw new ImportFailure("The brief contains no readable text.");
         prepared = {
           html:
-            markdownDocument(row.payload.markdown ?? "") +
+            briefDocument(row.payload.markdown ?? "") +
             "<hr><p>Agent-created brief</p>" +
             (row.payload.sources ?? [])
               .map(
