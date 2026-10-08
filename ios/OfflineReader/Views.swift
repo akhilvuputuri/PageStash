@@ -305,6 +305,7 @@ struct ReaderScreen: View {
   @Environment(\.dismiss) private var dismiss
   @State private var showTextSize = false
   @State private var finished = false
+  @StateObject private var scrollState = ArticleScrollState()
   let itemID: String
   @AppStorage("readerFontSize") private var fontSize = 20.0
   @AppStorage("appearance") private var appearance = "light"
@@ -319,46 +320,42 @@ struct ReaderScreen: View {
   var body: some View {
     Group {
       if let item {
-        VStack(alignment: .leading, spacing: 12) {
-          VStack(alignment: .leading, spacing: 8) {
-            Text(item.kind == "brief" ? "AGENT-CREATED BRIEF" : "SAVED ARTICLE").font(
-              .caption.weight(.semibold)
-            ).tracking(1).foregroundStyle(.secondary)
-            Text(item.title).font(.system(size: 28, weight: .medium, design: .serif))
-            if let author = item.author {
-              Text(author).font(.subheadline).foregroundStyle(.secondary)
-            }
-            if let source = item.sourceUrl, let url = URL(string: source) {
-              Link("View original · \(url.host ?? "source")", destination: url).font(.caption)
-            }
-            Text(state.store?.offlineState(item).rawValue ?? "Not downloaded").font(.caption)
-              .foregroundStyle(.secondary)
-          }.padding(.horizontal)
+        Group {
           if let path = try? state.store?.readerURL(item.id) {
             ArticleWebView(
-              url: path, progress: (try? state.store?.readingPosition(item.id)) ?? item.progress,
+              url: path,
+              header: ArticleHeader(
+                title: item.title, kind: item.kind, author: item.author,
+                source: URL(string: item.sourceUrl ?? ""),
+                status: state.store?.offlineState(item).rawValue ?? "Not downloaded",
+                error: item.error),
+              scrollState: scrollState,
+              progress: (try? state.store?.readingPosition(item.id)) ?? item.progress,
               fontSize: fontSize
             ) { progress in
               if !finished { try? state.store?.recordReadingPosition(item.id, progress) }
             }
           } else {
-            ContentUnavailableView(
-              item.status == "bookmark" ? "Bookmark saved" : "Download to read",
-              systemImage: "arrow.down.circle",
-              description: Text(
-                item.error ?? "This article is saved on the server. Download it to read offline."))
-            if item.status == "ready" {
-              Button("Download now") { Task { await state.download(item) } }.buttonStyle(
-                .borderedProminent
-              ).frame(maxWidth: .infinity)
-            } else if item.status == "bookmark" {
-              Button("Retry extraction") { Task { await state.retryImport(item) } }.buttonStyle(
-                .borderedProminent
-              ).frame(maxWidth: .infinity)
+            ScrollView {
+              VStack(alignment: .leading, spacing: 16) {
+                ReaderMetadata(item: item)
+                ContentUnavailableView(
+                  item.status == "bookmark" ? "Bookmark saved" : "Download to read",
+                  systemImage: "arrow.down.circle",
+                  description: Text(
+                    item.error
+                      ?? "This article is saved on the server. Download it to read offline."))
+                if item.status == "ready" {
+                  Button("Download now") { Task { await state.download(item) } }.buttonStyle(
+                    .borderedProminent
+                  ).frame(maxWidth: .infinity)
+                } else if item.status == "bookmark" {
+                  Button("Retry extraction") { Task { await state.retryImport(item) } }.buttonStyle(
+                    .borderedProminent
+                  ).frame(maxWidth: .infinity)
+                }
+              }.padding()
             }
-          }
-          if let error = item.error {
-            Text(error).font(.caption).foregroundStyle(.secondary).padding(.horizontal)
           }
         }.toolbar {
           ToolbarItem(placement: .topBarTrailing) {
@@ -366,6 +363,7 @@ struct ReaderScreen: View {
               Button("Text size") { showTextSize = true }
               if !item.archived, (try? state.store?.readerURL(item.id)) != nil {
                 Button("Done reading") {
+                  scrollState.flush?()
                   if state.finishReading(item.id) {
                     finished = true
                     dismiss()
@@ -427,10 +425,31 @@ struct ReaderScreen: View {
     }.background(readerBackground.ignoresSafeArea())
       .toolbarBackground(readerBackground, for: .navigationBar)
       .navigationBarTitleDisplayMode(.inline).onAppear { finished = false }.onDisappear {
+        if !finished { scrollState.flush?() }
         finished = true
         state.reload()
         Task { try? await state.sync() }
       }
+  }
+}
+struct ReaderMetadata: View {
+  @EnvironmentObject var state: AppState
+  let item: ReadingItem
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(item.kind == "brief" ? "AGENT-CREATED BRIEF" : "SAVED ARTICLE").font(
+        .caption.weight(.semibold)
+      ).tracking(1).foregroundStyle(.secondary)
+      Text(item.title).font(.system(size: 28, weight: .medium, design: .serif))
+      if let author = item.author { Text(author).font(.subheadline).foregroundStyle(.secondary) }
+      if let source = item.sourceUrl, let url = URL(string: source),
+        ["http", "https"].contains(url.scheme ?? "")
+      {
+        Link("View original · \(url.host ?? "source")", destination: url).font(.caption)
+      }
+      Text(state.store?.offlineState(item).rawValue ?? "Not downloaded").font(.caption)
+        .foregroundStyle(.secondary)
+    }
   }
 }
 struct SettingsView: View {

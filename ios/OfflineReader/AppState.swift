@@ -262,11 +262,16 @@ import SwiftUI
               url: URL(string: "https://example.com/content")!)
           )
         }
-        let (bytes, asset) = content("A calmer reading library")
+        let previewTitle =
+          ProcessInfo.processInfo.arguments.contains("--preview-long-title")
+          ? "A long article title that should scroll away and leave the screen available for reading"
+          : "A calmer reading library"
+        let (bytes, asset) = content(previewTitle)
         let ready = ReadingItem(
-          id: UUID().uuidString, title: "A calmer reading library",
+          id: UUID().uuidString, title: previewTitle,
           sourceUrl: "https://example.com/reading", capturedAt: "2026-10-08T12:00:00Z",
-          progress: 0.35, assets: [asset])
+          progress: ProcessInfo.processInfo.arguments.contains("--preview-long-title") ? 0 : 0.35,
+          assets: [asset])
         let (partialBytes, partialAsset) = content("An article with images still pending")
         let imageID = UUID().uuidString
         let image = Asset(

@@ -120,6 +120,23 @@ Build date: 6 October 2026. This record separates completed checks from required
 
 ![Synthetic Done reading and Undo](images/done-reading-undo.png)
 
+### Issue 2: scrolling article metadata, 8 October 2026
+
+- Cached article title, author, source, offline status and warnings are inserted as text into one header inside the existing WKWebView document. No competing native scroll view wraps cached content; the no-download screen has its own single native ScrollView.
+- Exact duplicate leading title headings are removed. Metadata uses JSON and textContent; source links require HTTP(S). Publisher scripts remain disabled and cached files stay immutable.
+- Header height is excluded from saved article progress. Presentation/font/theme updates restore the relative body position after styling, with generation checks against stale callbacks.
+- All 26 local storage/sync/progress tests pass, including four new header/position geometry cases. Swift syntax, formatting and whitespace checks pass.
+- Interactive synthetic simulator checks showed the long title once at the top, then entirely off-screen while scrolling. A quick keyboard-scroll/exit revealed a persistence race; the fix flushes the final position before exiting or finishing. Reopening returned to the same paragraph.
+- Larger-text validation moved to an isolated GitHub-hosted simulator while the Mac was locked. Hosted push/PR checks passed on `56b3f96`: all 26 core tests, backend checks, device/simulator compilation, and a native WKWebView regression on iPhone 16 Pro / iOS 18.5. It verifies the scrolling header, preserved publisher text with a matching element ID, 30-point text, dark appearance and retained body progress. The passing synthetic screenshot was visually reviewed. Test launches use a disposable preview store with Keychain/API access bypassed. CI evidence: https://github.com/akhilvuputuri/offline-reader/actions/runs/37781322466.
+- A later final CI run exposed an intermittent text-size restoration race: the native scroll content size could still reflect the old font after a fixed delay. Restoration now observes native layout and waits for its measured height to match the styled document. The hosted regression resizes repeatedly between 14 and 30 points. Final checks are linked from https://github.com/akhilvuputuri/offline-reader/pull/11.
+- No physical phone update or backend deployment occurred. This change awaits the owner's combined app release.
+
+![Synthetic long title before scrolling](images/scrolling-title-header.png)
+
+![Synthetic article body after the title scrolls away](images/scrolling-title-body.png)
+
+![Synthetic large-text dark reader in hosted validation](images/scrolling-title-large-text.png)
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.

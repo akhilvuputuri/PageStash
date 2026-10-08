@@ -119,6 +119,24 @@ public struct ReadingUndo: Codable, Equatable, Sendable {
   public let previousProgress: Double
   public let previousArchived: Bool
 }
+public enum ReadingScrollPosition {
+  public static func offset(
+    progress: Double, contentHeight: Double, viewportHeight: Double, headerHeight: Double
+  ) -> Double {
+    let range = max(0, contentHeight - viewportHeight)
+    let header = min(range, max(0, headerHeight))
+    let value = min(1, max(0, progress.isFinite ? progress : 0))
+    return value == 0 ? 0 : header + (range - header) * value
+  }
+  public static func progress(
+    offset: Double, contentHeight: Double, viewportHeight: Double, headerHeight: Double
+  ) -> Double {
+    let range = max(0, contentHeight - viewportHeight)
+    let header = min(range, max(0, headerHeight))
+    guard range > header else { return 0 }
+    return min(1, max(0, (offset - header) / (range - header)))
+  }
+}
 public enum OfflineState: String, Sendable {
   case notDownloaded = "Not downloaded"
   case downloading = "Downloading"
