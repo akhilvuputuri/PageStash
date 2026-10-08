@@ -126,8 +126,8 @@ The assistant framework chooses its MCP SDK/client and resolves secrets. Do not 
 2. Store the returned submission ID in the assistant's normal durable work state. Repeated normalized URLs are also deduplicated within the user's library.
 3. Poll queued/processing submissions with backoff, for example 2, 5, 10, then 20 seconds. Use a bounded interactive wait (about one minute), then return a pending receipt and continue later through the assistant's existing job system if it has one. Do not poll every second indefinitely.
 4. `ready` means prepared on the server. Only the phone can confirm **Available offline**. The adapter must not claim that a tool call has downloaded content to the phone.
-5. `bookmark` means extraction failed and the URL was retained. Report that outcome and its explanation; do not replace the article with an invented summary. The phone offers Retry extraction.
-6. `already_saved` with a null submission ID means another connection already owns the existing save. Confirm it is already saved; do not poll a null ID or seek broader library permissions.
+5. `bookmark` means preparation failed and only submission/URL metadata was retained. It is not a saved readable article. Report the bounded explanation; do not invent a replacement summary. The phone shows it in Imports with Retry. An intentional fresh save of the same owned URL with a new operation key requeues that submission; all known keys, including recovery keys, remain idempotent. Keep the original key for uncertain network retries.
+6. `already_saved` with a null submission ID means another connection already owns the existing save. Report that a matching submission already exists; its preparation/download state is unverified. The owner can review or retry it in app Imports. Do not poll a null ID or seek broader library permissions.
 7. Honour cancellation in the assistant's task system. Cancellation after a successful save does not undo the saved article; agents have no delete tool.
 
 Suggested assistant instructions:

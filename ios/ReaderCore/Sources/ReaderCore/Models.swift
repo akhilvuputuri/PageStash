@@ -44,6 +44,11 @@ public struct ReadingItem: Codable, Identifiable, Sendable {
   public var deleted: Bool
   public let revision: Int64
   public let assets: [Asset]
+  public var hasPreparedContent: Bool {
+    status == "ready"
+      || (contentVersion > 0 && assets.contains { $0.role == "content" && $0.safeFilename })
+  }
+  public var needsImportReview: Bool { status != "ready" }
   public init(
     id: String, title: String, kind: String = "article", status: String = "ready",
     error: String? = nil, sourceUrl: String? = nil, author: String? = nil, sources: [String] = [],

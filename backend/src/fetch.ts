@@ -1,6 +1,7 @@
 import { lookup } from "node:dns/promises";
 import ipaddr from "ipaddr.js";
 import { Agent, request } from "undici";
+import { ImportFailure } from "./import-error.js";
 
 export function publicAddress(address: string): boolean {
   try {
@@ -50,7 +51,9 @@ export async function safeFetch(raw: string, limit: number): Promise<Fetched> {
           ]
         : await lookup(hostname, { all: true });
       if (!addresses.length || addresses.some((a) => !publicAddress(a.address)))
-        throw new Error("Destination is not a public internet address.");
+        throw new ImportFailure(
+          "Destination is not a public internet address.",
+        );
       // Pin the socket to the address we validated. Re-resolve and re-check every redirect.
       const selected = addresses.find((a) => a.family === 4) ?? addresses[0];
       const dispatcher = new Agent({
@@ -76,14 +79,16 @@ export async function safeFetch(raw: string, limit: number): Promise<Fetched> {
           const location = response.headers.location;
           response.body.destroy();
           if (!location || Array.isArray(location))
-            throw new Error("Invalid redirect.");
+            throw new ImportFailure("Invalid redirect.");
           url = normalizedURL(new URL(location, url).toString());
           continue;
         }
         if (response.statusCode !== 200) {
           response.body.destroy();
-          throw new Error(
+          throw new ImportFailure(
             `Source returned HTTP ${response.statusCode}; authentication and paywalls are not bypassed.`,
+            response.statusCode < 500 &&
+              ![408, 429].includes(response.statusCode),
           );
         }
         if (
@@ -91,11 +96,11 @@ export async function safeFetch(raw: string, limit: number): Promise<Fetched> {
           response.headers["content-encoding"] !== "identity"
         ) {
           response.body.destroy();
-          throw new Error("Unsupported compressed response.");
+          throw new ImportFailure("Unsupported compressed response.");
         }
         if (Number(response.headers["content-length"]) > limit) {
           response.body.destroy();
-          throw new Error("Source exceeds the download size limit.");
+          throw new ImportFailure("Source exceeds the download size limit.");
         }
         const chunks: Buffer[] = [];
         let size = 0;
@@ -103,20 +108,23 @@ export async function safeFetch(raw: string, limit: number): Promise<Fetched> {
           size += chunk.length;
           if (size > limit) {
             response.body.destroy();
-            throw new Error("Source exceeds the download size limit.");
+            throw new ImportFailure("Source exceeds the download size limit.");
           }
           chunks.push(Buffer.from(chunk));
         }
         return {
           bytes: Buffer.concat(chunks),
-          mime: String(response.headers["content-type"] ?? "").split(";")[0],
+          mime: String(response.headers["content-type"] ?? "")
+            .split(";")[0]
+            .trim()
+            .toLowerCase(),
           url,
         };
       } finally {
         await dispatcher.destroy();
       }
     }
-    throw new Error("Too many redirects.");
+    throw new ImportFailure("Too many redirects.");
   } finally {
     clearTimeout(timer);
   }

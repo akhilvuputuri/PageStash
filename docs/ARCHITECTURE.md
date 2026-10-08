@@ -16,7 +16,7 @@ flowchart LR
 
 ## Server and phone states
 
-Server states: queued → processing → ready, or bookmark with a failure explanation after bounded retries. Original source URL, title, author when available, references and capture time remain in the private library. Briefs render only supplied text and are labelled agent-created.
+Server states retain the existing wire values: queued → processing → ready, or bookmark for a failed submission. Only validated readable content becomes a prepared article. Permanent source/extraction failures stop immediately; transient failures stop after three attempts. The phone shows pending/failed records in a secondary Imports screen, outside the normal Library. Previously prepared copies and all retained submission metadata remain intact. Original URL, title, author when available, references and capture time are retained. Briefs render only supplied text and are labelled agent-created.
 
 Phone states: not downloaded, partial/downloading, text available with incomplete images, or available offline. Presence of server metadata never implies offline readiness. Every file is checked against the manifest's size/hash before commit. Text can be read when images are incomplete. Old content remains installed until replacement text is verified. Local state is independent of connectivity.
 
@@ -28,11 +28,17 @@ Images and HTML are immutable assets with cryptographic hashes. Download URLs la
 
 ## Library completion and device position
 
-The Library shows unarchived items; Archive is a secondary menu destination. Done reading explicitly sets the existing server read marker (`progress = 1`) and archives the item in one local transaction. Scrolling to the bottom alone never archives. Archiving retains installed content and images.
+The Library shows unarchived prepared items; Archive and Imports are secondary destinations. Queued/processing records are preparation requests, not successful offline saves. Source-image warnings keep readable articles in Library, with incomplete-image status and placeholders. Done reading explicitly sets the existing server read marker (`progress = 1`) and archives the item in one local transaction. Scrolling to the bottom alone never archives. Archiving retains installed content and images.
 
 Actual scroll position is stored separately on the device, preserving it when the server read marker is set and when a completed article is revisited. Cached article metadata shares the article scroll document, so the title leaves the viewport with the body. Saved progress excludes that header, and text-size/theme changes restore the relative body position. This requires no backend schema/API change. The position survives app restart and sync, but remains device-local and is cleared with the local cache on logout.
 
 The latest Done action has a persisted Undo record. Undo restores prior completion/archive fields, merges with newer collection edits, and keeps installed files and the current device position. Later completion/archive/deletion edits or differing synced state invalidate it; old acknowledgements cannot remove a newer Undo patch. Dismissal or another Done action replaces that one-action affordance.
+
+## Import acceptance and retry receipts
+
+Extraction rejects non-success HTTP responses, unsupported types, empty/unusable sanitized text and known challenge/login/error-page signatures. Detection uses diagnostic headings together with directed page instructions, password/challenge markup or short diagnostic content; generic error words in a substantive article do not reject it. These conservative signatures do not guarantee detection of every site's custom block page. Missing optional images produce placeholders and warnings without rejecting readable text.
+
+The additive private `save_requests` table maps operation keys to retained submission IDs and backfills legacy keys without removing rows. Initial creation and explicit recovery register their receipt and queue entry atomically. Replaying any known key never restarts terminal failure. A fresh intent for an owned failed URL requeues the same submission, preventing duplicate articles; manual app Retry uses the retained source URL. Concurrent intents keep distinct receipts but one queue entry. Status and retry retain owner/connection checks; a limited connection cannot inspect or retry another connection's submission. The owner can resolve those opaque duplicates in Imports. No MCP tool names, result fields or status values change.
 
 ## Native appearance
 

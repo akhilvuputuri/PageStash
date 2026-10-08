@@ -8,9 +8,10 @@ import type { Database } from "./db.js";
 import { supabaseHeaders, type Config } from "./config.js";
 import type { Storage } from "./storage.js";
 import { normalizedURL } from "./fetch.js";
+import { ImportFailure } from "./import-error.js";
 import {
   extract,
-  markdownDocument,
+  briefDocument,
   readerHTML,
   escapeHTML,
   type Prepared,
@@ -68,6 +69,7 @@ export class Service {
     public db: Database,
     public config: Config,
     public files: Storage,
+    private prepareArticle: (url: string) => Promise<Prepared> = extract,
   ) {}
   async credential(
     owner: string,
@@ -163,61 +165,161 @@ export class Service {
       idempotency_key: string;
     },
   ) {
+    let url: string | null;
+    try {
+      url = input.url ? normalizedURL(input.url) : null;
+    } catch {
+      throw new HTTPError(
+        400,
+        "Use a public HTTP(S) article URL without credentials or nonstandard ports.",
+      );
+    }
+    const existing = await this.savedRequest(
+      identity,
+      input.idempotency_key,
+      url,
+    );
+    if (existing)
+      return this.existingSave(identity, existing, input.idempotency_key, url);
+    await this.checkCapacity(identity, true);
+    const kind = url ? "article" : "brief";
+    const id = randomUUID();
+    // The item and its queue entry are one database statement, so a crash cannot lose the import.
+    let inserted;
+    try {
+      inserted = await this.db.query<{ id: string }>(
+        `WITH item AS (
+   INSERT INTO items(id,owner_id,connection_id,idempotency_key,normalized_url,kind,title,source_url,sources)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$5,$8::jsonb) ON CONFLICT DO NOTHING RETURNING id)
+   , receipt AS (INSERT INTO save_requests(owner_id,idempotency_key,submission_id) SELECT $2,$4,id FROM item)
+   INSERT INTO jobs(id,payload) SELECT id,$9::jsonb FROM item RETURNING id`,
+        [
+          id,
+          identity.owner_id,
+          identity.connection_id,
+          input.idempotency_key,
+          url,
+          kind,
+          input.title ?? (url ? new URL(url).hostname : "Reading brief"),
+          JSON.stringify(input.sources ?? []),
+          JSON.stringify(input),
+        ],
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code !== "23505") throw error;
+      // A concurrent alias won; the whole insert statement rolled back.
+      inserted = { rows: [] };
+    }
+    if (inserted.rows.length) {
+      this.onQueued?.();
+      return { submission_id: id, status: "queued", duplicate: false };
+    }
+    const winner = await this.savedRequest(
+      identity,
+      input.idempotency_key,
+      url,
+    );
+    if (!winner)
+      throw new HTTPError(
+        409,
+        "Submission conflicted; try a new request identifier.",
+      );
+    return this.existingSave(identity, winner, input.idempotency_key, url);
+  }
+  private async checkCapacity(identity: Identity, newItem: boolean) {
     const capacity = await this.db.query<{ queued: string; total: string }>(
       "SELECT count(*) FILTER(WHERE status IN('queued','processing')) AS queued,count(*) AS total FROM items WHERE owner_id=$1 AND deleted=false",
       [identity.owner_id],
     );
     if (
       Number(capacity.rows[0].queued) >= 50 ||
-      Number(capacity.rows[0].total) >= 1000
+      (newItem && Number(capacity.rows[0].total) >= 1000)
     )
       throw new HTTPError(
         429,
         "Personal beta library or import queue limit reached.",
       );
-    const url = input.url ? normalizedURL(input.url) : null;
-    const kind = url ? "article" : "brief";
-    const id = randomUUID();
-    // The item and its queue entry are one database statement, so a crash cannot lose the import.
-    const inserted = await this.db.query<{ id: string }>(
-      `WITH item AS (
-   INSERT INTO items(id,owner_id,connection_id,idempotency_key,normalized_url,kind,title,source_url,sources)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$5,$8::jsonb) ON CONFLICT DO NOTHING RETURNING id)
-   INSERT INTO jobs(id,payload) SELECT id,$9::jsonb FROM item RETURNING id`,
-      [
-        id,
-        identity.owner_id,
-        identity.connection_id,
-        input.idempotency_key,
-        url,
-        kind,
-        input.title ?? (url ? new URL(url).hostname : "Reading brief"),
-        JSON.stringify(input.sources ?? []),
-        JSON.stringify(input),
-      ],
-    );
-    if (inserted.rows.length) {
-      this.onQueued?.();
-      return { submission_id: id, status: "queued", duplicate: false };
-    }
-    const existing = await this.db.query<{
+  }
+  private async savedRequest(
+    identity: Identity,
+    key: string,
+    url: string | null,
+  ) {
+    const result = await this.db.query<{
       id: string;
       status: string;
       connection_id: string;
+      normalized_url: string | null;
+      matched_key: boolean;
     }>(
-      `SELECT id,status,connection_id FROM items WHERE owner_id=$1 AND (idempotency_key=$2 OR (normalized_url=$3 AND deleted=false)) ORDER BY captured_at LIMIT 1`,
-      [identity.owner_id, input.idempotency_key, url],
+      `SELECT i.id,i.status,i.connection_id,i.normalized_url,(r.idempotency_key IS NOT NULL OR i.idempotency_key=$2) AS matched_key
+       FROM items i LEFT JOIN save_requests r ON r.submission_id=i.id AND r.owner_id=$1 AND r.idempotency_key=$2
+       WHERE i.owner_id=$1 AND (r.idempotency_key IS NOT NULL OR i.idempotency_key=$2 OR (i.normalized_url=$3 AND i.deleted=false))
+       ORDER BY (r.idempotency_key IS NOT NULL OR i.idempotency_key=$2) DESC,i.captured_at LIMIT 1`,
+      [identity.owner_id, key, url],
     );
-    const row = existing.rows[0];
-    if (!row)
-      throw new HTTPError(
-        409,
-        "Submission conflicted; try a new request identifier.",
+    return result.rows[0];
+  }
+  private async existingSave(
+    identity: Identity,
+    row: NonNullable<Awaited<ReturnType<Service["savedRequest"]>>>,
+    key: string,
+    url: string | null,
+  ): Promise<{
+    submission_id: string | null;
+    status: string;
+    duplicate: boolean;
+  }> {
+    const visible =
+      identity.kind === "app" || row.connection_id === identity.connection_id;
+    if (!row.matched_key) {
+      if (visible && row.status === "bookmark" && url === row.normalized_url)
+        await this.checkCapacity(identity, false);
+      const shouldRetry =
+        visible && row.status === "bookmark" && url === row.normalized_url;
+      const claimed = await this.db.query<{
+        submission_id: string;
+        requeued: boolean;
+      }>(
+        `WITH receipt AS (INSERT INTO save_requests(owner_id,idempotency_key,submission_id) VALUES($1,$2,$3)
+         ON CONFLICT DO NOTHING RETURNING submission_id),
+         candidate AS (UPDATE items SET status='queued',error=NULL,revision=nextval('library_revision')
+          WHERE id=$3 AND owner_id=$1 AND $4 AND status='bookmark' AND deleted=false AND source_url IS NOT NULL
+          AND NOT EXISTS(SELECT 1 FROM jobs WHERE id=$3) AND EXISTS(SELECT 1 FROM receipt) RETURNING id,source_url),
+         job AS (INSERT INTO jobs(id,payload) SELECT id,jsonb_build_object('url',source_url) FROM candidate RETURNING id)
+         SELECT submission_id,EXISTS(SELECT 1 FROM job) AS requeued FROM receipt`,
+        [identity.owner_id, key, row.id, shouldRetry],
       );
-    // Do not disclose submissions created by another connection to a limited agent.
-    if (identity.kind !== "app" && row.connection_id !== identity.connection_id)
+      if (!claimed.rows.length) {
+        const winner = await this.savedRequest(identity, key, url);
+        if (!winner)
+          throw new HTTPError(
+            409,
+            "Submission conflicted; try a new request identifier.",
+          );
+        return this.existingSave(identity, winner, key, url);
+      }
+      if (claimed.rows[0].requeued) this.onQueued?.();
+      if (visible) {
+        const current = await this.status(identity, row.id);
+        row.status = String(current.status);
+      }
+    }
+    // A limited connection never gains access to another connection's receipt.
+    if (!visible)
       return { submission_id: null, status: "already_saved", duplicate: true };
     return { submission_id: row.id, status: row.status, duplicate: true };
+  }
+  async retry(identity: Identity, id: string) {
+    const result = await this.db.query(
+      `WITH candidate AS (UPDATE items SET status='queued',error=NULL,revision=nextval('library_revision')
+       WHERE id=$1 AND owner_id=$2 AND ($3 OR connection_id=$4) AND status='bookmark' AND source_url IS NOT NULL AND deleted=false
+       AND NOT EXISTS(SELECT 1 FROM jobs WHERE id=$1) RETURNING id,source_url)
+       INSERT INTO jobs(id,payload) SELECT id,jsonb_build_object('url',source_url) FROM candidate RETURNING id`,
+      [id, identity.owner_id, identity.kind === "app", identity.connection_id],
+    );
+    if (result.rows.length) this.onQueued?.();
+    return result.rows.length > 0;
   }
   async status(identity: Identity, id: string) {
     const result = await this.db.query(
@@ -381,11 +483,14 @@ export class Service {
         return true;
       }
       let prepared: Prepared;
-      if (row.payload.url) prepared = await extract(row.payload.url);
-      else
+      if (row.payload.url)
+        prepared = await this.prepareArticle(row.payload.url);
+      else {
+        if (!row.payload.markdown?.trim())
+          throw new ImportFailure("The brief contains no readable text.");
         prepared = {
           html:
-            markdownDocument(row.payload.markdown ?? "") +
+            briefDocument(row.payload.markdown ?? "") +
             "<hr><p>Agent-created brief</p>" +
             (row.payload.sources ?? [])
               .map(
@@ -396,6 +501,7 @@ export class Service {
           images: [],
           missingImages: 0,
         };
+      }
       const contentID = randomUUID();
       const assets: {
         id: string;
@@ -454,27 +560,24 @@ export class Service {
     } catch (error) {
       await this.files.remove(uploaded);
       const message =
-        error instanceof Error &&
-        /Source|article|Destination|HTML|redirect|compressed/.test(
-          error.message,
-        )
+        error instanceof ImportFailure
           ? error.message.slice(0, 240)
-          : "Import could not complete. The bookmark has been retained.";
-      const terminal = row.attempts >= 3;
-      await this.db.query(
-        `UPDATE items SET status=$2,error=$3,revision=nextval('library_revision') WHERE id=$1 AND deleted=false AND EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND lease_token=$4)`,
-        [row.id, terminal ? "bookmark" : "queued", message, lease],
-      );
-      if (terminal)
-        await this.db.query("DELETE FROM jobs WHERE id=$1 AND lease_token=$2", [
-          row.id,
-          lease,
-        ]);
-      else
+          : "Import could not complete. Retry from Imports.";
+      const terminal =
+        row.attempts >= 3 || (error instanceof ImportFailure && error.terminal);
+      if (terminal) {
         await this.db.query(
-          "UPDATE jobs SET lease_until=NULL,lease_token=NULL,available_at=now()+interval '30 seconds' WHERE id=$1 AND lease_token=$2",
-          [row.id, lease],
+          `WITH claimed AS (DELETE FROM jobs WHERE id=$1 AND lease_token=$2 RETURNING id)
+           UPDATE items SET status='bookmark',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) AND deleted=false`,
+          [row.id, lease, message],
         );
+      } else {
+        await this.db.query(
+          `WITH released AS (UPDATE jobs SET lease_until=NULL,lease_token=NULL,available_at=now()+interval '30 seconds' WHERE id=$1 AND lease_token=$2 RETURNING id)
+           UPDATE items SET status='queued',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM released) AND deleted=false`,
+          [row.id, lease, message],
+        );
+      }
     }
     return true;
   }

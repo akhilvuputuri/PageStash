@@ -152,15 +152,8 @@ export async function buildServer(service: Service) {
     const identity = await auth(request);
     service.app(identity);
     const itemID = id.parse((request.params as { id: string }).id);
-    // Original URL is sufficient to retry bookmarks; prepared briefs don't need extraction retry.
-    const result = await service.db.query(
-      `WITH candidate AS (UPDATE items SET status='queued',error=NULL,revision=nextval('library_revision') WHERE id=$1 AND owner_id=$2 AND status='bookmark' AND source_url IS NOT NULL AND deleted=false RETURNING id,source_url)
-   INSERT INTO jobs(id,payload) SELECT id,jsonb_build_object('url',source_url) FROM candidate ON CONFLICT DO NOTHING RETURNING id`,
-      [itemID, identity.owner_id],
-    );
-    if (!result.rows.length)
-      throw new HTTPError(404, "Retryable bookmark not found.");
-    service.onQueued?.();
+    if (!(await service.retry(identity, itemID)))
+      throw new HTTPError(404, "Retryable import not found.");
     return { ok: true };
   });
   app.get("/v1/downloads/:token", async (request, reply) => {
@@ -266,7 +259,7 @@ export async function buildServer(service: Service) {
       "save_link",
       {
         description:
-          "Save an external article for offline reading. Does not mean downloaded on phone.",
+          "Request article preparation for offline reading. Only ready confirms server preparation; failed imports are not saved articles. Does not mean downloaded on phone.",
         inputSchema: linkInput.shape,
         annotations: {
           readOnlyHint: false,
