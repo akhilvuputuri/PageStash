@@ -34,9 +34,9 @@ import XCTest
       }
     }
   }
-  func waitFor(_ predicate: @escaping @MainActor () -> Bool) async throws {
+  func waitFor(_ predicate: @escaping @MainActor () async throws -> Bool) async throws {
     for _ in 0..<200 {
-      if predicate() { return }
+      if try await predicate() { return }
       try await Task.sleep(nanoseconds: 50_000_000)
     }
     throw NSError(
@@ -60,6 +60,10 @@ import XCTest
     try
       "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head><body><h1>\(title)</h1><p id='reader-header'>Synthetic publisher text with a coincidentally matching ID.</p>\(paragraphs)</body></html>"
       .write(to: file, atomically: true, encoding: .utf8)
+    let defaults = UserDefaults.standard
+    let previousAppearance = defaults.object(forKey: "appearance")
+    defaults.set("light", forKey: "appearance")
+    defer { defaults.set(previousAppearance, forKey: "appearance") }
     let controls = Controls()
     let state = ArticleScrollState()
     let header = ArticleHeader(
@@ -97,6 +101,13 @@ import XCTest
     web.scrollView.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
     state.flush?()
     XCTAssertEqual(coordinator.currentProgress(web.scrollView), desired, accuracy: 0.01)
+    // WKWebView propagates native scrolling to its web process asynchronously.
+    try await waitFor {
+      let bottom =
+        try await self.evaluate(
+          web, "document.getElementById('reader-header').getBoundingClientRect().bottom") as? Double
+      return (bottom ?? .infinity) < 0
+    }
     let bottom =
       try await evaluate(
         web, "document.getElementById('reader-header').getBoundingClientRect().bottom") as? Double
