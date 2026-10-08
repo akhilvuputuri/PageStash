@@ -28,6 +28,11 @@
       selectedLauncherIdentifier = "Xcode.IDEFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
+      <Testables>
+         <TestableReference skipped = "NO">
+            <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "{tests}" BuildableName = "OfflineReaderTests.xctest" BlueprintName = "OfflineReaderTests" ReferencedContainer = "container:OfflineReader.xcodeproj"/>
+         </TestableReference>
+      </Testables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
