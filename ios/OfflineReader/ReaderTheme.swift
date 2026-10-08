@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Apply at each presentation root: sheets own their color-scheme preference.
+// Apply at each presentation root: sheets own their native appearance.
 struct ReaderTheme: ViewModifier {
   @AppStorage("appearance") private var appearance = "light"
   static let sepiaPage = Color(red: 246 / 255, green: 240 / 255, blue: 228 / 255)

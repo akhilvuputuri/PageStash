@@ -28,6 +28,10 @@ import XCTest
     }
     return view.subviews.compactMap { findScroll($0) }.first
   }
+  func findField(_ view: UIView) -> UITextField? {
+    if let field = view as? UITextField { return field }
+    return view.subviews.compactMap { findField($0) }.first
+  }
   func snapshot(_ window: UIWindow, name: String) {
     let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
       window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
@@ -95,5 +99,24 @@ import XCTest
     try await waitFor("synthetic library") { library.view.window != nil }
     try await Task.sleep(nanoseconds: 300_000_000)
     snapshot(window, name: "Synthetic sepia library")
+    let connections = UIHostingController(
+      rootView:
+        NavigationStack { ConnectionsView().environmentObject(AppState.shared) }.readerTheme())
+    window.rootViewController = connections
+    try await waitFor("credential label field") { self.findField(connections.view) != nil }
+    let field = try XCTUnwrap(findField(connections.view))
+    XCTAssertTrue(field.becomeFirstResponder())
+    let label = field.text
+    for theme in ["dark", "light", "sepia", "system"] {
+      defaults.set(theme, forKey: "appearance")
+      let expected: UIUserInterfaceStyle = theme == "dark" ? .dark : .light
+      try await waitFor("focused \(theme)") {
+        connections.traitCollection.userInterfaceStyle == expected
+      }
+      try await Task.sleep(nanoseconds: 100_000_000)
+      XCTAssertTrue(field.isFirstResponder, "Theme changes must retain editing focus")
+      XCTAssertEqual(field.text, label, "Theme changes must retain the entered label")
+    }
+    field.resignFirstResponder()
   }
 }
