@@ -35,6 +35,12 @@ jobs:
         run: |
           reader_test_device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next(d["udid"] for group in devices.values() for d in group if "iPhone" in d["name"]))')
           xcodebuild -quiet -project ios/OfflineReader.xcodeproj -scheme OfflineReader -destination "platform=iOS Simulator,id=$reader_test_device" -derivedDataPath work/TestDerivedData -resultBundlePath work/ReaderUIResults.xcresult -parallel-testing-enabled NO CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES DEVELOPMENT_TEAM="" test
+      - name: Report presentation test result
+        if: always()
+        run: |
+          if [ -d work/ReaderUIResults.xcresult ]; then
+            xcrun xcresulttool get test-results summary --path work/ReaderUIResults.xcresult
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:

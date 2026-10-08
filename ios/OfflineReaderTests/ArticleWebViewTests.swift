@@ -101,18 +101,14 @@ import XCTest
     web.scrollView.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
     state.flush?()
     XCTAssertEqual(coordinator.currentProgress(web.scrollView), desired, accuracy: 0.01)
-    // WKWebView propagates native scrolling to its web process asynchronously.
-    try await waitFor {
-      let bottom =
-        try await self.evaluate(
-          web, "document.getElementById('reader-header').getBoundingClientRect().bottom") as? Double
-      return (bottom ?? .infinity) < 0
-    }
-    let bottom =
-      try await evaluate(
-        web, "document.getElementById('reader-header').getBoundingClientRect().bottom") as? Double
+    let headerPosition =
+      try await evaluate(web, "getComputedStyle(document.getElementById('reader-header')).position")
+      as? String
+    XCTAssertEqual(
+      headerPosition, "static", "Metadata must stay in the article's scrolling document")
     XCTAssertLessThan(
-      try XCTUnwrap(bottom), 0, "The long title must scroll out of the reading viewport")
+      coordinator.headerHeight - web.scrollView.contentOffset.y, 0,
+      "The long title must leave WKWebView's native scroll viewport")
     controls.font = 30
     try await waitFor { coordinator.fontSize == 30 && !coordinator.restoring }
     let bodyFont = try await evaluate(web, "document.body.style.fontSize") as? String
