@@ -54,11 +54,12 @@ struct ArticleWebView: UIViewRepresentable {
       const metadata = \(header.payload);
       const body = document.body;
       if (!body) return 0;
-      let header = document.getElementById('reader-header');
-      if (!header) {
+      const headerKey = Symbol.for('OfflineReader.articleHeader');
+      let header = window[headerKey];
+      if (!header || !header.isConnected) {
         const heading = body.querySelector('h1,h2');
         if (heading) { const prior=document.createRange(); prior.setStart(body,0); prior.setEndBefore(heading); if (!prior.toString().trim() && heading.textContent.replace(/\\s+/g,' ').trim() === metadata.title.replace(/\\s+/g,' ').trim()) heading.remove(); }
-        header = document.createElement('header'); header.id='reader-header'; body.prepend(header);
+        header = document.createElement('header'); header.id='reader-header'; body.prepend(header); window[headerKey]=header;
       }
       header.replaceChildren();
       header.style.marginBottom='24px'; header.style.paddingBottom='16px'; header.style.borderBottom='1px solid #8884';

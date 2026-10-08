@@ -34,7 +34,7 @@ import XCTest
       }
     }
   }
-  func waitFor(_ predicate: @MainActor () -> Bool) async throws {
+  func waitFor(_ predicate: @escaping @MainActor () -> Bool) async throws {
     for _ in 0..<200 {
       if predicate() { return }
       try await Task.sleep(nanoseconds: 50_000_000)
@@ -58,7 +58,7 @@ import XCTest
       "<p>Paragraph \($0). Synthetic cached article content validates scrolling, text sizing and reading position without using an account.</p>"
     }.joined()
     try
-      "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head><body><h1>\(title)</h1>\(paragraphs)</body></html>"
+      "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head><body><h1>\(title)</h1><p id='reader-header'>Synthetic publisher text with a coincidentally matching ID.</p>\(paragraphs)</body></html>"
       .write(to: file, atomically: true, encoding: .utf8)
     let controls = Controls()
     let state = ArticleScrollState()
@@ -86,6 +86,10 @@ import XCTest
     let headingText =
       try await evaluate(web, "document.querySelector('#reader-header h1').textContent") as? String
     XCTAssertEqual(headingText, title)
+    let preservedPublisherText =
+      try await evaluate(web, "document.querySelector('p#reader-header').textContent") as? String
+    XCTAssertEqual(
+      preservedPublisherText, "Synthetic publisher text with a coincidentally matching ID.")
     let desired = 0.45
     let offset = ReadingScrollPosition.offset(
       progress: desired, contentHeight: web.scrollView.contentSize.height,
