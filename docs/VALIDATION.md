@@ -175,6 +175,14 @@ Build date: 6 October 2026. This record separates completed checks from required
 
 ![Synthetic browser share submitted for preparation](images/share-submitted.png)
 
+### Reader 0.2.0 shipped: 9 October 2026
+
+- The owner authorized release of issues #1–5 plus the integrated Sepia theme; #6–9 are excluded. Release revision/tag: `89d28a54ad4df80ad6af68ab14f62727159d0e7f`, [v0.2.0](https://github.com/akhilvuputuri/offline-reader/releases/tag/v0.2.0). App and embedded Share Extension are version 0.2.0, build 2.
+- Northflank Free manual build `goodly-pump-7224` deployed that exact revision. Service UI showed Running, one instance, 1/1 passing health probes and zero restarts at verification. Live `/health` returned 200 with database health true; anonymous `/v1/library` returned 401; OAuth protected-resource discovery returned 200. Startup completed the additive retry-receipt migration. No production library reset or data deletion was performed.
+- Generic signed Release compilation passed. The signed feature tree is identical to the release merge tree. `devicectl` verified successful installation and foreground launch of `com.akhilvuputuri.offlinereader` on the connected, paired iPhone running iOS 27 with Developer Mode enabled. The embedded Share Extension and matching App Group entitlement/profile are included. The app was updated in place, without uninstalling it or clearing its cache.
+- Integrated release checks passed: [CI](https://github.com/akhilvuputuri/offline-reader/actions/runs/37810939302), including 25 backend tests/audit, 35 Core/storage tests, seven native presentation tests and device/simulator builds. The public GitHub release contains notes/tag, not a provisioning profile or signed device binary. No TestFlight/App Store distribution was performed.
+- The owner confirmed that Sepia updates and a public-article browser share submits correctly on the installed iPhone build. This is owner-reported acceptance, not an instrumented device-screen capture; a real offline-read regression of the new build remains to be confirmed. Naturally scheduled background delivery remains unverified. Installation/launch and public health do not establish those behaviors or authenticated production ingestion.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.

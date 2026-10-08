@@ -69,19 +69,19 @@ node scripts/verify-backend.mjs
 
 It prompts for your app password without echoing or storing it, saves a demonstration brief through MCP and a public article, verifies file hashes and duplicate retries, then checks agent restrictions and revocation. It retains the two demonstration items for phone testing and revokes its temporary credential/session. It never needs database or Supabase service keys. Optional `READER_URL`, `READER_EMAIL`, and `READER_ARTICLE_URL` environment values select another backend, account, or public source. This command checks the server; the phone's offline behavior still requires device acceptance.
 
-Appearance is configurable in Settings → Appearance: Light (the default), Sepia, Dark, or System. Light uses white pages; Sepia uses warm off-white pages with brown text. Both apply to existing cached articles and briefs. Sepia is prepared for the next phone release.
+Appearance is configurable in Settings → Appearance: Light (the default), Sepia, Dark, or System. Light uses white pages; Sepia uses warm off-white pages with brown text. Both apply to existing cached articles and briefs. Sepia ships in the installed 0.2.0 personal release.
 
 ## Import failures
 
 Only prepared readable articles enter Library. Pending and failed submissions appear under Imports with their status and a Retry action when an original article URL is available. Missing optional images keep readable text, with warnings and placeholders. Existing records are retained; this does not retrospectively audit or delete older captures.
 
-The HTTP/MCP status value `bookmark` is retained for compatibility but now describes a failed submission outside the normal article list. A new intentional save of the same owned failed URL retries its retained submission; repeating a known request key never silently starts another attempt. The server adds a private retry-receipt registry on startup. These changes await the combined app/backend release.
+The HTTP/MCP status value `bookmark` is retained for compatibility but now describes a failed submission outside the normal article list. A new intentional save of the same owned failed URL retries its retained submission; repeating a known request key never silently starts another attempt. The server adds a private retry-receipt registry on startup. These changes ship in 0.2.0, with backend revision `89d28a5` deployed on Northflank Free.
 
 ## Browser sharing
 
 The embedded Offline Reader share destination accepts a webpage URL from Safari/Chrome. It displays the Reader destination and queues the selected link before submitting. Multiple shared links require an explicit choice. Offline shares remain queued on this device and are sent when the app next has connectivity and a valid sign-in; background scheduling is controlled by iOS.
 
-Open the updated app once before first use. Logout clears queued shares. After re-signing in, old queued links require explicit Retry with the same account/destination; installed readable content is retained. Submitted/prepared status is separate from verified offline availability. Signing/build checks are complete, while real Safari/Chrome iPhone acceptance awaits the combined release.
+Open the updated app once before first use. Logout clears queued shares. After re-signing in, old queued links require explicit Retry with the same account/destination; installed readable content is retained. Submitted/prepared status is separate from verified offline availability. Reader 0.2.0 is installed and launched on the personal iPhone; the owner confirmed Sepia and browser share submission work. Naturally scheduled background delivery remains unverified.
 
 ## Background behavior
 
@@ -99,4 +99,4 @@ This is a personal beta with one allowed production email, designed with account
 
 ## Library UI (issue 1)
 
-The Library UI replaces Inbox/Offline/Archived tabs with one Library and a secondary Archive destination. Done reading marks read and archives with Undo, while preserving installed files and the device reading position. It trims reader actions and moves connection/account management into secondary settings screens. See [implementation validation](docs/VALIDATION.md#issue-1-library-and-completion-8-october-2026); this is not a new installed phone release.
+The Library UI replaces Inbox/Offline/Archived tabs with one Library and a secondary Archive destination. Done reading marks read and archives with Undo, while preserving installed files and the device reading position. It trims reader actions and moves connection/account management into secondary settings screens. See [implementation validation](docs/VALIDATION.md#issue-1-library-and-completion-8-october-2026); this UI ships in the installed 0.2.0 personal release.

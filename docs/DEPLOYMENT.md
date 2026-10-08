@@ -28,7 +28,7 @@ The repository retains `render.yaml` as an optional paid-hosting alternative, bu
 
 ## 3. iPhone signing and TestFlight
 
-The personal developer team `U44PG44XMJ` is configured in the project and generator. The explicit App ID `com.akhilvuputuri.offlinereader` is registered under that team, and a valid Apple Development signing identity is available on the Mac. The personal iPhone has now been provisioned and the signed Release build installed and launched. Production sign-in and physical offline/background acceptance remain pending.
+The personal developer team `U44PG44XMJ` is configured in the project and generator. The explicit App ID `com.akhilvuputuri.offlinereader` is registered under that team, and a valid Apple Development signing identity is available on the Mac. The personal iPhone is provisioned. Reader 0.2.0 (build 2) with its embedded Share Extension installed and launched on 9 October 2026. The owner previously confirmed production sign-in and article/image offline reading; the owner confirmed the new-release Sepia and browser-share flow. Natural background execution remains pending.
 
 With Xcode 26.3 and this iOS 27 device, device-specific asset thinning failed. The successful installation used a generic signed Release build (`-configuration Release -destination 'generic/platform=iOS' -allowProvisioningUpdates`) followed by `xcrun devicectl device install app --device <connected-device> <Release-iphoneos/OfflineReader.app>`. This preserves signing and the full asset set.
 
@@ -41,7 +41,7 @@ With Xcode 26.3 and this iOS 27 device, device-specific asset thinning failed. T
 
 ## Browser Share Extension signing
 
-The app and embedded `ReaderShare` target use `group.com.akhilvuputuri.offlinereader`. Both signed generic Release products have matching App Group entitlements and provisioning profiles verified locally. Automatic provisioning registered/configured the required group and extension on the existing team; no device installation or distribution was performed. The main/extension bundle IDs are based on `READER_BUNDLE_IDENTIFIER`, so an isolated CI preview uses its own identifiers/group instead of sharing a real app container.
+The app and embedded `ReaderShare` target use `group.com.akhilvuputuri.offlinereader`. Both signed generic Release products have matching App Group entitlements and provisioning profiles verified locally. Automatic provisioning registered/configured the required group and extension on the existing team; Reader 0.2.0 with this extension installed and launched on the personal iPhone; no TestFlight/App Store distribution was performed. The main/extension bundle IDs are based on `READER_BUNDLE_IDENTIFIER`, so an isolated CI preview uses its own identifiers/group instead of sharing a real app container.
 
 The containing app must be opened once after update to migrate its existing private Keychain session into the protected shared Keychain item. Sign in in the main app if necessary; the extension does not request or copy passwords. Check Safari and Chrome's real iPhone share sheet during combined-release acceptance, including an offline share, foreground/background delivery, logout during submission and explicit Retry after reauthentication. Compiling or signing an extension alone does not prove host-browser delivery.
 
