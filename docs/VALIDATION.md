@@ -120,6 +120,13 @@ Build date: 6 October 2026. This record separates completed checks from required
 
 ![Synthetic Done reading and Undo](images/done-reading-undo.png)
 
+### Issue 2 candidate: scrolling article metadata, 8 October 2026
+
+- Cached article title, author, source, offline status and warnings are inserted as text into one header inside the existing WKWebView document. No competing native scroll view wraps cached content; the no-download screen has its own single native ScrollView.
+- Exact duplicate leading title headings are removed. Metadata uses JSON and textContent; source links require HTTP(S). Publisher scripts remain disabled and cached files stay immutable.
+- Header height is excluded from saved article progress. Presentation/font/theme updates restore the relative body position after styling, with generation checks against stale callbacks.
+- All 26 local storage/sync/progress tests pass, including four new header/position geometry cases. Swift syntax, formatting and whitespace checks pass. Hosted compilation and the long-title synthetic simulator check remain pending; no physical phone update has occurred.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
