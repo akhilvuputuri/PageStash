@@ -43,7 +43,9 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
     generation = nil
     progressByItem = [:]
     lock.unlock()
-    session.getAllTasks { tasks in tasks.forEach { $0.cancel() } }
+    session.getAllTasks { tasks in
+      for task in tasks { task.cancel() }
+    }
   }
   func handleEvents(completion: @escaping () -> Void) {
     lock.lock()
@@ -195,6 +197,12 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
     do {
       try store.accept(
         location, itemID: transfer.itemID, version: transfer.version, asset: transfer.asset)
+      BackgroundDiagnostics.shared.record(
+        "asset_verified",
+        fields: [
+          "assetVerifiedAt": Date().timeIntervalSince1970,
+          "lastVerifiedWasText": transfer.asset.role == "content",
+        ])
     } catch { UserDefaults.standard.set("A download needs retrying.", forKey: "downloadError") }
     DispatchQueue.main.async { self.completion?() }
   }

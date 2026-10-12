@@ -107,6 +107,13 @@ import SwiftUI
       try await syncCoordinator.run(fullManifest: forceManifest) { fullManifest in
         guard self.session?.generation == generation else { throw CancellationError() }
         self.refreshing = true
+        let syncStarted = Date()
+        BackgroundDiagnostics.shared.record(
+          "sync_started",
+          fields: [
+            "syncStartedAt": syncStarted.timeIntervalSince1970, "fullManifest": fullManifest,
+            "syncError": "none",
+          ])
         defer {
           if self.session?.generation == generation {
             self.refreshing = false
@@ -156,7 +163,19 @@ import SwiftUI
           try shareStore.acknowledge(Set(try store.items().map(\.id)), account: credentials.account)
         }
         self.reload()
+        BackgroundDiagnostics.shared.record(
+          "metadata_applied",
+          fields: [
+            "itemCount": self.items.count,
+            "readyCount": self.items.filter { $0.status == "ready" }.count,
+          ])
         await Downloads.shared.enqueue(items: self.items)
+        BackgroundDiagnostics.shared.record(
+          "downloads_enqueued",
+          fields: [
+            "syncSucceededAt": Date().timeIntervalSince1970,
+            "syncSeconds": Date().timeIntervalSince(syncStarted),
+          ])
         try Task.checkCancellation()
         guard self.session?.generation == generation else { throw CancellationError() }
         self.lastSync = Date().formatted(date: .abbreviated, time: .shortened)
@@ -167,6 +186,12 @@ import SwiftUI
       UserDefaults.standard.removeObject(forKey: "downloadError")
     } catch {
       if self.session?.generation == generation {
+        BackgroundDiagnostics.shared.record(
+          "sync_failed",
+          fields: [
+            "syncError": BackgroundDiagnostics.errorCode(error),
+            "syncFailedAt": Date().timeIntervalSince1970,
+          ])
         reload()
         message = error.localizedDescription
       }
@@ -289,25 +314,50 @@ import SwiftUI
     lastSync = "Not yet synced"
     UserDefaults.standard.removeObject(forKey: "lastSync")
     UserDefaults.standard.removeObject(forKey: "downloadError")
+    BackgroundDiagnostics.shared.clear()
     if let root { try? FileManager.default.removeItem(at: root) }
   }
   func scheduleRefresh() {
     guard session != nil, !previewMode else { return }
     let request = BGAppRefreshTaskRequest(identifier: AppDelegate.refreshID)
     request.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
-    do { try BGTaskScheduler.shared.submit(request) } catch {
-      // Foreground and manual refresh remain available.
+    do {
+      try BGTaskScheduler.shared.submit(request)
+      BackgroundDiagnostics.shared.record(
+        "schedule_accepted",
+        fields: [
+          "scheduleAccepted": true, "scheduledAt": Date().timeIntervalSince1970,
+          "requestedEarliestAt": request.earliestBeginDate?.timeIntervalSince1970 ?? 0,
+        ])
+    } catch {
+      BackgroundDiagnostics.shared.record(
+        "schedule_failed",
+        fields: [
+          "scheduleAccepted": false, "scheduleErrorCode": (error as NSError).code,
+        ])
     }
+    BackgroundDiagnostics.snapshot()
   }
   func backgroundRefresh(_ task: BGAppRefreshTask) {
+    let run = BackgroundDiagnostics.shared.begin()
+    BackgroundDiagnostics.shared.record(
+      "background_context",
+      fields: [
+        "backgroundSessionAvailable": session != nil, "backgroundCacheAvailable": store != nil,
+      ])
     scheduleRefresh()
     let operation = Task { @MainActor in
       do {
         try await self.sync(forceManifest: true)
+        BackgroundDiagnostics.shared.finish(run, outcome: "success")
         task.setTaskCompleted(success: true)
-      } catch { task.setTaskCompleted(success: false) }
+      } catch {
+        BackgroundDiagnostics.shared.finish(run, outcome: BackgroundDiagnostics.errorCode(error))
+        task.setTaskCompleted(success: false)
+      }
     }
     task.expirationHandler = {
+      BackgroundDiagnostics.shared.finish(run, outcome: "expired")
       operation.cancel()
       Task { @MainActor in self.syncCoordinator.cancel() }
     }
@@ -386,10 +436,16 @@ import SwiftUI
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
-    BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshID, using: nil) { task in
+    BackgroundDiagnostics.shared.launch(
+      probeActive: ProcessInfo.processInfo.arguments.contains("--reader-background-probe"))
+    let registered = BGTaskScheduler.shared.register(
+      forTaskWithIdentifier: Self.refreshID, using: nil
+    ) { task in
       guard let task = task as? BGAppRefreshTask else { return }
       Task { @MainActor in AppState.shared.backgroundRefresh(task) }
     }
+    BackgroundDiagnostics.shared.record("registered", fields: ["registrationAccepted": registered])
+    BackgroundDiagnostics.snapshot()
     _ = AppState.shared
     return true
   }

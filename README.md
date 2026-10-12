@@ -91,7 +91,9 @@ The app requests another refresh opportunity after 30 minutes. **That is an earl
 
 Unread, unarchived items download automatically, Wi-Fi by default, within a configurable device storage limit. Manually removing a download pauses automatic downloading for that item until you request it again. Downloads retry on subsequent refreshes; a partial attempt never destroys an existing readable copy. Missing source images are clearly labelled.
 
-Do not swipe the app away while evaluating automatic refresh. Test Low Power Mode and Background App Refresh settings on your actual phone. Paid developer membership makes distribution easier; it does not change iOS scheduling.
+Going Home or locking the phone leaves Reader eligible for refresh. Swiping it away generally blocks background relaunch and cancels native transfers until Reader is opened again. Do not swipe the app away while evaluating automatic refresh. Test Low Power Mode and Background App Refresh settings on your actual phone. Paid developer membership makes distribution easier; it does not change iOS scheduling.
+
+Build 4 records bounded local scheduling, wake, sync and verified-download diagnostics for troubleshooting. It retains no article text, URLs, item/account IDs, credentials or raw error messages. A controlled physical-device test passed; naturally scheduled delivery is still unverified. See [device investigation](docs/VALIDATION.md#background-refresh-investigation-13-october-2026).
 
 ## Scope
 
