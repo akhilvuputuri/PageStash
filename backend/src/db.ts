@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
  client_id text NOT NULL REFERENCES oauth_clients(id), redirect_uri text NOT NULL,
  challenge text NOT NULL, expires_at timestamptz NOT NULL
 );
+-- Additive: the publisher's site name for quiet Library metadata.
+ALTER TABLE items ADD COLUMN IF NOT EXISTS site_name text;
 INSERT INTO schema_version(version) VALUES(1) ON CONFLICT DO NOTHING;
 `;
 

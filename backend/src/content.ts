@@ -67,6 +67,7 @@ export interface Prepared {
   html: string;
   title: string;
   author?: string;
+  siteName?: string;
   missingImages: number;
   images: { id: string; bytes: Buffer }[];
 }
@@ -199,6 +200,7 @@ export async function extract(
     html: result.window.document.body.innerHTML,
     title: article.title || new URL(url).hostname,
     author: article.byline || undefined,
+    siteName: article.siteName?.trim().slice(0, 120) || undefined,
     images,
     missingImages,
   };
