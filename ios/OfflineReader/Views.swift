@@ -553,7 +553,11 @@ struct ReaderScreen: View {
   private func finish(_ item: ReadingItem) {
     scrollState.flush?()
     if state.finishReading(item.id) {
-      undoManager?.registerUndo(withTarget: state) { $0.undoFinishedReading() }
+      let id = item.id
+      undoManager?.registerUndo(withTarget: state) { state in
+        // Only while this article's Undo is still the current one.
+        if state.readingUndo?.itemId == id { state.undoFinishedReading() }
+      }
       undoManager?.setActionName("Done Reading")
       UINotificationFeedbackGenerator().notificationOccurred(.success)
       finished = true
@@ -583,6 +587,15 @@ struct ReaderScreen: View {
               if !finished { try? state.store?.recordReadingPosition(item.id, progress) }
             }
             .ignoresSafeArea(edges: .vertical)
+            .accessibilityAction(.magicTap) { scrollState.barsHidden = false }
+            .onReceive(
+              NotificationCenter.default.publisher(
+                for: UIAccessibility.voiceOverStatusDidChangeNotification)
+            ) { _ in scrollState.barsHidden = false }
+            .onReceive(
+              NotificationCenter.default.publisher(
+                for: UIAccessibility.switchControlStatusDidChangeNotification)
+            ) { _ in scrollState.barsHidden = false }
             .background {
               GeometryReader { proxy in
                 Color.clear

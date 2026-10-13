@@ -167,7 +167,7 @@ struct ArticleWebView: UIViewRepresentable {
     web.isOpaque = false
     web.backgroundColor = .clear
     let tap = UITapGestureRecognizer(
-      target: context.coordinator, action: #selector(Coordinator.toggleBars))
+      target: context.coordinator, action: #selector(Coordinator.toggleBars(_:)))
     tap.cancelsTouchesInView = false
     tap.delegate = context.coordinator
     web.addGestureRecognizer(tap)
@@ -278,6 +278,9 @@ struct ArticleWebView: UIViewRepresentable {
         return
       }
       if action.navigationType == .linkActivated {
+        // The tap that opened a link must not also toggle the bars.
+        pendingToggle?.cancel()
+        pendingToggle = nil
         if target.scheme == ArticleWebView.actionScheme {
           if ArticleWebView.isFinishAction(target, finishShown: parent.header.finishLabel != nil) {
             parent.onFinish?()
@@ -299,6 +302,9 @@ struct ArticleWebView: UIViewRepresentable {
     private var lastOffset: CGFloat = 0
     private var dragStart: CGFloat = 0
     private func setBarsHidden(_ hidden: Bool) {
+      // Assistive technologies keep the controls: VoiceOver and Switch Control can't scroll them back.
+      let hidden =
+        hidden && !UIAccessibility.isVoiceOverRunning && !UIAccessibility.isSwitchControlRunning
       if parent.scrollState.barsHidden != hidden { parent.scrollState.barsHidden = hidden }
     }
     /// Only the reader's own scrolling moves the bars; restores and re-layouts never do.
@@ -315,7 +321,24 @@ struct ArticleWebView: UIViewRepresentable {
         setBarsHidden(false)
       }
     }
-    @objc func toggleBars() { setBarsHidden(!parent.scrollState.barsHidden) }
+    private var pendingToggle: DispatchWorkItem?
+    /// A tap toggles the bars after a short wait, unless it opened a link, was the second tap of a
+    /// double tap, or stopped a moving page.
+    @objc func toggleBars(_ tap: UITapGestureRecognizer) {
+      if let pending = pendingToggle {
+        pending.cancel()
+        pendingToggle = nil
+        return
+      }
+      if let scroll = (tap.view as? WKWebView)?.scrollView, scroll.isDecelerating { return }
+      let work = DispatchWorkItem { [weak self] in
+        guard let self else { return }
+        self.pendingToggle = nil
+        self.setBarsHidden(!self.parent.scrollState.barsHidden)
+      }
+      pendingToggle = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
     func gestureRecognizer(
       _ gestureRecognizer: UIGestureRecognizer,
       shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
@@ -331,11 +354,17 @@ struct ArticleWebView: UIViewRepresentable {
       let line = parent.scaledFontSize * 1.6
       let page = max(
         120, scrollView.bounds.height - parent.chromeInsets.top - parent.chromeInsets.bottom - line)
-      let moved = scrollView.contentOffset.y - dragStart
+      let current = scrollView.contentOffset.y
+      let moved = current - dragStart
+      // Velocity decides first; distance only when the finger lifts without a flick.
       let direction: CGFloat =
-        velocity.y > 0.2 || moved > 40 ? 1 : (velocity.y < -0.2 || moved < -40 ? -1 : 0)
+        abs(velocity.y) > 0.2 ? (velocity.y > 0 ? 1 : -1) : (moved > 40 ? 1 : (moved < -40 ? -1 : 0))
       let end = max(0, scrollView.contentSize.height - scrollView.bounds.height)
-      targetContentOffset.pointee.y = min(end, max(0, dragStart + direction * page))
+      var target = dragStart + direction * page
+      // Never move against the direction of travel, even after a drag longer than a page.
+      if direction > 0 { target = max(target, current) }
+      if direction < 0 { target = min(target, current) }
+      targetContentOffset.pointee.y = min(end, max(0, target))
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { save(scrollView) }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {

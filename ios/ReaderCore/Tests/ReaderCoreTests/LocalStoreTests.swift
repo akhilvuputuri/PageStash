@@ -51,6 +51,11 @@ final class LocalStoreTests: XCTestCase {
     let counts = try store.wordCounts()
     XCTAssertGreaterThanOrEqual(counts[item.id] ?? 0, 7)
     XCTAssertNil(counts[waiting.id])
+    try store.removeDownload(item.id)
+    XCTAssertNil(try store.wordCounts()[item.id], "A removed download has no reading time")
+    try store.resumeDownload(item.id)
+    try install(html, asset: content, item: item, store: store)
+    XCTAssertNotNil(try store.wordCounts()[item.id])
     try store.edit(item.id, ItemPatch(deleted: true))
     XCTAssertNil(try store.wordCounts()[item.id])
   }

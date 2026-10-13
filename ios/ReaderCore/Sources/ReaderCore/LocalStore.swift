@@ -127,6 +127,7 @@ public final class LocalStore: @unchecked Sendable {
       // Delete files after committing tombstones. Late download callbacks check tombstones before writing.
       for item in page.items where item.deleted {
         try? FileManager.default.removeItem(at: root.appendingPathComponent(item.id))
+        try? execute("DELETE FROM lengths WHERE id=?", [item.id])
       }
     }
   }
@@ -357,12 +358,23 @@ public final class LocalStore: @unchecked Sendable {
   /// content is installed; articles installed before counts existed are filled in from the search index.
   public func wordCounts() throws -> [String: Int] {
     try synchronized {
-      for row in try rows(
+      let missing = try rows(
         "SELECT search.id,search.body FROM search LEFT JOIN lengths ON lengths.id=search.id WHERE lengths.id IS NULL AND search.body<>''"
-      ) where row.count == 2 {
-        try execute(
-          "INSERT OR REPLACE INTO lengths(id,words) VALUES(?,?)",
-          [row[0], String(Self.wordCount(row[1]))])
+      )
+      if !missing.isEmpty {
+        // One transaction for the one-time backfill after upgrading.
+        try execute("BEGIN")
+        do {
+          for row in missing where row.count == 2 {
+            try execute(
+              "INSERT OR REPLACE INTO lengths(id,words) VALUES(?,?)",
+              [row[0], String(Self.wordCount(row[1]))])
+          }
+          try execute("COMMIT")
+        } catch {
+          try? execute("ROLLBACK")
+          throw error
+        }
       }
       var counts: [String: Int] = [:]
       for row in try rows("SELECT id,words FROM lengths WHERE words>0") where row.count == 2 {
@@ -384,6 +396,7 @@ public final class LocalStore: @unchecked Sendable {
       try execute("UPDATE items SET installed=0 WHERE id=?", [id])
       try execute("DELETE FROM verified WHERE item=?", [id])
       try execute("DELETE FROM search WHERE id=?", [id])
+      try execute("DELETE FROM lengths WHERE id=?", [id])
       if let item = try item(id) {
         try execute("INSERT INTO search(id,title,body) VALUES(?,?,'')", [id, item.title])
       }
