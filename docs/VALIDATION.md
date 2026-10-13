@@ -237,6 +237,25 @@ The items left open in the 0.3.0 design pass. Checked with the synthetic preview
 - Northflank Free manual build `different-cook-9865` deployed `7877e6b` to `reader-api`. The service showed Running, one instance, 1/1 passing health probes and zero restarts. Live `/health` returned 200, anonymous `/v1/library` returned 401, and OAuth protected-resource discovery returned 200. The additive `items.site_name` migration runs before the server listens, so a clean start with passing probes indicates it applied. The only backend change since `89d28a5` is that migration and site-name capture. No production data was reset or deleted.
 - Not yet observed: a newly saved production article carrying a site name, the 0.3.x app on the physical iPhone, and TestFlight distribution.
 
+### Closing issues 30–34 and 36, 14 October 2026
+
+Checks used the synthetic preview store on the iPhone 17 Pro and the iPhone 16e (the smallest installed runtime, 390 pt wide; no iPhone SE runtime is installed), iOS 26.3.
+
+- **App icon (#34, part 1).** `scripts/draw-icon.swift` drew through AppKit into a bitmap without alpha, which produced an all-black PNG. It now renders opaque RGB with CoreGraphics. `scripts/check-icon.swift`, run in CI, fails on a wrong size, an alpha channel, or a blank icon; it rejected the old PNG and accepts the new one. Observed: the new build shows the terracotta icon on the Home Screen and in Spotlight, while older simulator installs remain black. The name and a layered Icon Composer icon still need the owner's decision.
+- **Reading theme scope (#33).** The chosen theme now styles only the reader, presented full screen, and its `Aa` sheet. The Library, Settings, Imports and sign-in follow the system light/dark setting. Observed: with Dark chosen and the system in Light, the reader and its bars were dark, while Settings and the Library stayed light. Updated tests assert both behaviours. Opening an article now uses a zoom transition from the row into a full-screen presentation, with the standard Close button; an edge swipe also dismisses it.
+- **iOS 26 chrome (#33).** `+` and `⋯` sit in separate glass groups (`ToolbarSpacer`, compiled only with the iOS 26 SDK). Section headers use title case.
+- **Reader (#32).** Agent briefs list up to five cited sources in the header. With Reduce Motion on, the bars no longer recede on their own; a tap toggles them without animation. New articles carry the source page's language (`<html lang>`), validated against a BCP 47 pattern, so hyphenation applies. Already-downloaded articles gain it only when re-prepared.
+- **Accessibility (#31).** Article text honours Bold Text (weight 600), with a regression test that position is kept. On the iPhone 16e at xxxLarge with Increase Contrast on, the Library and reader showed no clipping or truncated titles, and the warning used its high-contrast colour. Swipe actions were not checked with VoiceOver running; a hosted attempt to read them from the accessibility tree found no custom actions, so that check is left for a device.
+- **System integration (#36).**
+  - Spotlight indexes downloaded articles by title, source and author. Observed in Spotlight search.
+  - A Continue Reading widget (small, medium, Lock Screen rectangular) and Home Screen quick action follow the last opened unfinished article. Observed: both show the article, and both open it in the reader.
+  - Deep links `offlinereader://item/<id>` open an article. Observed.
+  - App Shortcuts: "Continue reading in Offline Reader" and "Save a link to Offline Reader". These compile and their metadata is generated; they were not run through Siri or the Shortcuts app.
+  - Signing out clears the index, widget, quick action and last-opened record.
+  - Opening a Spotlight result in the preview app was not verified, because Spotlight launched another local build holding the same synthetic titles.
+- **Tests.** 25 backend, 37 Core and 18 native tests pass, and the unsigned device build passes. New tests cover deep links, Continue Reading selection, the App Group snapshot, Bold Text, the reading-theme scope, and the source-language tag.
+- **Signing.** The widget is a new extension, `com.akhilvuputuri.offlinereader.widget`, in the same App Group. Automatic provisioning must register it before the next signed device build.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
