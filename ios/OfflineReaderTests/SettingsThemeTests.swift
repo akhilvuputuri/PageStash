@@ -7,10 +7,18 @@ import XCTest
   struct Presenter: View {
     @State private var presented = true
     var body: some View {
-      Color.clear.readerTheme()
+      Color.clear.appTheme()
         .sheet(isPresented: $presented) {
           SettingsView().environmentObject(AppState.shared)
         }
+    }
+  }
+  /// The reader's own sheet follows the chosen reading theme.
+  struct ReaderSheetPresenter: View {
+    @State private var presented = true
+    var body: some View {
+      Color.clear.readerTheme()
+        .sheet(isPresented: $presented) { ReaderDisplaySheet(fontSize: .constant(20)) }
     }
   }
   func waitFor(_ label: String, _ predicate: @escaping @MainActor () -> Bool) async throws {
@@ -71,12 +79,13 @@ import XCTest
       CGPoint(x: 0, y: max(minimum, min(minimum + 30, maximum))), animated: false)
     try await Task.sleep(nanoseconds: 300_000_000)
     let savedOffset = scroll.contentOffset.y
+    // Settings follows the system; the reading theme never restyles it.
     for theme in ["dark", "sepia", "light", "system"] {
       defaults.set(theme, forKey: "appearance")
-      let expected: UIUserInterfaceStyle = theme == "dark" ? .dark : .light
-      try await waitFor("\(theme) appearance") {
-        sheet.traitCollection.userInterfaceStyle == expected
-      }
+      try await Task.sleep(nanoseconds: 150_000_000)
+      XCTAssertEqual(
+        sheet.traitCollection.userInterfaceStyle, .light,
+        "Settings must keep the system style when the reading theme is \(theme)")
       XCTAssertTrue(
         host.presentedViewController === sheet, "Changing theme must preserve the open sheet")
       XCTAssertEqual(
@@ -95,6 +104,20 @@ import XCTest
     }
     XCTAssertTrue(host.presentedViewController === sheet)
     host.dismiss(animated: false)
+    window.overrideUserInterfaceStyle = .light
+    let reader = UIHostingController(rootView: ReaderSheetPresenter())
+    window.rootViewController = reader
+    try await waitFor("reader sheet presentation") { reader.presentedViewController?.view.window != nil }
+    let readerSheet = try XCTUnwrap(reader.presentedViewController)
+    for theme in ["dark", "sepia", "light"] {
+      defaults.set(theme, forKey: "appearance")
+      let expected: UIUserInterfaceStyle = theme == "dark" ? .dark : .light
+      try await waitFor("reader sheet \(theme)") {
+        readerSheet.traitCollection.userInterfaceStyle == expected
+      }
+      snapshot(window, name: "Synthetic reader sheet \(theme)")
+    }
+    reader.dismiss(animated: false)
     defaults.set("sepia", forKey: "appearance")
     let library = UIHostingController(rootView: RootView().environmentObject(AppState.shared))
     window.rootViewController = library
@@ -103,7 +126,7 @@ import XCTest
     snapshot(window, name: "Synthetic sepia library")
     let connections = UIHostingController(
       rootView:
-        NavigationStack { ConnectionsView().environmentObject(AppState.shared) }.readerTheme())
+        NavigationStack { ConnectionsView().environmentObject(AppState.shared) }.appTheme())
     window.rootViewController = connections
     try await waitFor("credential label field") { self.findField(connections.view) != nil }
     let field = try XCTUnwrap(findField(connections.view))
@@ -115,11 +138,8 @@ import XCTest
     XCTAssertEqual(label, "Synthetic connection label")
     for theme in ["dark", "light", "sepia", "system"] {
       defaults.set(theme, forKey: "appearance")
-      let expected: UIUserInterfaceStyle = theme == "dark" ? .dark : .light
-      try await waitFor("focused \(theme)") {
-        connections.traitCollection.userInterfaceStyle == expected
-      }
-      try await Task.sleep(nanoseconds: 100_000_000)
+      try await Task.sleep(nanoseconds: 150_000_000)
+      XCTAssertEqual(connections.traitCollection.userInterfaceStyle, .light)
       XCTAssertTrue(field.isFirstResponder, "Theme changes must retain editing focus")
       XCTAssertEqual(field.text, label, "Theme changes must retain the entered label")
     }

@@ -82,9 +82,12 @@ extension EnvironmentValues {
   }
 }
 
-// Apply at each presentation root: sheets own their native appearance.
+// Apply at each presentation root: sheets own their native appearance. The chosen reading theme
+// styles only the reader and its sheets; the Library, Settings and Imports follow the system.
 struct ReaderTheme: ViewModifier {
-  @AppStorage("appearance") private var appearance = ThemeTokens.defaultAppearance
+  let followsReadingTheme: Bool
+  @AppStorage("appearance") private var storedAppearance = ThemeTokens.defaultAppearance
+  private var appearance: String { followsReadingTheme ? storedAppearance : "system" }
   private var interfaceStyle: UIUserInterfaceStyle {
     switch appearance {
     case "dark": return .dark
@@ -125,7 +128,10 @@ struct ReaderRowBackground: ViewModifier {
   }
 }
 extension View {
-  func readerTheme() -> some View { modifier(ReaderTheme()) }
+  /// The reader and the sheets it presents: Light, Sepia, Dark or System as chosen.
+  func readerTheme() -> some View { modifier(ReaderTheme(followsReadingTheme: true)) }
+  /// Everything outside the reader: the system light/dark setting.
+  func appTheme() -> some View { modifier(ReaderTheme(followsReadingTheme: false)) }
   func readerFormBackground() -> some View { modifier(ReaderFormBackground()) }
   func readerRowBackground() -> some View { modifier(ReaderRowBackground()) }
 }

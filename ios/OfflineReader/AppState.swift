@@ -9,6 +9,22 @@ import SwiftUI
   @Published var message: String?
   @Published var refreshing = false
   @Published var readingUndo: ReadingUndo?
+  /// The article open in the full-screen reader. Rows, deep links, Spotlight, the Home Screen quick
+  /// action and App Shortcuts all open articles by setting this.
+  @Published var readerRoute: ReaderRoute?
+  /// An article asked for before the library loaded (for example a cold-launch deep link).
+  private var pendingOpenID: String?
+  /// Opens an article in the reader, from a row, link, Spotlight, quick action or App Shortcut.
+  func open(_ id: String) {
+    pendingOpenID = id
+    openPendingItem()
+  }
+  private func openPendingItem() {
+    guard let id = pendingOpenID, items.contains(where: { $0.id == id && $0.hasPreparedContent })
+    else { return }
+    pendingOpenID = nil
+    if readerRoute?.id != id { readerRoute = ReaderRoute(id: id) }
+  }
   /// Word counts of downloaded articles, for reading-time estimates in the Library.
   @Published var wordCounts: [String: Int] = [:]
   @Published var sharedSaves: [SharedSave] = []
@@ -98,6 +114,10 @@ import SwiftUI
       items = try store?.items() ?? []
       readingUndo = try store?.readingUndo()
       wordCounts = try store?.wordCounts() ?? [:]
+      SystemIntegration.update(items: items) { item in
+        (try? self.store?.readingPosition(item.id)) ?? item.progress
+      }
+      openPendingItem()
       if let shareStore = self.shareStore, let credentials = ShareVault.load() {
         sharedSaves = try shareStore.records(credentials.account)
       }
@@ -323,6 +343,9 @@ import SwiftUI
     session = nil
     items = []
     readingUndo = nil
+    readerRoute = nil
+    pendingOpenID = nil
+    SystemIntegration.clear()
     lastSync = "Not yet synced"
     UserDefaults.standard.removeObject(forKey: "lastSync")
     UserDefaults.standard.removeObject(forKey: "downloadError")
@@ -445,6 +468,16 @@ import SwiftUI
 @MainActor final class AppDelegate: NSObject, UIApplicationDelegate {
   static let refreshID = "com.akhilvuputuri.offlinereader.refresh"
   func application(
+    _ application: UIApplication, configurationForConnecting session: UISceneSession,
+    options: UIScene.ConnectionOptions
+  ) -> UISceneConfiguration {
+    // A quick action that launched the app arrives here; one used while running reaches SceneDelegate.
+    if let shortcut = options.shortcutItem { SystemIntegration.handle(shortcut) }
+    let configuration = UISceneConfiguration(name: nil, sessionRole: session.role)
+    configuration.delegateClass = SceneDelegate.self
+    return configuration
+  }
+  func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
@@ -468,6 +501,9 @@ import SwiftUI
     _ = AppState.shared
     Downloads.shared.handleEvents(completion: completionHandler)
   }
+}
+struct ReaderRoute: Identifiable, Equatable {
+  let id: String
 }
 @main struct OfflineReaderApp: App {
   @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate

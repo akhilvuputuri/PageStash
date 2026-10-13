@@ -68,6 +68,8 @@ export interface Prepared {
   title: string;
   author?: string;
   siteName?: string;
+  /** BCP 47 language of the source page, so the reader can hyphenate correctly. */
+  lang?: string;
   missingImages: number;
   images: { id: string; bytes: Buffer }[];
 }
@@ -201,6 +203,7 @@ export async function extract(
     title: article.title || new URL(url).hostname,
     author: article.byline || undefined,
     siteName: article.siteName?.trim().slice(0, 120) || undefined,
+    lang: languageTag(article.lang || dom.window.document.documentElement.lang),
     images,
     missingImages,
   };
@@ -244,6 +247,13 @@ export function briefDocument(markdown: string): string {
   return html;
 }
 
-export function readerHTML(content: string, title: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${escapeHTML(title)}</title><style>:root{color-scheme:light dark}body{font:20px/1.65 Georgia,serif;padding:18px;max-width:720px;margin:auto;overflow-wrap:anywhere}img{max-width:100%;height:auto}pre{overflow:auto}a{color:#4685c5}h1,h2,h3{line-height:1.25}table{display:block;overflow:auto}blockquote{border-left:3px solid #888;padding-left:16px;margin-left:0}</style></head><body>${content}</body></html>`;
+/** A well-formed BCP 47 tag, or undefined; source pages sometimes carry junk in `lang`. */
+export function languageTag(value: string | null | undefined): string | undefined {
+  const tag = value?.trim();
+  return tag && /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/.test(tag) ? tag : undefined;
+}
+
+export function readerHTML(content: string, title: string, lang?: string): string {
+  const language = languageTag(lang);
+  return `<!doctype html><html${language ? ` lang="${language}"` : ""}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${escapeHTML(title)}</title><style>:root{color-scheme:light dark}body{font:20px/1.65 Georgia,serif;padding:18px;max-width:720px;margin:auto;overflow-wrap:anywhere}img{max-width:100%;height:auto}pre{overflow:auto}a{color:#4685c5}h1,h2,h3{line-height:1.25}table{display:block;overflow:auto}blockquote{border-left:3px solid #888;padding-left:16px;margin-left:0}</style></head><body>${content}</body></html>`;
 }

@@ -7,7 +7,7 @@ import { configuration } from "../src/config.js";
 import { Service, type Identity } from "../src/service.js";
 import { buildServer } from "../src/server.js";
 import { normalizedURL, publicAddress, safeFetch } from "../src/fetch.js";
-import { extract, sanitize, markdownDocument } from "../src/content.js";
+import { extract, sanitize, markdownDocument, readerHTML, languageTag } from "../src/content.js";
 let db: Database,
   service: Service,
   app: Awaited<ReturnType<typeof buildServer>>;
@@ -103,7 +103,7 @@ test("extraction captures images locally and flags unavailable ones", async () =
     .png()
     .toBuffer();
   const page =
-    "<html><head><title>Fixture article</title><meta property='og:site_name' content='Example Daily'></head><body><article><h1>A test article</h1><p>" +
+    "<html lang='en-GB'><head><title>Fixture article</title><meta property='og:site_name' content='Example Daily'></head><body><article><h1>A test article</h1><p>" +
     "Readable article content with meaningful sentences. ".repeat(20) +
     '</p><img src="/photo.png"><img src="/missing.png"></article></body></html>';
   const result = await extract("https://example.com/article", async (url) => {
@@ -115,6 +115,10 @@ test("extraction captures images locally and flags unavailable ones", async () =
   assert.equal(result.images.length, 1);
   assert.equal(result.missingImages, 1);
   assert.equal(result.siteName, "Example Daily");
+  assert.equal(result.lang, "en-GB");
+  assert.match(readerHTML(result.html, result.title, result.lang), /^<!doctype html><html lang="en-GB">/);
+  assert.equal(languageTag('en"><script>'), undefined, "untrusted lang values never reach the document");
+  assert.match(readerHTML("<p>x</p>", "T"), /^<!doctype html><html><head>/);
   assert.match(result.html, /\.webp/);
   assert.doesNotMatch(result.html, /src="https?:/);
 });
