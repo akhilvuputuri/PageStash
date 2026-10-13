@@ -53,7 +53,7 @@ extensionConfigs=[]
 for name in ['Debug','Release']:
     settings={'IPHONEOS_DEPLOYMENT_TARGET':'17.0','SDKROOT':'iphoneos','SWIFT_VERSION':'5.0','CLANG_ENABLE_MODULES':'YES',
       'PRODUCT_BUNDLE_IDENTIFIER':'$(READER_BUNDLE_IDENTIFIER).share','PRODUCT_NAME':'$(TARGET_NAME)',
-      'INFOPLIST_FILE':'ReaderShare/Info.plist','GENERATE_INFOPLIST_FILE':'NO','CURRENT_PROJECT_VERSION':'5','MARKETING_VERSION':'0.3.0',
+      'INFOPLIST_FILE':'ReaderShare/Info.plist','GENERATE_INFOPLIST_FILE':'NO','CURRENT_PROJECT_VERSION':'6','MARKETING_VERSION':'0.3.1',
       'TARGETED_DEVICE_FAMILY':'1','CODE_SIGN_STYLE':'Automatic','DEVELOPMENT_TEAM':'U44PG44XMJ','CODE_SIGN_ENTITLEMENTS':'ReaderShare/ReaderShare.entitlements',
       'APPLICATION_EXTENSION_API_ONLY':'YES','SKIP_INSTALL':'YES','SWIFT_ACTIVE_COMPILATION_CONDITIONS':'DEBUG' if name=='Debug' else '',
       'SWIFT_OPTIMIZATION_LEVEL':'-Onone' if name=='Debug' else '-O','LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks'}
@@ -73,7 +73,7 @@ def config(name, app):
     debug = name == 'Debug'
     settings = {'IPHONEOS_DEPLOYMENT_TARGET':'17.0','SDKROOT':'iphoneos','SWIFT_VERSION':'5.0','CLANG_ENABLE_MODULES':'YES', 'SWIFT_OPTIMIZATION_LEVEL':'-Onone' if debug else '-O', 'ONLY_ACTIVE_ARCH':'YES' if debug else 'NO','READER_BUNDLE_IDENTIFIER':'com.akhilvuputuri.offlinereader','READER_APP_GROUP':'group.$(READER_BUNDLE_IDENTIFIER)'}
     if app:
-        settings.update({'PRODUCT_BUNDLE_IDENTIFIER':'$(READER_BUNDLE_IDENTIFIER)','CODE_SIGN_ENTITLEMENTS':'OfflineReader/OfflineReader.entitlements','PRODUCT_NAME':'$(TARGET_NAME)','INFOPLIST_FILE':'OfflineReader/Info-Debug.plist' if debug else 'OfflineReader/Info.plist','GENERATE_INFOPLIST_FILE':'NO','CURRENT_PROJECT_VERSION':'5','MARKETING_VERSION':'0.3.0','TARGETED_DEVICE_FAMILY':'1','CODE_SIGN_STYLE':'Automatic','DEVELOPMENT_TEAM':'U44PG44XMJ','ASSETCATALOG_COMPILER_APPICON_NAME':'AppIcon','SWIFT_ACTIVE_COMPILATION_CONDITIONS':'DEBUG' if debug else '', 'ENABLE_USER_SCRIPT_SANDBOXING':'YES','ENABLE_TESTABILITY':'YES' if debug else 'NO'})
+        settings.update({'PRODUCT_BUNDLE_IDENTIFIER':'$(READER_BUNDLE_IDENTIFIER)','CODE_SIGN_ENTITLEMENTS':'OfflineReader/OfflineReader.entitlements','PRODUCT_NAME':'$(TARGET_NAME)','INFOPLIST_FILE':'OfflineReader/Info-Debug.plist' if debug else 'OfflineReader/Info.plist','GENERATE_INFOPLIST_FILE':'NO','CURRENT_PROJECT_VERSION':'6','MARKETING_VERSION':'0.3.1','TARGETED_DEVICE_FAMILY':'1','CODE_SIGN_STYLE':'Automatic','DEVELOPMENT_TEAM':'U44PG44XMJ','ASSETCATALOG_COMPILER_APPICON_NAME':'AppIcon','SWIFT_ACTIVE_COMPILATION_CONDITIONS':'DEBUG' if debug else '', 'ENABLE_USER_SCRIPT_SANDBOXING':'YES','ENABLE_TESTABILITY':'YES' if debug else 'NO'})
     return obj(('app' if app else 'project')+name, f'isa = XCBuildConfiguration; buildSettings = {{'+''.join(f'{key} = {q(value)};' for key,value in settings.items())+f'}}; name = {name};')
 appConfigs = [config(name,True) for name in ['Debug','Release']]
 projConfigs = [config(name,False) for name in ['Debug','Release']]
