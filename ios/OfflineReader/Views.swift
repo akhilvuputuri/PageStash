@@ -129,6 +129,8 @@ struct LibraryList: View {
   @State private var collectionTarget: ReadingItem?
   @State private var collectionName = ""
   @State private var archiveCommits = 0
+  @State private var retrying = false
+  @Environment(\.undoManager) private var undoManager
   @Namespace private var transition
   private var imports: [ReadingItem] { state.items.filter(\.needsImportReview) }
   private var importSummary: String {
@@ -156,8 +158,16 @@ struct LibraryList: View {
     }
   }
   private func toggleArchive(_ item: ReadingItem) {
-    state.edit(item, ItemPatch(archived: !item.archived))
+    let archived = !item.archived
+    state.edit(item, ItemPatch(archived: archived))
     archiveCommits += 1
+    // Shake to undo, named after the action.
+    undoManager?.registerUndo(withTarget: state) { state in
+      if let current = state.items.first(where: { $0.id == item.id }) {
+        state.edit(current, ItemPatch(archived: !archived))
+      }
+    }
+    undoManager?.setActionName(archived ? "Archive" : "Move to Library")
   }
   @ViewBuilder private func archiveButton(_ item: ReadingItem) -> some View {
     Button {
@@ -290,8 +300,18 @@ struct LibraryList: View {
               Text(message).font(.footnote).foregroundStyle(tokens.secondaryInk.color)
                 .lineLimit(2)
               Spacer()
-              Button("Retry") { Task { try? await state.sync(forceManifest: true) } }
+              if retrying {
+                ProgressView().accessibilityLabel("Syncing")
+              } else {
+                Button("Retry") {
+                  retrying = true
+                  Task {
+                    try? await state.sync(forceManifest: true)
+                    retrying = false
+                  }
+                }
                 .font(.footnote.weight(.semibold))
+              }
             }
           }
         }
@@ -330,14 +350,29 @@ struct ArticleRow: View {
   @Environment(\.dynamicTypeSize) private var typeSize
   @ScaledMetric(relativeTo: .title2) private var titleSize = 23
   let item: ReadingItem
-  /// A readable source: "Agent brief", or the host in lower case without `www.`.
+  /// A readable source: "Agent brief", the publisher's name, or the host in lower case without `www.`.
   static func source(_ item: ReadingItem) -> String? {
     if item.kind == "brief" { return "Agent brief" }
+    if let name = item.siteName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+      return name
+    }
     guard let host = URL(string: item.sourceUrl ?? "")?.host?.lowercased() else { return nil }
     return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
   }
+  /// About 230 words a minute; partly read articles show the time left.
+  static func readingTime(words: Int?, position: Double) -> String? {
+    guard let words, words > 0 else { return nil }
+    let minutes = max(1, Int((Double(words) / 230).rounded()))
+    guard position > 0 && position < 1 else { return "\(minutes) min" }
+    return "\(max(1, Int((Double(minutes) * (1 - position)).rounded(.up)))) min left"
+  }
+  private var position: Double { (try? state.store?.readingPosition(item.id)) ?? item.progress }
   private var metadata: String {
-    [Self.source(item), item.author].compactMap { $0 }.joined(separator: " · ")
+    [
+      Self.source(item), item.author,
+      Self.readingTime(words: state.wordCounts[item.id], position: item.progress > 0 ? position : 0),
+    ]
+    .compactMap { $0 }.joined(separator: " · ")
   }
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -348,7 +383,7 @@ struct ArticleRow: View {
       }
       DownloadIndicator(item: item)
       if item.progress > 0 && item.progress < 1 {
-        let position = (try? state.store?.readingPosition(item.id)) ?? item.progress
+        let position = position
         ProgressView(value: position).tint(tokens.secondaryInk.color)
           .accessibilityLabel("\(Int((position * 100).rounded())) percent read")
       }
@@ -492,15 +527,25 @@ struct SaveView: View {
 struct ReaderScreen: View {
   @EnvironmentObject var state: AppState
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.undoManager) private var undoManager
   @Environment(\.themeTokens) private var tokens
   @State private var showDisplay = false
   @State private var finished = false
   @StateObject private var scrollState = ArticleScrollState()
   let itemID: String
   @AppStorage("readerFontSize") private var fontSize = 20.0
+  @AppStorage("readerPaging") private var paging = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var chromeInsets = EdgeInsets()
   @State private var collection = ""
   @State private var showCollection = false
   private var item: ReadingItem? { state.items.first { $0.id == itemID } }
+  /// Measure the bars only while they show; hiding them must not re-pad the article.
+  @State private var currentTopInset = 0.0
+  private func measureChrome(_ insets: EdgeInsets) {
+    currentTopInset = insets.top
+    if !scrollState.barsHidden && insets != chromeInsets { chromeInsets = insets }
+  }
   private func isReadable(_ item: ReadingItem) -> Bool {
     (try? state.store?.readerURL(item.id)) != nil
   }
@@ -508,6 +553,8 @@ struct ReaderScreen: View {
   private func finish(_ item: ReadingItem) {
     scrollState.flush?()
     if state.finishReading(item.id) {
+      undoManager?.registerUndo(withTarget: state) { $0.undoFinishedReading() }
+      undoManager?.setActionName("Done Reading")
       UINotificationFeedbackGenerator().notificationOccurred(.success)
       finished = true
       dismiss()
@@ -529,10 +576,31 @@ struct ReaderScreen: View {
               scrollState: scrollState,
               progress: (try? state.store?.readingPosition(item.id)) ?? item.progress,
               fontSize: fontSize,
+              chromeInsets: chromeInsets,
+              paging: paging,
               onFinish: { finish(item) }
             ) { progress in
               if !finished { try? state.store?.recordReadingPosition(item.id, progress) }
             }
+            .ignoresSafeArea(edges: .vertical)
+            .background {
+              GeometryReader { proxy in
+                Color.clear
+                  .onAppear { measureChrome(proxy.safeAreaInsets) }
+                  .onChange(of: proxy.safeAreaInsets) { _, insets in measureChrome(insets) }
+              }
+            }
+            // With the bars hidden, the page colour keeps text from showing under the status bar.
+            .overlay {
+              if scrollState.barsHidden {
+                VStack(spacing: 0) {
+                  Color(hex: tokens.page).frame(height: currentTopInset)
+                  Spacer(minLength: 0)
+                }
+                .ignoresSafeArea().allowsHitTesting(false)
+              }
+            }
+
           } else {
             ScrollView {
               VStack(alignment: .leading, spacing: 16) {
@@ -622,7 +690,10 @@ struct ReaderScreen: View {
       } else {
         ContentUnavailableView("Item removed", systemImage: "book")
       }
-    }.background(Color(hex: tokens.page).ignoresSafeArea())
+    }
+    .background(Color(hex: tokens.page).ignoresSafeArea())
+      .toolbar(scrollState.barsHidden ? .hidden : .visible, for: .navigationBar, .bottomBar)
+      .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: scrollState.barsHidden)
       .navigationBarTitleDisplayMode(.inline).onAppear { finished = false }.onDisappear {
         if !finished { scrollState.flush?() }
         finished = true
@@ -634,7 +705,8 @@ struct ReaderScreen: View {
 /// Text size and theme for reading, kept on the reading screen. Changes apply live.
 struct ReaderDisplaySheet: View {
   @Binding var fontSize: Double
-  @AppStorage("appearance") private var appearance = "light"
+  @AppStorage("readerPaging") private var paging = false
+  @AppStorage("appearance") private var appearance = ThemeTokens.defaultAppearance
   @Environment(\.dismiss) private var dismiss
   @Environment(\.themeTokens) private var tokens
   private var percent: Int { Int((fontSize / 20 * 100).rounded()) }
@@ -671,6 +743,12 @@ struct ReaderDisplaySheet: View {
             Text("Dark").tag("dark")
             Text("System").tag("system")
           }.pickerStyle(.segmented)
+        }.readerRowBackground()
+        Section {
+          Toggle("Page by Page", isOn: $paging)
+        } footer: {
+          Text("Each swipe moves one screen, keeping the last line in view.")
+            .foregroundStyle(tokens.secondaryInk.color)
         }.readerRowBackground()
       }.readerFormBackground().navigationTitle("Text and Theme")
         .navigationBarTitleDisplayMode(.inline)
@@ -713,8 +791,9 @@ struct SettingsView: View {
   @Environment(\.dismiss) var dismiss
   @AppStorage("cellular") private var cellular = false
   @AppStorage("storageLimit") private var storageLimit = 512_000_000
-  @AppStorage("appearance") private var appearance = "light"
+  @AppStorage("appearance") private var appearance = ThemeTokens.defaultAppearance
   @Environment(\.themeTokens) private var tokens
+  @State private var syncing = false
   var body: some View {
     NavigationStack {
       Form {
@@ -757,7 +836,21 @@ struct SettingsView: View {
             "iOS chooses when to refresh. Keep Background App Refresh enabled. Opening the app also checks for new items."
           ).font(.footnote).foregroundStyle(tokens.secondaryInk.color)
           Text("Last sync: \(state.lastSync)")
-          Button("Sync now") { Task { try? await state.sync(forceManifest: true) } }
+          Button {
+            syncing = true
+            Task {
+              try? await state.sync(forceManifest: true)
+              syncing = false
+            }
+          } label: {
+            HStack {
+              Text(syncing ? "Syncing…" : "Sync now")
+              if syncing {
+                Spacer()
+                ProgressView()
+              }
+            }
+          }.disabled(syncing)
         }.readerRowBackground()
         Section {
           NavigationLink("Assistant connections") { ConnectionsView() }

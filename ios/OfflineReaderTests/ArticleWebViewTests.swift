@@ -9,6 +9,7 @@ import XCTest
   final class Controls: ObservableObject {
     @Published var font = 20.0
     @Published var dark = false
+    @Published var typeSize = DynamicTypeSize.large
   }
   struct Harness: View {
     @ObservedObject var controls: Controls
@@ -21,6 +22,7 @@ import XCTest
         onProgress: { _ in }
       )
       .environment(\.colorScheme, controls.dark ? .dark : .light)
+      .environment(\.dynamicTypeSize, controls.typeSize)
     }
   }
   func evaluate(_ web: WKWebView, _ script: String) async throws -> Any? {
@@ -118,6 +120,19 @@ import XCTest
         coordinator.currentProgress(web.scrollView), desired, accuracy: 0.02,
         "Text resizing must retain the relative body position at \(size) points")
     }
+    // The system text size scales the reader setting and must keep the same reading position.
+    controls.typeSize = .accessibility3
+    try await waitFor { coordinator.fontSize > 40 && !coordinator.restoring }
+    let compactHeading =
+      try await evaluate(
+        web, "getComputedStyle(document.querySelector('#reader-header h1')).fontSize") as? String
+    XCTAssertNotNil(compactHeading)
+    XCTAssertEqual(
+      coordinator.currentProgress(web.scrollView), desired, accuracy: 0.02,
+      "An accessibility text size must retain the relative body position")
+    controls.typeSize = .large
+    try await waitFor { coordinator.fontSize == 30 && !coordinator.restoring }
+    XCTAssertEqual(coordinator.currentProgress(web.scrollView), desired, accuracy: 0.02)
     controls.dark = true
     try await waitFor { coordinator.appearance == "dark" && !coordinator.restoring }
     let scheme = try await evaluate(web, "document.documentElement.style.colorScheme") as? String

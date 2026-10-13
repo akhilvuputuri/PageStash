@@ -35,6 +35,8 @@ public struct ReadingItem: Codable, Identifiable, Sendable {
   public var error: String?
   public let sourceUrl: String?
   public let author: String?
+  /// The publisher's name when the server captured one (`og:site_name`); older servers omit it.
+  public let siteName: String?
   public let sources: [String]
   public let capturedAt: String
   public let contentVersion: Int
@@ -51,7 +53,8 @@ public struct ReadingItem: Codable, Identifiable, Sendable {
   public var needsImportReview: Bool { status != "ready" }
   public init(
     id: String, title: String, kind: String = "article", status: String = "ready",
-    error: String? = nil, sourceUrl: String? = nil, author: String? = nil, sources: [String] = [],
+    error: String? = nil, sourceUrl: String? = nil, author: String? = nil,
+    siteName: String? = nil, sources: [String] = [],
     capturedAt: String = "", contentVersion: Int = 1, progress: Double = 0,
     collections: [String] = [], archived: Bool = false, deleted: Bool = false, revision: Int64 = 1,
     assets: [Asset]
@@ -63,6 +66,7 @@ public struct ReadingItem: Codable, Identifiable, Sendable {
     self.error = error
     self.sourceUrl = sourceUrl
     self.author = author
+    self.siteName = siteName
     self.sources = sources
     self.capturedAt = capturedAt
     self.contentVersion = contentVersion

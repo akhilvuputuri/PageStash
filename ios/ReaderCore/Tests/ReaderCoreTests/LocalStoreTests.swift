@@ -39,6 +39,32 @@ final class LocalStoreTests: XCTestCase {
     XCTAssertNotNil(try reopened.readerURL(item.id))
     XCTAssertTrue(try reopened.search("article").contains(item.id))
   }
+  func testWordCountsAreCapturedOnInstallAndClearedOnDelete() throws {
+    let html = Data("<h1>Title</h1><p>One two three four five.</p><p>Six seven</p>".utf8)
+    let content = asset(html)
+    let item = ReadingItem(id: UUID().uuidString, title: "Counted", assets: [content])
+    let waiting = ReadingItem(id: UUID().uuidString, title: "Not downloaded", assets: [])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [item, waiting], cursor: 1))
+    XCTAssertTrue(try store.wordCounts().isEmpty, "Undownloaded articles have no length yet")
+    try install(html, asset: content, item: item, store: store)
+    let counts = try store.wordCounts()
+    XCTAssertGreaterThanOrEqual(counts[item.id] ?? 0, 7)
+    XCTAssertNil(counts[waiting.id])
+    try store.edit(item.id, ItemPatch(deleted: true))
+    XCTAssertNil(try store.wordCounts()[item.id])
+  }
+  func testSiteNameIsOptionalOnTheWire() throws {
+    let json = Data(
+      #"{"id":"a","title":"T","kind":"article","status":"ready","sources":[],"captured_at":"","content_version":1,"progress":0,"collections":[],"archived":false,"deleted":false,"revision":1,"assets":[]}"#
+        .utf8)
+    XCTAssertNil(try Wire.decoder().decode(ReadingItem.self, from: json).siteName)
+    let named = Data(
+      String(decoding: json, as: UTF8.self).replacingOccurrences(
+        of: #""kind""#, with: #""site_name":"Example Daily","kind""#
+      ).utf8)
+    XCTAssertEqual(try Wire.decoder().decode(ReadingItem.self, from: named).siteName, "Example Daily")
+  }
   func testCorruptionAndNewVersionNeverReplaceExistingReadableCopy() throws {
     let old = Data("<p>Original</p>".utf8)
     let new = Data("<p>New version</p>".utf8)
