@@ -194,6 +194,30 @@ The owner reported that a browser submission remained unavailable offline after 
 - The private simulation hook and foreground-polling override were removed from the normal source/build. Signed Reader **0.2.0 build 4** was installed in place and launched with normal behavior plus bounded local diagnostics. Sign-in/cache were retained. Post-restoration diagnostics showed probe inactive, successful sync, no download error and another accepted/pending refresh request. No backend deployment, interval setting or push feature changed.
 - Three isolated native tests passed for bounded history, code-only errors, logout/relaunch fencing and expiry/completion races. Signed generic device builds and strict Swift formatting checks passed. The development probe, provisioning profiles, device identifiers, credentials and private library data are excluded from this repository and CI artifacts.
 
+### Issues 30–33: design pass with Apple's HIG, 14 October 2026
+
+Applied the `ios-design` skill's audit to the Library, reader, theme and sign-in. Visual checks used the debug-only `--preview-library` synthetic store under the separate preview bundle identifier on the iPhone 17 Pro / iOS 26.3 simulator; no real library, account or network was used.
+
+- **Library (#30).** Archive is the leading full swipe with a success haptic. Delete is trailing, cannot be a full swipe, and asks for confirmation, because a delete tombstone cannot be undone locally. Each row has a context menu with Archive, Add to Collection, Remove Download and Delete. Rows show the title, one quiet `source · author` line (lower case, without `www.`), and only an exceptional status. The read checkmark and green offline symbol are gone; the disclosure chevron stays. The item count and sync spinner were removed. Imports moved to a row at the end of the list (identifier `Review imports` kept) and to the ⋯ menu with a count. Archive is now a pushed screen with the standard Back button. Observed: a full trailing swipe only reveals Delete; a full leading swipe in Archive moved the item to Library.
+- **Dynamic Type (#31).** Row and reader titles scale (`@ScaledMetric`, same default sizes). The article body is the reader's size setting scaled by `UIFontMetrics(.body)`, so the default is unchanged (20 px) and AX5 reaches about 62 px. At accessibility sizes, headings converge toward the body and status text is not truncated. Observed at default and AX5 in Light and Sepia.
+- **Contrast (#31).** Theme colours live in one `ThemeTokens` type with Increase Contrast variants; native views and the HTML read the same values (CSS custom properties). A unit test enforces at least 4.5:1 for every ink on its page and surface. Ratios (normal / Increase Contrast):
+  - Light on `#ffffff`: secondary 5.23 / 9.12, link 6.15 / 9.02 (was 3.87), accent 4.65 / 6.92, warning 5.35 / 7.80, ink 17.01 / 21.00.
+  - Sepia on `#f6f0e4` (row surface `#fffaf0`): secondary 5.55 / 8.36 (6.05 on rows; was about 2.5), link and accent 5.73 / 8.05, warning 4.71 / 6.87, ink 10.62 / 14.40.
+  - Dark on `#111111`: secondary 6.74 / 11.21, link 8.96 / 11.80, accent 6.14 / 8.58 (the old rust accent was 4.06), warning 10.59 / 12.77, ink 16.28 / 18.88.
+  Light secondary text previously used the system secondary label (about 3.4:1 on white).
+- **Reader (#32).** A bottom bar holds `Aa` and Done Reading (Move to Library or Archive when finishing does not apply). Done Reading also appears at the end of the article; it uses the same flush, Undo and dismissal. `Aa` opens a sheet with a grabber, medium/large detents and the standard Close button, holding relative text size and the theme; changes apply live and kept the reading position. The ⋯ menu keeps the less frequent actions. Body text uses New York (`ui-serif`, Georgia fallback), line-height 1.6, a 36em measure, hyphenation, `text-wrap: pretty` and `dir="auto"`. The header drops "SAVED ARTICLE" and the normal "Available offline" line; agent briefs keep their label and add a short "may contain errors" note. Opening an article uses the iOS 18+ zoom transition.
+- **iOS 26 conventions (#33).** Custom navigation-bar backgrounds were removed so Liquid Glass and the scroll edge effect apply. The Undo/status bar uses `safeAreaBar` on iOS 26 and sits above the bottom search field. Toolbar symbols are borderless (`ellipsis`). Settings, Imports and `Aa` use the standard Close button on iOS 26. Sign-in leads with email and password; the backend URL is under Advanced and opens automatically when none is stored.
+- 13 native tests (10 existing plus 3 token/source tests), 35 Core tests and the unsigned device build pass locally.
+- Synthetic screenshots from the preview build:
+
+![Synthetic Library in Light with one exceptional status and imports at the end](images/hig-library-light.png)
+![Synthetic Library in Dark](images/hig-library-dark.png)
+![Synthetic Library in Sepia at the largest accessibility size](images/hig-library-ax5-sepia.png)
+![Synthetic article end with Done Reading and the bottom bar](images/hig-reader-done.png)
+![Synthetic Aa sheet switching the open article to Sepia](images/hig-reader-aa-sepia.png)
+
+- Not changed, for the owner to decide: the theme still applies to the whole app and defaults to Light (#33 proposes following the system outside the reader). Not done: reading time and site names (need a backend word count and `og:site_name`), receding bars while reading, optional paging, and shake-to-undo. Not checked: VoiceOver with the screen reader running, Reduce Transparency, the smallest iPhone, and the signed-out sign-in screen.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
