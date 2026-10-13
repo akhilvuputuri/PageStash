@@ -417,26 +417,37 @@ extension View {
   @ViewBuilder func libraryStatusBar<Content: View>(@ViewBuilder _ content: () -> Content)
     -> some View
   {
-    if #available(iOS 26.0, *) {
-      safeAreaBar(edge: .bottom) {
-        content().padding(.horizontal, 20).padding(.vertical, 4)
+    // The iOS 26 API needs the iOS 26 SDK (Swift 6.2); older toolchains such as CI's use the fallback.
+    #if compiler(>=6.2)
+      if #available(iOS 26.0, *) {
+        safeAreaBar(edge: .bottom) {
+          content().padding(.horizontal, 20).padding(.vertical, 4)
+        }
+      } else {
+        safeAreaInset(edge: .bottom) {
+          content().padding(.horizontal).padding(.vertical, 8).background(.regularMaterial)
+        }
       }
-    } else {
+    #else
       safeAreaInset(edge: .bottom) {
         content().padding(.horizontal).padding(.vertical, 8).background(.regularMaterial)
       }
-    }
+    #endif
   }
 }
 /// The standard Close button on iOS 26; Done before it.
 struct CloseButton: View {
   let action: () -> Void
   var body: some View {
-    if #available(iOS 26.0, *) {
-      Button(role: .close, action: action)
-    } else {
+    #if compiler(>=6.2)
+      if #available(iOS 26.0, *) {
+        Button(role: .close, action: action)
+      } else {
+        Button("Done", action: action)
+      }
+    #else
       Button("Done", action: action)
-    }
+    #endif
   }
 }
 struct SaveView: View {
