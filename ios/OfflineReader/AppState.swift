@@ -211,6 +211,13 @@ import SwiftUI
       Task { try? await sync() }
     } catch { message = error.localizedDescription }
   }
+  func addToCollection(_ item: ReadingItem, name: String) {
+    let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty else { return }
+    edit(
+      item,
+      ItemPatch(collections: Array(Set(item.collections + [String(name.prefix(60))])).sorted()))
+  }
   func download(_ item: ReadingItem) async {
     do {
       try store?.resumeDownload(item.id)
