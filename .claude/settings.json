@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "a-stack": {
+      "source": {
+        "source": "github",
+        "repo": "akhilvuputuri/a-stack",
+        "ref": "ios-design--v0.1.0"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "ios-design@a-stack": true
+  }
+}
