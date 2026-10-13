@@ -10,25 +10,35 @@ struct RootView: View {
 }
 struct LoginView: View {
   @EnvironmentObject var state: AppState
+  @Environment(\.themeTokens) private var tokens
   @State private var base = ""
   @State private var email = ""
   @State private var password = ""
   @State private var busy = false
+  @State private var showAdvanced = false
+  @ScaledMetric(relativeTo: .largeTitle) private var headlineSize = 38
+  @ScaledMetric(relativeTo: .largeTitle) private var iconSize = 44
   var body: some View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 24) {
-          Image(systemName: "book.closed.fill").font(.system(size: 44)).foregroundStyle(.tint)
-            .padding(.top, 50)
-          Text("A quieter place\nto read.").font(.system(size: 38, weight: .medium, design: .serif))
-          Text("Save articles and reading briefs. Take them offline.").foregroundStyle(.secondary)
+          Image(systemName: "book.closed.fill").font(.system(size: iconSize)).foregroundStyle(.tint)
+            .padding(.top, 50).accessibilityHidden(true)
+          Text("A quieter place\nto read.").font(
+            .system(size: headlineSize, weight: .medium, design: .serif))
+          Text("Save articles and reading briefs. Take them offline.")
+            .foregroundStyle(tokens.secondaryInk.color)
           VStack(spacing: 12) {
-            TextField("Backend URL", text: $base).textContentType(.URL).keyboardType(.URL)
-              .textInputAutocapitalization(.never).autocorrectionDisabled()
             TextField("Email", text: $email).textContentType(.username).keyboardType(.emailAddress)
               .textInputAutocapitalization(.never).autocorrectionDisabled()
             SecureField("Password", text: $password).textContentType(.password)
           }.textFieldStyle(.roundedBorder)
+          // The server address is a setup detail; it opens automatically when none is stored.
+          DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+            TextField("Backend URL", text: $base).textContentType(.URL).keyboardType(.URL)
+              .textInputAutocapitalization(.never).autocorrectionDisabled()
+              .textFieldStyle(.roundedBorder).padding(.top, 8)
+          }
           Button {
             busy = true
             Task {
@@ -45,20 +55,81 @@ struct LoginView: View {
             busy || base.isEmpty || email.isEmpty || password.isEmpty)
           if let message = state.message { Text(message).font(.callout).foregroundStyle(.red) }
           Text("Personal beta · Your library stays private").font(.footnote).foregroundStyle(
-            .secondary)
+            tokens.secondaryInk.color)
         }.padding(28)
-      }.onAppear { base = state.backendURL }
+      }.onAppear {
+        base = state.backendURL
+        showAdvanced = base.isEmpty
+      }
     }
   }
 }
 struct LibraryView: View {
   @EnvironmentObject var state: AppState
-  @State private var query = ""
-  @State private var archived = false
-  @State private var collection = "All"
   @State private var showSave = false
   @State private var showSettings = false
   @State private var showImports = false
+  @State private var showArchive = false
+  private var pendingImports: Int {
+    state.items.filter(\.needsImportReview).count + state.sharedSaves.count
+  }
+  var body: some View {
+    NavigationStack {
+      LibraryList(archived: false, showImports: $showImports)
+        .toolbar {
+          ToolbarItem(placement: .topBarTrailing) {
+            Button {
+              showSave = true
+            } label: {
+              Image(systemName: "plus")
+            }.accessibilityLabel("Save article")
+          }
+          ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+              if pendingImports > 0 {
+                Button {
+                  showImports = true
+                } label: {
+                  Label("Imports (\(pendingImports))", systemImage: "tray")
+                }
+              }
+              Button {
+                showArchive = true
+              } label: {
+                Label("Archive", systemImage: "archivebox")
+              }
+              Button {
+                showSettings = true
+              } label: {
+                Label("Settings", systemImage: "gearshape")
+              }
+            } label: {
+              Image(systemName: "ellipsis")
+            }.accessibilityLabel("Library options")
+          }
+        }
+        // A pushed Archive gets the standard Back button.
+        .navigationDestination(isPresented: $showArchive) {
+          LibraryList(archived: true, showImports: $showImports)
+        }
+        .sheet(isPresented: $showSave) { SaveView() }
+        .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showImports) { ImportsView() }
+    }
+  }
+}
+struct LibraryList: View {
+  @EnvironmentObject var state: AppState
+  @Environment(\.themeTokens) private var tokens
+  let archived: Bool
+  @Binding var showImports: Bool
+  @State private var query = ""
+  @State private var collection = "All"
+  @State private var pendingDelete: ReadingItem?
+  @State private var collectionTarget: ReadingItem?
+  @State private var collectionName = ""
+  @State private var archiveCommits = 0
+  @Namespace private var transition
   private var imports: [ReadingItem] { state.items.filter(\.needsImportReview) }
   private var importSummary: String {
     let failed = imports.filter { $0.status == "bookmark" }.count
@@ -69,9 +140,12 @@ struct LibraryView: View {
     ]
     .compactMap { $0 }.joined(separator: " · ")
   }
-  @AppStorage("appearance") private var appearance = "light"
   private var collections: [String] {
-    Array(Set(state.items.filter(\.hasPreparedContent).flatMap(\.collections))).sorted()
+    Array(
+      Set(
+        state.items.filter { $0.hasPreparedContent && $0.archived == archived }.flatMap(
+          \.collections))
+    ).sorted()
   }
   private var filtered: [ReadingItem] {
     let matches = query.isEmpty ? nil : (try? state.store?.search(query))
@@ -81,219 +155,304 @@ struct LibraryView: View {
         && (query.isEmpty || matches?.contains($0.id) == true)
     }
   }
+  private func toggleArchive(_ item: ReadingItem) {
+    state.edit(item, ItemPatch(archived: !item.archived))
+    archiveCommits += 1
+  }
+  @ViewBuilder private func archiveButton(_ item: ReadingItem) -> some View {
+    Button {
+      toggleArchive(item)
+    } label: {
+      Label(
+        item.archived ? "Move to Library" : "Archive",
+        systemImage: item.archived ? "tray.and.arrow.up" : "archivebox")
+    }
+  }
   var body: some View {
-    NavigationStack {
-      VStack(spacing: 0) {
-        if !imports.isEmpty || !state.sharedSaves.isEmpty {
+    List {
+      if filtered.isEmpty {
+        ContentUnavailableView(
+          query.isEmpty
+            ? (archived ? "No archived reads" : "Your next good read") : "No matches",
+          systemImage: archived ? "archivebox" : "book",
+          description: Text(
+            query.isEmpty
+              ? (archived
+                ? "Finished articles remain available here."
+                : "Save a link here or send one through your assistant.")
+              : "Try a title or words from a downloaded article.")
+        ).listRowSeparator(.hidden).listRowBackground(tokens.nativePage)
+      }
+      ForEach(filtered) { item in
+        NavigationLink {
+          ReaderScreen(itemID: item.id).readerZoomTransition(id: item.id, in: transition)
+        } label: {
+          ArticleRow(item: item)
+        }
+        .readerZoomSource(id: item.id, in: transition)
+        .listRowBackground(tokens.nativePage)
+        .listRowSeparator(.hidden).listRowInsets(
+          EdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20)
+        )
+        // Archive is safe and reversible, so it takes the full swipe. Delete never does.
+        .swipeActions(edge: .leading) { archiveButton(item).tint(.gray) }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+          // Not `.destructive`: that role removes the row before the confirmation can be cancelled.
           Button {
-            showImports = true
+            pendingDelete = item
           } label: {
-            HStack {
-              Text(importSummary)
-              Spacer()
-              Image(systemName: "chevron.right")
-            }.font(.caption).padding(.horizontal).padding(.vertical, 8)
-          }.accessibilityIdentifier("Review imports")
+            Label("Delete", systemImage: "trash")
+          }.tint(.red)
         }
-        HStack {
-          Text(filtered.count == 1 ? "1 item" : "\(filtered.count) items")
-          Spacer()
-          if state.refreshing { ProgressView().accessibilityLabel("Syncing library") }
-          if !collections.isEmpty {
-            Menu {
-              Button("All collections") { collection = "All" }
-              ForEach(collections, id: \.self) { name in Button(name) { collection = name } }
-            } label: {
-              Label(collection, systemImage: "folder")
-            }
+        .contextMenu {
+          archiveButton(item)
+          Button {
+            collectionName = ""
+            collectionTarget = item
+          } label: {
+            Label("Add to Collection", systemImage: "folder.badge.plus")
           }
-        }.font(.caption).foregroundStyle(.secondary).padding(.horizontal).padding(.vertical, 8)
-        List {
-          if filtered.isEmpty {
-            ContentUnavailableView(
-              query.isEmpty
-                ? (archived ? "No archived reads" : "Your next good read") : "No matches",
-              systemImage: archived ? "archivebox" : "book",
-              description: Text(
-                query.isEmpty
-                  ? (archived
-                    ? "Finished articles remain available here."
-                    : "Save a link here or send one through your assistant.")
-                  : "Try a title or words from a downloaded article.")
-            ).listRowSeparator(.hidden)
-          }
-          ForEach(filtered) { item in
-            NavigationLink {
-              ReaderScreen(itemID: item.id)
-            } label: {
-              ArticleRow(item: item)
-            }
-            .readerRowBackground()
-            .listRowSeparator(.hidden).listRowInsets(
-              EdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20)
-            )
-            .swipeActions {
-              Button(role: .destructive) {
-                state.edit(item, ItemPatch(deleted: true))
-              } label: {
-                Label("Delete", systemImage: "trash")
-              }
-              Button {
-                state.edit(item, ItemPatch(archived: !item.archived))
-              } label: {
-                Label(item.archived ? "Move to Library" : "Archive", systemImage: "archivebox")
-              }.tint(.gray)
-            }
-          }
-        }.listStyle(.plain)
-          .scrollContentBackground(appearance == "sepia" ? .hidden : .visible)
-          .background(appearance == "sepia" ? ReaderTheme.sepiaPage : Color(.systemBackground))
-          .refreshable { try? await state.sync(forceManifest: true) }
-      }.background(appearance == "sepia" ? ReaderTheme.sepiaPage : Color(.systemBackground))
-        .navigationTitle(archived ? "Archive" : "Library")
-        .searchable(text: $query, prompt: "Search \(archived ? "archive" : "library")")
-        .toolbar {
-          if archived {
-            ToolbarItem(placement: .topBarLeading) {
-              Button {
-                archived = false
-                collection = "All"
-                query = ""
-              } label: {
-                Label("Library", systemImage: "chevron.left")
-              }
-            }
-          }
-          ToolbarItem(placement: .topBarTrailing) {
+          if (try? state.store?.readerURL(item.id)) != nil {
             Button {
-              showSave = true
+              state.removeDownload(item)
             } label: {
-              Image(systemName: "plus")
-            }.accessibilityLabel("Save article")
+              Label("Remove Download", systemImage: "arrow.down.circle.dotted")
+            }
           }
-          ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-              if !imports.isEmpty || !state.sharedSaves.isEmpty {
-                Button("Imports") { showImports = true }
-              }
-              if !archived {
-                Button {
-                  archived = true
-                  collection = "All"
-                  query = ""
-                } label: {
-                  Label("Archive", systemImage: "archivebox")
-                }
-              }
-              Button {
-                showSettings = true
-              } label: {
-                Label("Settings", systemImage: "gearshape")
-              }
-            } label: {
-              Image(systemName: "ellipsis.circle")
-            }.accessibilityLabel("Library options")
+          Divider()
+          Button(role: .destructive) {
+            pendingDelete = item
+          } label: {
+            Label("Delete", systemImage: "trash")
           }
-        }.safeAreaInset(edge: .bottom) {
-          if state.readingUndo != nil || state.message != nil {
-            VStack(spacing: 8) {
-              if state.readingUndo != nil {
-                HStack {
-                  Text("Moved to Archive").font(.callout)
-                  Spacer()
-                  Button("Undo") { state.undoFinishedReading() }.font(.callout.weight(.semibold))
-                  Button {
-                    state.dismissReadingUndo()
-                  } label: {
-                    Image(systemName: "xmark")
-                  }
-                  .accessibilityLabel("Dismiss undo")
-                }
-              }
-              if let message = state.message {
-                HStack {
-                  Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                  Spacer()
-                  Button("Retry") { Task { try? await state.sync(forceManifest: true) } }.font(
-                    .caption)
-                }
-              }
-            }.padding().background(.regularMaterial)
-          }
-        }.sheet(isPresented: $showSave) { SaveView() }
-        .sheet(isPresented: $showSettings) { SettingsView() }
-        .sheet(isPresented: $showImports) { ImportsView() }
-        .onChange(of: collections) { _, names in
-          if collection != "All" && !names.contains(collection) { collection = "All" }
         }
+      }
+      if !archived && (!imports.isEmpty || !state.sharedSaves.isEmpty) {
+        // Pending and failed imports stay one tap away without sitting above the reading list.
+        Button {
+          showImports = true
+        } label: {
+          HStack(spacing: 8) {
+            Image(systemName: "tray")
+            Text(importSummary)
+            Spacer()
+            Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
+          }.font(.footnote).foregroundStyle(tokens.secondaryInk.color)
+        }
+        .accessibilityIdentifier("Review imports")
+        .listRowBackground(tokens.nativePage).listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20))
+      }
+    }
+    .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .background(tokens.nativePage)
+    .refreshable { try? await state.sync(forceManifest: true) }
+    .navigationTitle(archived ? "Archive" : "Library")
+    .searchable(text: $query, prompt: "Search \(archived ? "archive" : "library")")
+    .toolbar {
+      if !collections.isEmpty {
+        ToolbarItem(placement: .topBarTrailing) {
+          Menu {
+            Picker("Collection", selection: $collection) {
+              Text("All Collections").tag("All")
+              ForEach(collections, id: \.self) { Text($0).tag($0) }
+            }
+          } label: {
+            Image(
+              systemName: collection == "All"
+                ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
+          }
+          .accessibilityLabel("Filter by collection")
+          .accessibilityValue(collection == "All" ? "All collections" : collection)
+        }
+      }
+    }
+    .libraryStatusBar {
+      if state.readingUndo != nil || state.message != nil {
+        VStack(spacing: 8) {
+          if state.readingUndo != nil {
+            HStack {
+              Text("Moved to Archive").font(.callout)
+              Spacer()
+              Button("Undo") { state.undoFinishedReading() }
+                .font(.callout.weight(.semibold)).accessibilityLabel("Undo Done Reading")
+              Button {
+                state.dismissReadingUndo()
+              } label: {
+                Image(systemName: "xmark").frame(minWidth: 44, minHeight: 44)
+              }
+              .accessibilityLabel("Dismiss undo")
+            }
+          }
+          if let message = state.message {
+            HStack {
+              Text(message).font(.footnote).foregroundStyle(tokens.secondaryInk.color)
+                .lineLimit(2)
+              Spacer()
+              Button("Retry") { Task { try? await state.sync(forceManifest: true) } }
+                .font(.footnote.weight(.semibold))
+            }
+          }
+        }
+      }
+    }
+    .sensoryFeedback(.success, trigger: archiveCommits)
+    .confirmationDialog(
+      "Delete “\(pendingDelete?.title ?? "")”?",
+      isPresented: Binding(
+        get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+      titleVisibility: .visible, presenting: pendingDelete
+    ) { item in
+      Button("Delete Article", role: .destructive) { state.edit(item, ItemPatch(deleted: true)) }
+    } message: { _ in
+      Text("This removes it from your library on every device. Archive keeps it instead.")
+    }
+    .alert(
+      "Add to Collection",
+      isPresented: Binding(
+        get: { collectionTarget != nil }, set: { if !$0 { collectionTarget = nil } })
+    ) {
+      TextField("Collection name", text: $collectionName)
+      Button("Add") {
+        if let item = collectionTarget { state.addToCollection(item, name: collectionName) }
+      }
+      Button("Cancel", role: .cancel) {}
+    }
+    .onChange(of: collections) { _, names in
+      if collection != "All" && !names.contains(collection) { collection = "All" }
     }
   }
 }
 struct ArticleRow: View {
   @EnvironmentObject var state: AppState
+  @Environment(\.themeTokens) private var tokens
+  @Environment(\.dynamicTypeSize) private var typeSize
+  @ScaledMetric(relativeTo: .title2) private var titleSize = 23
   let item: ReadingItem
+  /// A readable source: "Agent brief", or the host in lower case without `www.`.
+  static func source(_ item: ReadingItem) -> String? {
+    if item.kind == "brief" { return "Agent brief" }
+    guard let host = URL(string: item.sourceUrl ?? "")?.host?.lowercased() else { return nil }
+    return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+  }
+  private var metadata: String {
+    [Self.source(item), item.author].compactMap { $0 }.joined(separator: " · ")
+  }
   var body: some View {
-    VStack(alignment: .leading, spacing: 9) {
-      HStack {
-        Text(
-          item.kind == "brief"
-            ? "AGENT BRIEF" : URL(string: item.sourceUrl ?? "")?.host?.uppercased() ?? "ARTICLE"
-        )
-        .font(.caption2.weight(.semibold)).tracking(1).foregroundStyle(.secondary).lineLimit(1)
-        Spacer()
-        if item.progress >= 1 {
-          Image(systemName: "checkmark").foregroundStyle(.secondary).accessibilityLabel("Read")
-        }
-        DownloadIndicator(item: item)
+    VStack(alignment: .leading, spacing: 6) {
+      Text(item.title).font(.system(size: titleSize, weight: .medium, design: .serif))
+        .lineLimit(typeSize.isAccessibilitySize ? nil : 4)
+      if !metadata.isEmpty {
+        Text(metadata).font(.footnote).foregroundStyle(tokens.secondaryInk.color)
       }
-      Text(item.title).font(.system(size: 23, weight: .medium, design: .serif)).lineLimit(3)
-      if let author = item.author { Text(author).font(.caption).foregroundStyle(.secondary) }
-      if let warning = item.error {
-        Label(warning, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(
-          .secondary
-        ).lineLimit(2)
-      }
-      if let progress = Downloads.shared.progress(itemID: item.id), progress < 1,
-        state.store?.offlineState(item) != .ready
-      {
-        ProgressView(value: progress).accessibilityLabel("Downloading article")
-      }
+      DownloadIndicator(item: item)
       if item.progress > 0 && item.progress < 1 {
-        ProgressView(value: (try? state.store?.readingPosition(item.id)) ?? item.progress).tint(
-          .secondary
-        )
-        .accessibilityLabel("Reading progress")
+        let position = (try? state.store?.readingPosition(item.id)) ?? item.progress
+        ProgressView(value: position).tint(tokens.secondaryInk.color)
+          .accessibilityLabel("\(Int((position * 100).rounded())) percent read")
+      }
+    }
+    .accessibilityElement(children: .combine)
+  }
+}
+/// The one exceptional status a row may show. Prepared and verified offline is the quiet default.
+struct DownloadIndicator: View {
+  @EnvironmentObject var state: AppState
+  @Environment(\.themeTokens) private var tokens
+  @Environment(\.dynamicTypeSize) private var typeSize
+  let item: ReadingItem
+  private var offline: OfflineState { state.store?.offlineState(item) ?? .notDownloaded }
+  private var status: (text: String, symbol: String, warning: Bool)? {
+    if ["queued", "processing"].contains(item.status) { return ("Updating", "clock", false) }
+    if item.status == "bookmark" {
+      return ("Couldn't prepare the update", "exclamationmark.triangle", true)
+    }
+    switch offline {
+    case .ready: return nil
+    case .textOnly:
+      return (item.error ?? "Text only · images incomplete", "exclamationmark.triangle", true)
+    case .downloading: return ("Downloading", "arrow.down.circle", false)
+    case .notDownloaded:
+      return Downloads.shared.progress(itemID: item.id) == nil
+        ? ("Not downloaded", "icloud.and.arrow.down", false)
+        : ("Downloading", "arrow.down.circle", false)
+    }
+  }
+  var body: some View {
+    if let status {
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+          Image(systemName: status.symbol)
+          Text(status.text).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+        }
+        .font(.footnote)
+        .foregroundStyle(status.warning ? tokens.warning.color : tokens.secondaryInk.color)
+        if let progress = Downloads.shared.progress(itemID: item.id), progress < 1,
+          offline != .ready
+        {
+          ProgressView(value: progress).accessibilityLabel("Download progress")
+        }
       }
     }
   }
 }
-struct DownloadIndicator: View {
-  @EnvironmentObject var state: AppState
-  let item: ReadingItem
-  private var offline: OfflineState { state.store?.offlineState(item) ?? .notDownloaded }
-  var body: some View {
-    Group {
-      if ["queued", "processing"].contains(item.status) {
-        Label("Preparing", systemImage: "clock").foregroundStyle(.secondary)
-      } else if item.status == "bookmark" {
-        Label("Couldn't prepare", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-      } else if offline == .ready {
-        Image(systemName: "arrow.down.circle.fill").foregroundStyle(.green).accessibilityLabel(
-          "Available offline")
-      } else if offline == .textOnly {
-        Label("Text only", systemImage: "doc.badge.ellipsis").foregroundStyle(.orange)
-          .accessibilityLabel("Text available, images incomplete")
-      } else if offline == .downloading || Downloads.shared.progress(itemID: item.id) != nil {
-        Label("Downloading", systemImage: "arrow.down.circle").foregroundStyle(.secondary)
+extension View {
+  @ViewBuilder func readerZoomSource(id: String, in namespace: Namespace.ID) -> some View {
+    if #available(iOS 18.0, *) {
+      matchedTransitionSource(id: id, in: namespace)
+    } else {
+      self
+    }
+  }
+  @ViewBuilder func readerZoomTransition(id: String, in namespace: Namespace.ID) -> some View {
+    if #available(iOS 18.0, *) {
+      navigationTransition(.zoom(sourceID: id, in: namespace))
+    } else {
+      self
+    }
+  }
+  /// Bottom status and Undo. On iOS 26 a safe-area bar gets the system scroll edge effect and
+  /// sits above the bottom search field.
+  @ViewBuilder func libraryStatusBar<Content: View>(@ViewBuilder _ content: () -> Content)
+    -> some View
+  {
+    // The iOS 26 API needs the iOS 26 SDK (Swift 6.2); older toolchains such as CI's use the fallback.
+    #if compiler(>=6.2)
+      if #available(iOS 26.0, *) {
+        safeAreaBar(edge: .bottom) {
+          content().padding(.horizontal, 20).padding(.vertical, 4)
+        }
       } else {
-        Image(systemName: "arrow.down.circle").foregroundStyle(.secondary).accessibilityLabel(
-          "Not downloaded")
+        safeAreaInset(edge: .bottom) {
+          content().padding(.horizontal).padding(.vertical, 8).background(.regularMaterial)
+        }
       }
-    }.font(.caption)
+    #else
+      safeAreaInset(edge: .bottom) {
+        content().padding(.horizontal).padding(.vertical, 8).background(.regularMaterial)
+      }
+    #endif
+  }
+}
+/// The standard Close button on iOS 26; Done before it.
+struct CloseButton: View {
+  let action: () -> Void
+  var body: some View {
+    #if compiler(>=6.2)
+      if #available(iOS 26.0, *) {
+        Button(role: .close, action: action)
+      } else {
+        Button("Done", action: action)
+      }
+    #else
+      Button("Done", action: action)
+    #endif
   }
 }
 struct SaveView: View {
   @EnvironmentObject var state: AppState
+  @Environment(\.themeTokens) private var tokens
   @Environment(\.dismiss) var dismiss
   @State private var url = ""
   @State private var key = UUID().uuidString
@@ -309,7 +468,7 @@ struct SaveView: View {
         Section {
           Text(
             "Only readable articles enter your Library. Preparation and failed attempts appear in Imports, with Retry when available. Readable text is kept if optional images are missing."
-          ).font(.footnote).foregroundStyle(.secondary)
+          ).font(.footnote).foregroundStyle(tokens.secondaryInk.color)
         }.readerRowBackground()
         if let error { Text(error).foregroundStyle(.red) }
       }.readerFormBackground().navigationTitle("Save an article").toolbar {
@@ -333,23 +492,31 @@ struct SaveView: View {
 struct ReaderScreen: View {
   @EnvironmentObject var state: AppState
   @Environment(\.dismiss) private var dismiss
-  @State private var showTextSize = false
+  @Environment(\.themeTokens) private var tokens
+  @State private var showDisplay = false
   @State private var finished = false
   @StateObject private var scrollState = ArticleScrollState()
   let itemID: String
   @AppStorage("readerFontSize") private var fontSize = 20.0
-  @AppStorage("appearance") private var appearance = "light"
-  private var readerBackground: Color {
-    appearance == "sepia"
-      ? Color(red: 246 / 255, green: 240 / 255, blue: 228 / 255)
-      : Color(.systemBackground)
-  }
   @State private var collection = ""
   @State private var showCollection = false
   private var item: ReadingItem? { state.items.first { $0.id == itemID } }
+  private func isReadable(_ item: ReadingItem) -> Bool {
+    (try? state.store?.readerURL(item.id)) != nil
+  }
+  private func canFinish(_ item: ReadingItem) -> Bool { !item.archived && isReadable(item) }
+  private func finish(_ item: ReadingItem) {
+    scrollState.flush?()
+    if state.finishReading(item.id) {
+      UINotificationFeedbackGenerator().notificationOccurred(.success)
+      finished = true
+      dismiss()
+    }
+  }
   var body: some View {
     Group {
       if let item {
+        let offline = state.store?.offlineState(item) ?? .notDownloaded
         Group {
           if let path = try? state.store?.readerURL(item.id) {
             ArticleWebView(
@@ -357,11 +524,12 @@ struct ReaderScreen: View {
               header: ArticleHeader(
                 title: item.title, kind: item.kind, author: item.author,
                 source: URL(string: item.sourceUrl ?? ""),
-                status: state.store?.offlineState(item).rawValue ?? "Not downloaded",
-                error: item.error),
+                status: offline == .ready ? nil : offline.rawValue,
+                error: item.error, finishLabel: canFinish(item) ? "Done Reading" : nil),
               scrollState: scrollState,
               progress: (try? state.store?.readingPosition(item.id)) ?? item.progress,
-              fontSize: fontSize
+              fontSize: fontSize,
+              onFinish: { finish(item) }
             ) { progress in
               if !finished { try? state.store?.recordReadingPosition(item.id, progress) }
             }
@@ -388,72 +556,73 @@ struct ReaderScreen: View {
             }
           }
         }.toolbar {
+          // Less frequent actions; the primary ones sit in the bottom bar near the thumb.
           ToolbarItem(placement: .topBarTrailing) {
             Menu {
-              Button("Text size") { showTextSize = true }
-              if !item.archived, (try? state.store?.readerURL(item.id)) != nil {
-                Button("Done reading") {
-                  scrollState.flush?()
-                  if state.finishReading(item.id) {
-                    finished = true
-                    dismiss()
-                  }
-                }
-              } else {
-                Button(item.archived ? "Move to Library" : "Archive") {
-                  state.edit(item, ItemPatch(archived: !item.archived))
-                  dismiss()
-                }
+              Button {
+                showCollection = true
+              } label: {
+                Label("Add to Collection", systemImage: "folder.badge.plus")
               }
-              Button("Add to collection") { showCollection = true }
-              let offline = state.store?.offlineState(item) ?? .notDownloaded
               if item.status == "bookmark" {
-                Button("Retry extraction") { Task { await state.retryImport(item) } }
+                Button {
+                  Task { await state.retryImport(item) }
+                } label: {
+                  Label("Retry Extraction", systemImage: "arrow.clockwise")
+                }
               } else if item.status == "ready", offline != .ready {
-                Button(offline == .notDownloaded ? "Download now" : "Retry download") {
+                Button {
                   Task { await state.download(item) }
+                } label: {
+                  Label(
+                    offline == .notDownloaded ? "Download Now" : "Retry Download",
+                    systemImage: "arrow.down.circle")
                 }
               }
-              if (try? state.store?.readerURL(item.id)) != nil || offline == .downloading {
-                Button("Remove download", role: .destructive) { state.removeDownload(item) }
+              if isReadable(item) || offline == .downloading {
+                Button(role: .destructive) {
+                  state.removeDownload(item)
+                } label: {
+                  Label("Remove Download", systemImage: "arrow.down.circle.dotted")
+                }
               }
             } label: {
-              Image(systemName: "ellipsis.circle")
+              Image(systemName: "ellipsis")
             }.accessibilityLabel("Reading options")
           }
-        }.sheet(isPresented: $showTextSize) {
-          NavigationStack {
-            Form {
-              Section {
-                Slider(value: $fontSize, in: 14...32, step: 2).accessibilityLabel("Text size")
-                Text("Article text · \(Int(fontSize)) pt").font(
-                  .system(size: fontSize, design: .serif))
-              }.readerRowBackground()
-            }.readerFormBackground().navigationTitle("Text size")
-              .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                  Button("Done") { showTextSize = false }
-                }
-              }
-          }.readerTheme().presentationDetents([.medium])
-        }.alert("Add to collection", isPresented: $showCollection) {
+          ToolbarItem(placement: .bottomBar) {
+            Button {
+              showDisplay = true
+            } label: {
+              Image(systemName: "textformat.size")
+            }.accessibilityLabel("Text and theme")
+          }
+          ToolbarItem(placement: .bottomBar) { Spacer() }
+          ToolbarItem(placement: .bottomBar) {
+            if canFinish(item) {
+              Button("Done Reading") { finish(item) }.fontWeight(.semibold)
+            } else {
+              Button(item.archived ? "Move to Library" : "Archive") {
+                state.edit(item, ItemPatch(archived: !item.archived))
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                dismiss()
+              }.fontWeight(.semibold)
+            }
+          }
+        }.sheet(isPresented: $showDisplay) {
+          ReaderDisplaySheet(fontSize: $fontSize)
+        }.alert("Add to Collection", isPresented: $showCollection) {
           TextField("Collection name", text: $collection)
           Button("Add") {
-            let name = collection.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty {
-              state.edit(
-                item,
-                ItemPatch(
-                  collections: Array(Set(item.collections + [String(name.prefix(60))])).sorted()))
-            }
+            state.addToCollection(item, name: collection)
+            collection = ""
           }
           Button("Cancel", role: .cancel) {}
         }
       } else {
         ContentUnavailableView("Item removed", systemImage: "book")
       }
-    }.background(readerBackground.ignoresSafeArea())
-      .toolbarBackground(readerBackground, for: .navigationBar)
+    }.background(Color(hex: tokens.page).ignoresSafeArea())
       .navigationBarTitleDisplayMode(.inline).onAppear { finished = false }.onDisappear {
         if !finished { scrollState.flush?() }
         finished = true
@@ -462,23 +631,80 @@ struct ReaderScreen: View {
       }
   }
 }
+/// Text size and theme for reading, kept on the reading screen. Changes apply live.
+struct ReaderDisplaySheet: View {
+  @Binding var fontSize: Double
+  @AppStorage("appearance") private var appearance = "light"
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.themeTokens) private var tokens
+  private var percent: Int { Int((fontSize / 20 * 100).rounded()) }
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section {
+          HStack(spacing: 12) {
+            Button {
+              fontSize = max(14, fontSize - 2)
+            } label: {
+              Image(systemName: "textformat.size.smaller").frame(minWidth: 44, minHeight: 44)
+            }
+            .accessibilityLabel("Smaller text").disabled(fontSize <= 14)
+            Slider(value: $fontSize, in: 14...32, step: 2)
+              .accessibilityLabel("Text size").accessibilityValue("\(percent) percent")
+            Button {
+              fontSize = min(32, fontSize + 2)
+            } label: {
+              Image(systemName: "textformat.size.larger").frame(minWidth: 44, minHeight: 44)
+            }
+            .accessibilityLabel("Larger text").disabled(fontSize >= 32)
+          }.buttonStyle(.borderless)
+        } header: {
+          Text("Text Size")
+        } footer: {
+          Text("\(percent)% of the reader default. Articles also follow your iPhone text size.")
+            .foregroundStyle(tokens.secondaryInk.color)
+        }.readerRowBackground()
+        Section("Theme") {
+          Picker("Theme", selection: $appearance) {
+            Text("Light").tag("light")
+            Text("Sepia").tag("sepia")
+            Text("Dark").tag("dark")
+            Text("System").tag("system")
+          }.pickerStyle(.segmented)
+        }.readerRowBackground()
+      }.readerFormBackground().navigationTitle("Text and Theme")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } } }
+    }.readerTheme().presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+  }
+}
 struct ReaderMetadata: View {
   @EnvironmentObject var state: AppState
+  @Environment(\.themeTokens) private var tokens
+  @ScaledMetric(relativeTo: .title) private var titleSize = 28
   let item: ReadingItem
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text(item.kind == "brief" ? "AGENT-CREATED BRIEF" : "SAVED ARTICLE").font(
-        .caption.weight(.semibold)
-      ).tracking(1).foregroundStyle(.secondary)
-      Text(item.title).font(.system(size: 28, weight: .medium, design: .serif))
-      if let author = item.author { Text(author).font(.subheadline).foregroundStyle(.secondary) }
+      if item.kind == "brief" {
+        Text("AGENT-CREATED BRIEF").font(.caption.weight(.semibold)).tracking(1)
+          .foregroundStyle(tokens.secondaryInk.color)
+        Text("Written by an assistant. It may contain errors; check the sources.")
+          .font(.footnote).foregroundStyle(tokens.secondaryInk.color)
+      }
+      Text(item.title).font(.system(size: titleSize, weight: .medium, design: .serif))
+        .accessibilityAddTraits(.isHeader)
+      if let author = item.author {
+        Text(author).font(.subheadline).foregroundStyle(tokens.secondaryInk.color)
+      }
       if let source = item.sourceUrl, let url = URL(string: source),
         ["http", "https"].contains(url.scheme ?? "")
       {
-        Link("View original · \(url.host ?? "source")", destination: url).font(.caption)
+        Link("View original · \(url.host ?? "source")", destination: url).font(.footnote)
+          .foregroundStyle(tokens.link.color)
       }
-      Text(state.store?.offlineState(item).rawValue ?? "Not downloaded").font(.caption)
-        .foregroundStyle(.secondary)
+      if let offline = state.store?.offlineState(item), offline != .ready {
+        Text(offline.rawValue).font(.footnote).foregroundStyle(tokens.secondaryInk.color)
+      }
     }
   }
 }
@@ -488,6 +714,7 @@ struct SettingsView: View {
   @AppStorage("cellular") private var cellular = false
   @AppStorage("storageLimit") private var storageLimit = 512_000_000
   @AppStorage("appearance") private var appearance = "light"
+  @Environment(\.themeTokens) private var tokens
   var body: some View {
     NavigationStack {
       Form {
@@ -498,8 +725,10 @@ struct SettingsView: View {
             Text("Dark").tag("dark")
             Text("System").tag("system")
           }
-          Text("Light uses white pages. Sepia uses warm off-white pages with softer brown text.")
-            .font(.footnote).foregroundStyle(.secondary)
+          Text(
+            "Light uses white pages. Sepia uses warm off-white pages with softer brown text. While reading, Aa also changes the theme and text size."
+          )
+          .font(.footnote).foregroundStyle(tokens.secondaryInk.color)
         }.readerRowBackground()
         if let message = state.sharingMessage {
           Section("Browser sharing") { Text(message).font(.footnote) }.readerRowBackground()
@@ -526,7 +755,7 @@ struct SettingsView: View {
               ? "Enabled in iOS" : "Restricted in iOS settings")
           Text(
             "iOS chooses when to refresh. Keep Background App Refresh enabled. Opening the app also checks for new items."
-          ).font(.footnote).foregroundStyle(.secondary)
+          ).font(.footnote).foregroundStyle(tokens.secondaryInk.color)
           Text("Last sync: \(state.lastSync)")
           Button("Sync now") { Task { try? await state.sync(forceManifest: true) } }
         }.readerRowBackground()
@@ -535,7 +764,7 @@ struct SettingsView: View {
           NavigationLink("Account") { AccountView() }
         }.readerRowBackground()
       }.readerFormBackground().navigationTitle("Settings").toolbar {
-        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+        ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } }
       }
     }.readerTheme()
   }
@@ -641,6 +870,7 @@ struct AccountView: View {
 
 struct ImportsView: View {
   @EnvironmentObject var state: AppState
+  @Environment(\.themeTokens) private var tokens
   @Environment(\.dismiss) private var dismiss
   @State private var retrying: Set<String> = []
   private var imports: [ReadingItem] { state.items.filter(\.needsImportReview) }
@@ -668,7 +898,7 @@ struct ImportsView: View {
         ForEach(state.sharedSaves) { item in
           VStack(alignment: .leading, spacing: 8) {
             Text(item.url.absoluteString).font(.headline).lineLimit(3)
-            Text(sharedStatus(item)).font(.subheadline).foregroundStyle(.secondary)
+            Text(sharedStatus(item)).font(.subheadline).foregroundStyle(tokens.secondaryInk.color)
             if let error = item.error { Text(error).font(.callout) }
             if item.state != .accepted && item.state != .sending {
               Button("Retry with current sign-in") { Task { await state.retrySharedSave(item) } }
@@ -676,7 +906,7 @@ struct ImportsView: View {
             if item.state == .authenticationRequired {
               Text(
                 "Use Account → Sign in again, then Retry. The old sign-in's links are never sent automatically with a new credential."
-              ).font(.caption).foregroundStyle(.secondary)
+              ).font(.caption).foregroundStyle(tokens.secondaryInk.color)
             }
           }.padding(.vertical, 8).readerRowBackground()
             .swipeActions {
@@ -687,13 +917,13 @@ struct ImportsView: View {
           VStack(alignment: .leading, spacing: 8) {
             Text(item.title).font(.headline)
             if let source = item.sourceUrl {
-              Text(source).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+              Text(source).font(.caption).foregroundStyle(tokens.secondaryInk.color).lineLimit(2)
             }
             Label(
               item.status == "bookmark" ? "Couldn't prepare" : "Preparing · not saved yet",
               systemImage: item.status == "bookmark" ? "exclamationmark.triangle" : "clock"
             )
-            .font(.subheadline).foregroundStyle(.secondary)
+            .font(.subheadline).foregroundStyle(tokens.secondaryInk.color)
             if let error = item.error { Text(String(error.prefix(240))).font(.callout) }
             if item.hasPreparedContent {
               Text("Your earlier readable copy is still in Library.").font(.caption)
@@ -715,7 +945,7 @@ struct ImportsView: View {
       }.listStyle(.insetGrouped).readerFormBackground()
         .refreshable { try? await state.sync(forceManifest: true) }
         .navigationTitle("Imports").toolbar {
-          ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+          ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } }
         }
     }.readerTheme()
   }

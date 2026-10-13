@@ -7,10 +7,15 @@ struct ArticleHeader: Equatable {
   let kind: String
   let author: String?
   let source: URL?
-  let status: String
+  /// Shown only for exceptional states; the normal offline-ready state is quiet.
+  let status: String?
   let error: String?
+  /// Label for the end-of-article finish link, or nil when finishing does not apply.
+  var finishLabel: String? = nil
   var payload: String {
-    var data: [String: String] = ["title": title, "kind": kind, "status": status]
+    var data: [String: String] = ["title": title, "kind": kind]
+    if let status { data["status"] = status }
+    if let finishLabel { data["finish"] = finishLabel }
     if let author { data["author"] = author }
     if let source, ["http", "https"].contains(source.scheme ?? "") {
       data["source"] = source.absoluteString
@@ -26,34 +31,64 @@ struct ArticleHeader: Equatable {
   var flush: (() -> Void)?
 }
 struct ArticleWebView: UIViewRepresentable {
+  /// Links with this scheme come from controls the reader injects, never from article content.
+  static let actionScheme = "offline-reader-action"
+  static let finishAction = URL(string: "\(actionScheme):finish")!
+  /// Only the exact injected link counts, and only while the reader is showing it.
+  static func isFinishAction(_ url: URL, finishShown: Bool) -> Bool {
+    finishShown && url.absoluteString == finishAction.absoluteString
+  }
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.colorSchemeContrast) private var contrast
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @AppStorage("appearance") private var selectedAppearance = "light"
   let url: URL
   let header: ArticleHeader
   let scrollState: ArticleScrollState
   let progress: Double
   let fontSize: Double
+  var onFinish: (() -> Void)? = nil
   let onProgress: (Double) -> Void
-  private var appearance: String {
-    selectedAppearance == "sepia" ? "sepia" : (colorScheme == .dark ? "dark" : "light")
+  private var tokens: ThemeTokens { ThemeTokens.resolve(selectedAppearance, colorScheme) }
+  var appearance: String { tokens.name }
+  /// The reader's size preference is relative to the system text size: it equals `fontSize`
+  /// at the default size and grows with larger and accessibility sizes.
+  var scaledFontSize: Double {
+    UIFontMetrics(forTextStyle: .body).scaledValue(
+      for: fontSize,
+      compatibleWith: UITraitCollection(
+        preferredContentSizeCategory: UIContentSizeCategory(dynamicTypeSize)))
   }
-  private var pageBackground: UIColor {
-    if appearance == "sepia" {
-      return UIColor(red: 246 / 255, green: 240 / 255, blue: 228 / 255, alpha: 1)
-    }
-    return appearance == "dark" ? UIColor(white: 0.067, alpha: 1) : .white
+  private var pageBackground: UIColor { UIColor(hex: tokens.page) }
+  /// Everything that changes the injected presentation; a change re-applies it in place.
+  struct Presentation: Equatable {
+    let fontSize: Double
+    let appearance: String
+    let increasedContrast: Bool
+    let compactHeadings: Bool
+    let header: ArticleHeader
+  }
+  var presentation: Presentation {
+    Presentation(
+      fontSize: scaledFontSize, appearance: appearance, increasedContrast: contrast == .increased,
+      compactHeadings: dynamicTypeSize.isAccessibilitySize, header: header)
   }
   private var styleScript: String {
-    let dark = appearance == "dark"
-    let sepia = appearance == "sepia"
-    let background = sepia ? "#f6f0e4" : (dark ? "#111111" : "#ffffff")
-    let foreground = sepia ? "#3d352b" : (dark ? "#eeeeee" : "#1c1c1e")
-    let link = sepia ? "#86512d" : (dark ? "#8ab4f8" : "#4685c5")
+    let high = contrast == .increased
+    let ink = tokens.ink.hex(high)
+    let secondary = tokens.secondaryInk.hex(high)
+    let link = tokens.link.hex(high)
+    let accent = tokens.accent.hex(high)
+    let scale = scaledFontSize / max(fontSize, 1)
+    // At accessibility sizes the body is already large; headings converge toward it, as native text styles do.
+    let headings = dynamicTypeSize.isAccessibilitySize ? "1.3em,1.2em,1.1em" : ",,"
     return """
       (() => {
       const metadata = \(header.payload);
       const body = document.body;
       if (!body) return 0;
+      const root = document.documentElement;
+      [['--reader-page','\(tokens.page)'],['--reader-ink','\(ink)'],['--reader-secondary','\(secondary)'],['--reader-link','\(link)'],['--reader-accent','\(accent)'],['--reader-separator','\(tokens.separator)']].forEach(([name,value]) => root.style.setProperty(name,value));
       const headerKey = Symbol.for('OfflineReader.articleHeader');
       let header = window[headerKey];
       if (!header || !header.isConnected) {
@@ -62,28 +97,50 @@ struct ArticleWebView: UIViewRepresentable {
         header = document.createElement('header'); header.id='reader-header'; body.prepend(header); window[headerKey]=header;
       }
       header.replaceChildren();
-      header.style.marginBottom='24px'; header.style.paddingBottom='16px'; header.style.borderBottom='1px solid #8884';
+      header.style.marginBottom='24px'; header.style.paddingBottom='16px'; header.style.borderBottom='1px solid var(--reader-separator)';
       const add = (tag,text) => { const node=document.createElement(tag); node.textContent=text; header.append(node); return node; };
-      const kind=add('div',metadata.kind === 'brief' ? 'AGENT-CREATED BRIEF' : 'SAVED ARTICLE');
-      kind.style.fontSize='12px'; kind.style.letterSpacing='1.5px'; kind.style.opacity='0.65';
-      const title=add('h1',metadata.title); title.style.fontSize='\(max(24,fontSize*1.4))px'; title.style.lineHeight='1.2'; title.style.margin='10px 0';
-      if (metadata.author) { const author=add('div',metadata.author); author.style.fontSize='14px'; author.style.marginBottom='8px'; }
+      const small = (node,size) => { node.style.fontSize=(size*\(scale))+'px'; node.style.color='var(--reader-secondary)'; node.style.fontFamily='-apple-system,system-ui,sans-serif'; return node; };
+      if (metadata.kind === 'brief') {
+        const kind=small(add('div','AGENT-CREATED BRIEF'),12); kind.style.letterSpacing='1.5px'; kind.style.fontWeight='600';
+        small(add('div','Written by an assistant. It may contain errors; check the sources.'),13).style.marginTop='4px';
+      }
+      const title=add('h1',metadata.title); title.style.fontSize='\(max(24, scaledFontSize * (dynamicTypeSize.isAccessibilitySize ? 1.15 : 1.4)))px'; title.style.lineHeight='1.2'; title.style.margin='10px 0';
+      if (metadata.author) { small(add('div',metadata.author),14).style.marginBottom='8px'; }
       if (metadata.source) {
-        const source=add('a','View original · '+metadata.host); source.href=metadata.source; source.style.display='block'; source.style.fontSize='13px'; source.style.marginBottom='8px';
+        const source=add('a','View original · '+metadata.host); source.href=metadata.source; source.style.display='block'; source.style.fontSize=(13*\(scale))+'px'; source.style.fontFamily='-apple-system,system-ui,sans-serif'; source.style.marginBottom='8px';
       }
-      const status=add('div',metadata.status); status.style.fontSize='12px'; status.style.opacity='0.65';
-      if (metadata.error) { const warning=add('div',metadata.error); warning.style.fontSize='12px'; warning.style.marginTop='8px'; warning.style.opacity='0.7'; }
-      document.documentElement.style.colorScheme='\(dark ? "dark" : "light")';
-      document.documentElement.style.backgroundColor='\(background)';
-      if (document.body) {
-        document.body.style.backgroundColor='\(background)';
-        document.body.style.color='\(foreground)';
-        document.body.style.fontSize='\(fontSize)px';
-        document.body.style.fontFamily='Georgia,serif'; document.body.style.lineHeight='1.65';
-        document.body.style.padding='18px'; document.body.style.maxWidth='720px'; document.body.style.margin='auto'; document.body.style.overflowWrap='anywhere';
+      if (metadata.status) { small(add('div',metadata.status),12); }
+      if (metadata.error) { small(add('div',metadata.error),12).style.marginTop='8px'; }
+      const footerKey = Symbol.for('OfflineReader.articleFooter');
+      let footer = window[footerKey];
+      if (footer && footer.isConnected) footer.remove();
+      if (metadata.finish) {
+        footer = document.createElement('footer'); footer.id='reader-footer'; window[footerKey]=footer;
+        footer.style.margin='40px 0 24px'; footer.style.paddingTop='24px'; footer.style.borderTop='1px solid var(--reader-separator)'; footer.style.textAlign='center';
+        const finish=document.createElement('a'); finish.textContent=metadata.finish; finish.href='\(Self.finishAction.absoluteString)';
+        finish.setAttribute('role','button'); finish.style.display='inline-block'; finish.style.padding='12px 28px'; finish.style.minHeight='44px'; finish.style.boxSizing='border-box';
+        finish.style.border='1.5px solid var(--reader-accent)'; finish.style.borderRadius='999px'; finish.style.textDecoration='none';
+        finish.style.fontFamily='-apple-system,system-ui,sans-serif'; finish.style.fontWeight='600'; finish.style.fontSize=(17*\(scale))+'px';
+        footer.append(finish); body.append(footer);
       }
-      document.querySelectorAll('a').forEach(link => link.style.color='\(link)');
-      return {headerHeight: header.offsetTop + header.offsetHeight + 24, contentHeight: document.documentElement.scrollHeight};
+      root.style.colorScheme='\(tokens.isDark ? "dark" : "light")';
+      root.style.backgroundColor='\(tokens.page)';
+      body.style.backgroundColor='\(tokens.page)';
+      body.style.color='\(ink)';
+      body.style.fontSize='\(scaledFontSize)px';
+      body.style.fontFamily='ui-serif,Georgia,serif'; body.style.lineHeight='1.6';
+      body.style.padding='18px';
+      body.style.maxWidth='36em'; body.style.margin='auto'; body.style.overflowWrap='break-word';
+      [['hyphens','auto'],['-webkit-hyphens','auto'],['text-wrap','pretty'],['hanging-punctuation','first']].forEach(([name,value]) => body.style.setProperty(name,value));
+      if (!body.hasAttribute('dir')) body.setAttribute('dir','auto');
+      const sizes='\(headings)'.split(',');
+      body.querySelectorAll('h1,h2,h3').forEach(heading => {
+        heading.style.lineHeight='1.2';
+        if (heading.parentElement !== header) heading.style.fontSize=sizes[Number(heading.tagName[1])-1];
+      });
+      document.querySelectorAll('a').forEach(link => link.style.color='var(--reader-link)');
+      if (footer && footer.isConnected) footer.querySelector('a').style.color='var(--reader-accent)';
+      return {headerHeight: header.offsetTop + header.offsetHeight + 24, contentHeight: root.scrollHeight};
       })();
       """
   }
@@ -114,10 +171,7 @@ struct ArticleWebView: UIViewRepresentable {
     }
     web.backgroundColor = pageBackground
     web.scrollView.backgroundColor = web.backgroundColor
-    if !web.isLoading,
-      context.coordinator.fontSize != fontSize || context.coordinator.appearance != appearance
-        || context.coordinator.header != header
-    {
+    if !web.isLoading, context.coordinator.presentation != presentation {
       context.coordinator.present(
         web,
         progress: context.coordinator.restoring
@@ -129,13 +183,14 @@ struct ArticleWebView: UIViewRepresentable {
     var parent: ArticleWebView
     var restoring = true
     var loaded: URL?
-    var fontSize: Double = 20
-    var appearance: String?
     var lastSaved = Date.distantPast
-    var header: ArticleHeader?
+    /// The presentation most recently injected; `fontSize` and `appearance` describe it.
+    var presentation: ArticleWebView.Presentation?
+    var fontSize: Double { presentation?.fontSize ?? 0 }
+    var appearance: String? { presentation?.appearance }
     var headerHeight = 0.0
     var position = 0.0
-    var presentation = 0
+    var generation = 0
     var layoutObservation: NSKeyValueObservation?
     init(_ parent: ArticleWebView) { self.parent = parent }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -147,14 +202,12 @@ struct ArticleWebView: UIViewRepresentable {
       restoring = true
       layoutObservation?.invalidate()
       layoutObservation = nil
-      presentation += 1
-      let current = presentation
+      generation += 1
+      let current = generation
       let expected = loaded
-      fontSize = parent.fontSize
-      appearance = parent.appearance
-      header = parent.header
+      presentation = parent.presentation
       web.evaluateJavaScript(parent.styleScript) { value, error in
-        guard current == self.presentation, expected == self.loaded else { return }
+        guard current == self.generation, expected == self.loaded else { return }
         guard error == nil else {
           self.restoring = false
           return
@@ -170,7 +223,7 @@ struct ArticleWebView: UIViewRepresentable {
         // WebKit's DOM layout and its native scroll content size update separately.
         // Restore only when the native viewport reflects the styled document.
         let restore: () -> Void = { [weak self, weak web] in
-          guard let self, let web, self.restoring, current == self.presentation,
+          guard let self, let web, self.restoring, current == self.generation,
             expected == self.loaded
           else {
             return
@@ -207,7 +260,13 @@ struct ArticleWebView: UIViewRepresentable {
         return
       }
       if action.navigationType == .linkActivated {
-        if ["https", "http"].contains(target.scheme ?? "") { UIApplication.shared.open(target) }
+        if target.scheme == ArticleWebView.actionScheme {
+          if ArticleWebView.isFinishAction(target, finishShown: parent.header.finishLabel != nil) {
+            parent.onFinish?()
+          }
+        } else if ["https", "http"].contains(target.scheme ?? "") {
+          UIApplication.shared.open(target)
+        }
         decisionHandler(.cancel)
         return
       }
