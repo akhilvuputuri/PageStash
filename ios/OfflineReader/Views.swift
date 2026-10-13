@@ -197,11 +197,12 @@ struct LibraryList: View {
         // Archive is safe and reversible, so it takes the full swipe. Delete never does.
         .swipeActions(edge: .leading) { archiveButton(item).tint(.gray) }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-          Button(role: .destructive) {
+          // Not `.destructive`: that role removes the row before the confirmation can be cancelled.
+          Button {
             pendingDelete = item
           } label: {
             Label("Delete", systemImage: "trash")
-          }
+          }.tint(.red)
         }
         .contextMenu {
           archiveButton(item)

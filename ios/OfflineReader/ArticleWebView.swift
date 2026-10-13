@@ -33,6 +33,11 @@ struct ArticleHeader: Equatable {
 struct ArticleWebView: UIViewRepresentable {
   /// Links with this scheme come from controls the reader injects, never from article content.
   static let actionScheme = "offline-reader-action"
+  static let finishAction = URL(string: "\(actionScheme):finish")!
+  /// Only the exact injected link counts, and only while the reader is showing it.
+  static func isFinishAction(_ url: URL, finishShown: Bool) -> Bool {
+    finishShown && url.absoluteString == finishAction.absoluteString
+  }
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.colorSchemeContrast) private var contrast
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -112,7 +117,7 @@ struct ArticleWebView: UIViewRepresentable {
       if (metadata.finish) {
         footer = document.createElement('footer'); footer.id='reader-footer'; window[footerKey]=footer;
         footer.style.margin='40px 0 24px'; footer.style.paddingTop='24px'; footer.style.borderTop='1px solid var(--reader-separator)'; footer.style.textAlign='center';
-        const finish=document.createElement('a'); finish.textContent=metadata.finish; finish.href='\(Self.actionScheme):finish';
+        const finish=document.createElement('a'); finish.textContent=metadata.finish; finish.href='\(Self.finishAction.absoluteString)';
         finish.setAttribute('role','button'); finish.style.display='inline-block'; finish.style.padding='12px 28px'; finish.style.minHeight='44px'; finish.style.boxSizing='border-box';
         finish.style.border='1.5px solid var(--reader-accent)'; finish.style.borderRadius='999px'; finish.style.textDecoration='none';
         finish.style.fontFamily='-apple-system,system-ui,sans-serif'; finish.style.fontWeight='600'; finish.style.fontSize=(17*\(scale))+'px';
@@ -124,7 +129,7 @@ struct ArticleWebView: UIViewRepresentable {
       body.style.color='\(ink)';
       body.style.fontSize='\(scaledFontSize)px';
       body.style.fontFamily='ui-serif,Georgia,serif'; body.style.lineHeight='1.6';
-      body.style.padding='18px max(18px, env(safe-area-inset-right)) 18px max(18px, env(safe-area-inset-left))';
+      body.style.padding='18px';
       body.style.maxWidth='36em'; body.style.margin='auto'; body.style.overflowWrap='break-word';
       [['hyphens','auto'],['-webkit-hyphens','auto'],['text-wrap','pretty'],['hanging-punctuation','first']].forEach(([name,value]) => body.style.setProperty(name,value));
       if (!body.hasAttribute('dir')) body.setAttribute('dir','auto');
@@ -255,8 +260,10 @@ struct ArticleWebView: UIViewRepresentable {
         return
       }
       if action.navigationType == .linkActivated {
-        if target.scheme == ArticleWebView.actionScheme, target.absoluteString.hasSuffix(":finish") {
-          parent.onFinish?()
+        if target.scheme == ArticleWebView.actionScheme {
+          if ArticleWebView.isFinishAction(target, finishShown: parent.header.finishLabel != nil) {
+            parent.onFinish?()
+          }
         } else if ["https", "http"].contains(target.scheme ?? "") {
           UIApplication.shared.open(target)
         }

@@ -214,9 +214,11 @@ import SwiftUI
   func addToCollection(_ item: ReadingItem, name: String) {
     let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !name.isEmpty else { return }
+    // Use the current copy: a sync may have changed collections while the prompt was open.
+    let current = items.first { $0.id == item.id } ?? item
     edit(
-      item,
-      ItemPatch(collections: Array(Set(item.collections + [String(name.prefix(60))])).sorted()))
+      current,
+      ItemPatch(collections: Array(Set(current.collections + [String(name.prefix(60))])).sorted()))
   }
   func download(_ item: ReadingItem) async {
     do {

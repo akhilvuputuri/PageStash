@@ -55,4 +55,12 @@ final class ThemeTokensTests: XCTestCase {
     XCTAssertEqual(ArticleRow.source(item(nil, kind: "brief")), "Agent brief")
     XCTAssertNil(ArticleRow.source(item(nil)))
   }
+  func testOnlyTheShownFinishLinkFinishesReading() {
+    let finish = ArticleWebView.finishAction
+    XCTAssertTrue(ArticleWebView.isFinishAction(finish, finishShown: true))
+    XCTAssertFalse(ArticleWebView.isFinishAction(finish, finishShown: false))
+    for other in ["offline-reader-action:x:finish", "offline-reader-action:finish?again"] {
+      XCTAssertFalse(ArticleWebView.isFinishAction(URL(string: other)!, finishShown: true), other)
+    }
+  }
 }
