@@ -218,6 +218,19 @@ Applied the `ios-design` skill's audit to the Library, reader, theme and sign-in
 
 - Not changed, for the owner to decide: the theme still applies to the whole app and defaults to Light (#33 proposes following the system outside the reader). Not done: reading time and site names (need a backend word count and `og:site_name`), receding bars while reading, optional paging, and shake-to-undo. Not checked: VoiceOver with the screen reader running, Reduce Transparency, the smallest iPhone, and the signed-out sign-in screen.
 
+### Reader 0.3.0 follow-ups, 14 October 2026
+
+The items left open in the 0.3.0 design pass. Checked with the synthetic preview store on the iPhone 17 Pro / iOS 26.3 simulator; no real library or network was used.
+
+- **Theme default (#33).** The owner chose System as the default, so the app follows the iPhone's light/dark setting until someone picks Light, Sepia or Dark. A stored choice is kept, and the theme still applies to the whole app.
+- **Reading time (#30).** When an article's text is installed, the app counts its words from the plain text it already indexes for search; nothing parses HTML while the list draws. Articles downloaded before this update are counted once from the existing index. Rows show "N min" (about 230 words a minute), or "N min left" for partly read articles. Observed: "2 min left" on a 35%-read article.
+- **Site names (#30).** The backend now stores Readability's `siteName` (`og:site_name`) in an additive `items.site_name` column and syncs it. The app shows it in place of the host and falls back to the host when it is missing. **Production needs a manual Northflank deploy** for new saves to carry site names; until then the app keeps showing hosts. Existing articles keep the host unless re-imported.
+- **Receding bars (#32).** Bars hide when reading downward and return when scrolling up, on a tap, and near the top or end of the article. The article runs beneath the bars and is padded by their measured height, so hiding them does not move the text. Observed: the bars hid, the status bar area stayed covered with the page colour, and a tap restored the bars with the text in place. With Reduce Motion on, the bars change without animation (not tested).
+- **Page by Page (#32).** An option in `Aa`. Each swipe moves one screen less one line, so the last line stays in view. Observed: one short swipe advanced a page with overlap.
+- **Shake to undo.** Archive, Move to Library and Done Reading register with the window's undo manager, named after the action. Not exercised: the simulator tool cannot shake.
+- **Sync progress.** Settings → Sync now and the Library's Retry show progress while a sync they started is running. Background sync still shows nothing.
+- **Tests.** Added coverage for word counts (install, backfill, delete), optional `site_name` decoding, reading-time formatting, site-name preference, and position restore across a Dynamic Type change. Local results: 15 native tests, 37 Core tests and 25 backend tests pass.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
