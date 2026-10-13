@@ -231,6 +231,12 @@ The items left open in the 0.3.0 design pass. Checked with the synthetic preview
 - **Sync progress.** Settings → Sync now and the Library's Retry show progress while a sync they started is running. Background sync still shows nothing.
 - **Tests.** Added coverage for word counts (install, backfill, delete), optional `site_name` decoding, reading-time formatting, site-name preference, and position restore across a Dynamic Type change. Local results: 15 native tests, 37 Core tests and 25 backend tests pass.
 
+### Reader 0.3.0 and 0.3.1 shipped, 14 October 2026
+
+- [Reader 0.3.0](https://github.com/akhilvuputuri/offline-reader/releases/tag/v0.3.0) (build 5) was released from `463dc01` (PR #38). [Reader 0.3.1](https://github.com/akhilvuputuri/offline-reader/releases/tag/v0.3.1) (build 6) was released from `7877e6b` (PR #39). CI passed backend, Core, native presentation and compilation checks for both. Each PR had an independent code review before merge; no high-severity findings.
+- Northflank Free manual build `different-cook-9865` deployed `7877e6b` to `reader-api`. The service showed Running, one instance, 1/1 passing health probes and zero restarts. Live `/health` returned 200, anonymous `/v1/library` returned 401, and OAuth protected-resource discovery returned 200. The additive `items.site_name` migration runs before the server listens, so a clean start with passing probes indicates it applied. The only backend change since `89d28a5` is that migration and site-name capture. No production data was reset or deleted.
+- Not yet observed: a newly saved production article carrying a site name, the 0.3.x app on the physical iPhone, and TestFlight distribution.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
