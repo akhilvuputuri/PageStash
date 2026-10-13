@@ -103,7 +103,7 @@ test("extraction captures images locally and flags unavailable ones", async () =
     .png()
     .toBuffer();
   const page =
-    "<html><head><title>Fixture article</title></head><body><article><h1>A test article</h1><p>" +
+    "<html><head><title>Fixture article</title><meta property='og:site_name' content='Example Daily'></head><body><article><h1>A test article</h1><p>" +
     "Readable article content with meaningful sentences. ".repeat(20) +
     '</p><img src="/photo.png"><img src="/missing.png"></article></body></html>';
   const result = await extract("https://example.com/article", async (url) => {
@@ -114,6 +114,7 @@ test("extraction captures images locally and flags unavailable ones", async () =
   });
   assert.equal(result.images.length, 1);
   assert.equal(result.missingImages, 1);
+  assert.equal(result.siteName, "Example Daily");
   assert.match(result.html, /\.webp/);
   assert.doesNotMatch(result.html, /src="https?:/);
 });
@@ -145,6 +146,7 @@ test("durable Markdown import, safe duplicate saves and account isolation", asyn
   const library = await service.library(owner, 0);
   const item = library.items.find((i) => i.id === saved.submission_id)!;
   assert.equal(item.kind, "brief");
+  assert.equal(item.site_name, null, "the additive site_name column syncs, empty for briefs");
   assert.equal(item.assets.length, 1);
   const token = item.assets[0].url.split("/").at(-1)!;
   const download = await service.download(token);

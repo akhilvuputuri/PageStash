@@ -27,6 +27,8 @@ struct ThemeTokens: Equatable {
   let warning: Ink
   let separator: String
   var isDark: Bool { name == "dark" }
+  /// Follow the system light/dark setting unless someone picks a theme.
+  static let defaultAppearance = "system"
   /// Library, Settings and Imports keep the system background unless the theme paints its own page.
   var nativePage: Color { name == "sepia" ? Color(hex: page) : Color(.systemBackground) }
 
@@ -82,7 +84,7 @@ extension EnvironmentValues {
 
 // Apply at each presentation root: sheets own their native appearance.
 struct ReaderTheme: ViewModifier {
-  @AppStorage("appearance") private var appearance = "light"
+  @AppStorage("appearance") private var appearance = ThemeTokens.defaultAppearance
   private var interfaceStyle: UIUserInterfaceStyle {
     switch appearance {
     case "dark": return .dark

@@ -23,6 +23,7 @@ public final class LocalStore: @unchecked Sendable {
     )
     try execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
     try execute("CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED,title,body)")
+    try execute("CREATE TABLE IF NOT EXISTS lengths(id TEXT PRIMARY KEY,words INTEGER NOT NULL)")
     try execute(
       "CREATE TABLE IF NOT EXISTS verified(item TEXT,version INTEGER,asset TEXT,sha256 TEXT,size INTEGER,PRIMARY KEY(item,version,asset))"
     )
@@ -126,6 +127,7 @@ public final class LocalStore: @unchecked Sendable {
       // Delete files after committing tombstones. Late download callbacks check tombstones before writing.
       for item in page.items where item.deleted {
         try? FileManager.default.removeItem(at: root.appendingPathComponent(item.id))
+        try? execute("DELETE FROM lengths WHERE id=?", [item.id])
       }
     }
   }
@@ -156,6 +158,7 @@ public final class LocalStore: @unchecked Sendable {
       if patch.deleted == true {
         try? FileManager.default.removeItem(at: root.appendingPathComponent(id))
         try execute("DELETE FROM search WHERE id=?", [id])
+        try execute("DELETE FROM lengths WHERE id=?", [id])
       }
     }
   }
@@ -314,9 +317,11 @@ public final class LocalStore: @unchecked Sendable {
       if asset.role == "content" {
         try execute("UPDATE items SET installed=? WHERE id=?", [String(version), itemID])
         try execute("DELETE FROM search WHERE id=?", [itemID])
+        let body = try bodyForSearch(itemID)
+        try execute("INSERT INTO search(id,title,body) VALUES(?,?,?)", [itemID, item.title, body])
         try execute(
-          "INSERT INTO search(id,title,body) VALUES(?,?,?)",
-          [itemID, item.title, try bodyForSearch(itemID)])
+          "INSERT OR REPLACE INTO lengths(id,words) VALUES(?,?)",
+          [itemID, String(Self.wordCount(body))])
       }
       if item.assets.allSatisfy({ hasAsset(item, $0) }) {
         // Keep the previous version through partial replacement, then reclaim its storage.
@@ -349,12 +354,49 @@ public final class LocalStore: @unchecked Sendable {
       return complete.isEmpty ? .notDownloaded : .downloading
     }
   }
+  /// Words in a downloaded article's text, for reading-time estimates. Counts are captured when
+  /// content is installed; articles installed before counts existed are filled in from the search index.
+  public func wordCounts() throws -> [String: Int] {
+    try synchronized {
+      let missing = try rows(
+        "SELECT search.id,search.body FROM search LEFT JOIN lengths ON lengths.id=search.id WHERE lengths.id IS NULL AND search.body<>''"
+      )
+      if !missing.isEmpty {
+        // One transaction for the one-time backfill after upgrading.
+        try execute("BEGIN")
+        do {
+          for row in missing where row.count == 2 {
+            try execute(
+              "INSERT OR REPLACE INTO lengths(id,words) VALUES(?,?)",
+              [row[0], String(Self.wordCount(row[1]))])
+          }
+          try execute("COMMIT")
+        } catch {
+          try? execute("ROLLBACK")
+          throw error
+        }
+      }
+      var counts: [String: Int] = [:]
+      for row in try rows("SELECT id,words FROM lengths WHERE words>0") where row.count == 2 {
+        counts[row[0]] = Int(row[1])
+      }
+      return counts
+    }
+  }
+  public static func wordCount(_ text: String) -> Int {
+    var count = 0
+    text.enumerateSubstrings(in: text.startIndex..., options: [.byWords, .substringNotRequired]) {
+      _, _, _, _ in count += 1
+    }
+    return count
+  }
   public func removeDownload(_ id: String) throws {
     try synchronized {
       try? FileManager.default.removeItem(at: root.appendingPathComponent(id))
       try execute("UPDATE items SET installed=0 WHERE id=?", [id])
       try execute("DELETE FROM verified WHERE item=?", [id])
       try execute("DELETE FROM search WHERE id=?", [id])
+      try execute("DELETE FROM lengths WHERE id=?", [id])
       if let item = try item(id) {
         try execute("INSERT INTO search(id,title,body) VALUES(?,?,'')", [id, item.title])
       }

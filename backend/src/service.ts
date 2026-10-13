@@ -53,6 +53,7 @@ export interface Item {
   error: string | null;
   source_url: string | null;
   author: string | null;
+  site_name?: string | null;
   sources: string[];
   captured_at: Date;
   content_version: number;
@@ -544,7 +545,7 @@ export class Service {
       const published = await this.db.query(
         `WITH claimed AS (DELETE FROM jobs j WHERE j.id=$1 AND lease_token=$2 AND EXISTS(SELECT 1 FROM items WHERE id=j.id AND deleted=false) RETURNING id), inserted AS (
     INSERT INTO assets(id,item_id,role,mime,size,sha256,filename,storage_key) SELECT a.id,c.id,a.role,a.mime,a.size,a.sha256,a.filename,a.storage_key FROM jsonb_to_recordset($3::jsonb) AS a(id uuid,role text,mime text,size integer,sha256 text,filename text,storage_key text) CROSS JOIN claimed c RETURNING id)
-    UPDATE items SET status='ready',title=$4,author=$5,error=$6,content_version=content_version+1,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) RETURNING id`,
+    UPDATE items SET status='ready',title=$4,author=$5,error=$6,site_name=$7,content_version=content_version+1,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) RETURNING id`,
         [
           row.id,
           lease,
@@ -554,6 +555,7 @@ export class Service {
           prepared.missingImages
             ? `${prepared.missingImages} source images unavailable.`
             : null,
+          prepared.siteName ?? null,
         ],
       );
       if (!published.rows.length) await this.files.remove(uploaded);

@@ -9,6 +9,8 @@ import SwiftUI
   @Published var message: String?
   @Published var refreshing = false
   @Published var readingUndo: ReadingUndo?
+  /// Word counts of downloaded articles, for reading-time estimates in the Library.
+  @Published var wordCounts: [String: Int] = [:]
   @Published var sharedSaves: [SharedSave] = []
   @Published var sharingMessage: String?
   private var shareStore: SharedSaveStore?
@@ -95,6 +97,7 @@ import SwiftUI
     do {
       items = try store?.items() ?? []
       readingUndo = try store?.readingUndo()
+      wordCounts = try store?.wordCounts() ?? [:]
       if let shareStore = self.shareStore, let credentials = ShareVault.load() {
         sharedSaves = try shareStore.records(credentials.account)
       }

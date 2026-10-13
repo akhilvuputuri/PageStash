@@ -54,6 +54,19 @@ final class ThemeTokensTests: XCTestCase {
     XCTAssertEqual(ArticleRow.source(item("https://news.example.org/a")), "news.example.org")
     XCTAssertEqual(ArticleRow.source(item(nil, kind: "brief")), "Agent brief")
     XCTAssertNil(ArticleRow.source(item(nil)))
+    let named = ReadingItem(
+      id: "2", title: "Synthetic", sourceUrl: "https://www.example.com/a", siteName: " Example Daily ",
+      assets: [])
+    XCTAssertEqual(ArticleRow.source(named), "Example Daily")
+  }
+  func testReadingTimeRoundsAndShowsTimeLeft() {
+    XCTAssertNil(ArticleRow.readingTime(words: nil, position: 0))
+    XCTAssertNil(ArticleRow.readingTime(words: 0, position: 0))
+    XCTAssertEqual(ArticleRow.readingTime(words: 40, position: 0), "1 min")
+    XCTAssertEqual(ArticleRow.readingTime(words: 2300, position: 0), "10 min")
+    XCTAssertEqual(ArticleRow.readingTime(words: 2300, position: 0.35), "7 min left")
+    XCTAssertEqual(ArticleRow.readingTime(words: 2300, position: 0.99), "1 min left")
+    XCTAssertEqual(ArticleRow.readingTime(words: 2300, position: 1), "10 min")
   }
   func testOnlyTheShownFinishLinkFinishesReading() {
     let finish = ArticleWebView.finishAction
