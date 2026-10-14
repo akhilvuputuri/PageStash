@@ -284,6 +284,12 @@ Checks used the synthetic preview store on the iPhone 17 Pro and the iPhone 16e 
   - The compiled assets contain the dark and tinted renditions. The simulator Home Screen kept the light icon in dark mode, because the Home Screen icon style is a separate setting the tooling could not switch; check it on the device.
 - **Tests.** 25 backend, 37 Core and 18 native tests and the unsigned device build pass. The bundle shows PageStash 0.4.0 (build 8).
 
+### Saved-article metadata for assistants (opt-in), 15 October 2026
+
+- **Change.** The owner asked for Chief's news bulletin to learn from what they save, including Safari saves. A new per-connection `interests` grant, off by default and switchable only from the app, lets an agent call `list_saved_articles` (MCP) or `GET /v1/interests/saved`. These return title, link, site and save time of non-deleted articles, newest first, keyset-paged with a microsecond-exact cursor. Briefs, content, collections and reading state are never returned. Settings → Assistant connections shows a **Share saved-article titles** switch per connection. Revoking a connection deletes its grant. OAuth scopes are unchanged; the app switch is the authorization.
+- **Tested.** 26 backend tests pass, including the new test: refused before opt-in; an agent cannot grant itself (403); unknown connection 404; complete newest-first paging across sub-millisecond timestamps; brief excluded; HTTP fallback; other connections still refused; the grant is removed on revocation. Discovery now lists four tools. The unsigned simulator build passes.
+- **Not yet done.** Independent review, merge, Northflank deploy, an app build carrying the switch, and owner acceptance with Chief's connection. The `ios-design` verification matrix (Dynamic Type, dark/Sepia, VoiceOver) has not been run for the new switch.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
