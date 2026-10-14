@@ -33,7 +33,7 @@ let stopping = false;
 await app.listen({ host: config.host, port: config.port });
 worker.start();
 console.log(
-  `Offline Reader backend listening on ${config.host}:${config.port}`,
+  `PageStash backend listening on ${config.host}:${config.port}`,
 );
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, async () => {

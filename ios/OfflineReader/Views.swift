@@ -26,13 +26,17 @@ struct LoginView: View {
   @State private var busy = false
   @State private var showAdvanced = false
   @ScaledMetric(relativeTo: .largeTitle) private var headlineSize = 38
-  @ScaledMetric(relativeTo: .largeTitle) private var iconSize = 44
+  @ScaledMetric(relativeTo: .largeTitle) private var iconSize = 56
   var body: some View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 24) {
-          Image(systemName: "book.closed.fill").font(.system(size: iconSize)).foregroundStyle(.tint)
-            .padding(.top, 50).accessibilityHidden(true)
+          HStack(spacing: 12) {
+            Image("BrandMark").resizable().scaledToFit().frame(width: iconSize, height: iconSize)
+              .accessibilityHidden(true)
+            Text("PageStash").font(.title2.weight(.semibold))
+          }
+          .padding(.top, 50).accessibilityElement(children: .combine)
           Text("A quieter place\nto read.").font(
             .system(size: headlineSize, weight: .medium, design: .serif))
           Text("Save articles and reading briefs. Take them offline.")

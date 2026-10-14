@@ -1,4 +1,6 @@
-# Offline Reader
+# PageStash
+
+PageStash (formerly Offline Reader; the repository, bundle identifiers and `offlinereader://` links keep the original name).
 
 A private iPhone reading library that accepts articles and agent-prepared briefs, downloads text and images in the background, and opens local content without internet.
 
