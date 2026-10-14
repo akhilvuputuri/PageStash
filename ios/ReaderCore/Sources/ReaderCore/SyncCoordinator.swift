@@ -39,3 +39,29 @@ import Foundation
     current = nil
   }
 }
+
+extension SyncCoordinator {
+  public enum RejectedEdit: Equatable, Sendable {
+    /// The item no longer exists on the server (for example, purged from Trash): drop the edit.
+    case discard
+    /// The server refused this edit (for example, an older server without a new field): keep it
+    /// for a later sync, but still pull the library.
+    case keepForLater
+    /// No response or a server error: stop and retry the whole sync later.
+    case retryWholeSync
+  }
+  /// The backend's message when an edited item no longer exists.
+  nonisolated public static let missingItemMessage = "Item not found."
+  /// Only the backend's own "item not found" discards an edit; any other 404 (a proxy or a wrong
+  /// base path) keeps it, so a misconfiguration can't silently drop every pending edit.
+  nonisolated public static func disposition(
+    ofRejectedEdit status: Int?, message: String? = nil
+  ) -> RejectedEdit {
+    guard let status else { return .retryWholeSync }
+    if status == 404 { return message == missingItemMessage ? .discard : .keepForLater }
+    if (400..<500).contains(status) && status != 401 && status != 408 && status != 429 {
+      return .keepForLater
+    }
+    return .retryWholeSync
+  }
+}

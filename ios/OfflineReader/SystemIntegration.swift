@@ -17,7 +17,9 @@ import WidgetKit
   /// The article to resume: the last one opened if it is still unfinished in the Library,
   /// otherwise the most recently saved partly read article.
   static func continueItem(_ items: [ReadingItem]) -> ReadingItem? {
-    let unfinished = items.filter { $0.hasPreparedContent && !$0.archived && $0.progress < 1 }
+    let unfinished = items.filter {
+      $0.hasPreparedContent && !$0.archived && !$0.isTrashed && $0.progress < 1
+    }
     if let id = UserDefaults.standard.string(forKey: lastOpenedKey),
       let item = unfinished.first(where: { $0.id == id })
     {
@@ -56,7 +58,8 @@ import WidgetKit
   /// Saved articles appear in Spotlight by title, source and author. Only what is on this device
   /// is indexed, and nothing leaves it.
   private static func index(_ items: [ReadingItem]) {
-    let visible = items.filter(\.hasPreparedContent)
+    // Trashed items leave Spotlight until they are restored.
+    let visible = items.filter { $0.hasPreparedContent && !$0.isTrashed }
     let stable = stableSignature(visible)
     let defaults = UserDefaults.standard
     guard stable != defaults.string(forKey: signatureKey) else { return }

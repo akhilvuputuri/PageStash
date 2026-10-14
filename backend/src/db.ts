@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
 );
 -- Additive: the publisher's site name for quiet Library metadata.
 ALTER TABLE items ADD COLUMN IF NOT EXISTS site_name text;
+-- Additive: when an item was moved to Trash, or null when it is not in Trash.
+ALTER TABLE items ADD COLUMN IF NOT EXISTS trashed_at timestamptz;
 INSERT INTO schema_version(version) VALUES(1) ON CONFLICT DO NOTHING;
 -- Additive: per-connection opt-in grants beyond save/status. The owner turns
 -- "interests" on in the app. It is keyed by connection so OAuth token refresh

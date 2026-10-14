@@ -54,6 +54,7 @@ export interface Item {
   source_url: string | null;
   author: string | null;
   site_name?: string | null;
+  trashed_at?: Date | string | null;
   sources: string[];
   captured_at: Date;
   content_version: number;
@@ -306,6 +307,13 @@ export class Service {
         row.status = String(current.status);
       }
     }
+    // A new save of the same link brings it back from Trash. A retry of an earlier request (same
+    // idempotency key) is a replay and changes nothing.
+    if (visible && !row.matched_key && url !== null && url === row.normalized_url)
+      await this.db.query(
+        "UPDATE items SET trashed_at=NULL,revision=nextval('library_revision') WHERE id=$1 AND owner_id=$2 AND trashed_at IS NOT NULL AND deleted=false",
+        [row.id, identity.owner_id],
+      );
     // A limited connection never gains access to another connection's receipt.
     if (!visible)
       return { submission_id: null, status: "already_saved", duplicate: true };
@@ -391,7 +399,7 @@ export class Service {
       // session's DateStyle and time zone, so paging is exact.
       `SELECT id,title,status,source_url,site_name,captured_at,
        to_char(captured_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at FROM items
-       WHERE owner_id=$1 AND kind='article' AND deleted=false AND source_url IS NOT NULL
+       WHERE owner_id=$1 AND kind='article' AND deleted=false AND trashed_at IS NULL AND source_url IS NOT NULL
        AND ($2::timestamptz IS NULL OR (captured_at,id) < ($2::timestamptz,$3::uuid))
        AND ($4::timestamptz IS NULL OR captured_at >= $4::timestamptz)
        ORDER BY captured_at DESC,id DESC LIMIT $5`,
@@ -489,11 +497,13 @@ export class Service {
       archived?: boolean;
       collections?: string[];
       deleted?: boolean;
+      trashed?: boolean;
     },
   ) {
     this.app(identity);
+    // Moving to Trash keeps the first time it was trashed; restoring clears it.
     const result = await this.db.query(
-      `UPDATE items SET progress=COALESCE($3,progress),archived=COALESCE($4,archived),collections=COALESCE($5::jsonb,collections),deleted=COALESCE($6,deleted),revision=nextval('library_revision') WHERE id=$1 AND owner_id=$2 AND deleted=false RETURNING id`,
+      `UPDATE items SET progress=COALESCE($3,progress),archived=COALESCE($4,archived),collections=COALESCE($5::jsonb,collections),deleted=COALESCE($6,deleted),trashed_at=CASE WHEN $7::boolean IS NULL THEN trashed_at WHEN $7 THEN COALESCE(trashed_at,now()) ELSE NULL END,revision=nextval('library_revision') WHERE id=$1 AND owner_id=$2 AND deleted=false RETURNING id`,
       [
         id,
         identity.owner_id,
@@ -501,6 +511,7 @@ export class Service {
         patch.archived ?? null,
         patch.collections ? JSON.stringify(patch.collections) : null,
         patch.deleted ?? null,
+        patch.trashed ?? null,
       ],
     );
     if (!result.rows.length) {
@@ -511,15 +522,27 @@ export class Service {
       if (!tombstone.rows.length || patch.deleted !== true)
         throw new HTTPError(404, "Item not found.");
     }
-    if (patch.deleted) {
-      const keys = await this.db.query<{ storage_key: string }>(
-        "SELECT storage_key FROM assets WHERE item_id=$1",
-        [id],
-      );
-      await this.files.remove(keys.rows.map((r) => r.storage_key));
-      await this.db.query("DELETE FROM assets WHERE item_id=$1", [id]);
-      await this.db.query("DELETE FROM jobs WHERE id=$1", [id]);
-    }
+    if (patch.deleted) await this.removeContent(id);
+  }
+  private async removeContent(id: string) {
+    const keys = await this.db.query<{ storage_key: string }>(
+      "SELECT storage_key FROM assets WHERE item_id=$1",
+      [id],
+    );
+    await this.files.remove(keys.rows.map((r) => r.storage_key));
+    await this.db.query("DELETE FROM assets WHERE item_id=$1", [id]);
+    await this.db.query("DELETE FROM jobs WHERE id=$1", [id]);
+  }
+  /** Permanently deletes items that have been in Trash longer than `days`. */
+  async purgeTrash(days = 30) {
+    const expired = await this.db.query<{ id: string }>(
+      `UPDATE items SET deleted=true,revision=nextval('library_revision')
+       WHERE deleted=false AND trashed_at IS NOT NULL AND trashed_at < now() - ($1::int * interval '1 day')
+       RETURNING id`,
+      [days],
+    );
+    for (const row of expired.rows) await this.removeContent(row.id);
+    return expired.rows.length;
   }
   async download(token: string) {
     const result = await this.db.query<Asset>(

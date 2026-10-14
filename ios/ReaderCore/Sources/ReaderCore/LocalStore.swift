@@ -141,7 +141,8 @@ public final class LocalStore: @unchecked Sendable {
       }
       try execute("BEGIN IMMEDIATE")
       do {
-        if patch.progress != nil || patch.archived != nil || patch.deleted == true,
+        if patch.progress != nil || patch.archived != nil || patch.deleted == true
+          || patch.trashed == true,
           let undo = try storedReadingUndo(), undo.itemId == id
         {
           try execute("DELETE FROM meta WHERE key='readingUndo'")

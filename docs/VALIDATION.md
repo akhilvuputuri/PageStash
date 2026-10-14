@@ -284,6 +284,43 @@ Checks used the synthetic preview store on the iPhone 17 Pro and the iPhone 16e 
   - The compiled assets contain the dark and tinted renditions. The simulator Home Screen kept the light icon in dark mode, because the Home Screen icon style is a separate setting the tooling could not switch; check it on the device.
 - **Tests.** 25 backend, 37 Core and 18 native tests and the unsigned device build pass. The bundle shows PageStash 0.4.0 (build 8).
 
+### PageStash 0.4.0 shipped, 15 October 2026
+
+- PR #42 conflicted with #43 at first merge. An automation step then published a v0.4.0 release on `6d1d5c5` (without PageStash) and closed #34. Both were reverted within minutes: the release and tag were deleted and #34 was reopened.
+- The branch merged `main` and dropped agent commit trailers per AGENTS.md. The independent re-review approved `f735854`. CI passed on it. It was merged with `--match-head-commit` as `ce18a89`, with an identical tree.
+- [v0.4.0](https://github.com/akhilvuputuri/PageStash/releases/tag/v0.4.0) is tagged on `ce18a89`. #34 is closed.
+- **Backend (tested).** Northflank build `deluxe-support-9320` deployed `ce18a89` to `reader-api`: Running, 1/1 passing probes, 0 restarts. Live `/health` returned 200, anonymous `/v1/library` 401, and OAuth discovery 200. This deploy also brings the 0.3.2 article language tags and the PageStash consent page.
+- **iPhone (tested).** A signed Release build of `32bbd6a` (app code identical to `ce18a89`) was installed and launched on the owner's iPhone 17 as PageStash 0.4.0 (8), with the widget extension provisioned.
+- **Deferred:** dark and tinted Home Screen icons on the device, and the sign-in header at accessibility sizes.
+
+### Trash, app-wide theme and Settings button, 15 October 2026
+
+Requested by the owner after using 0.4.0 on the iPhone.
+
+- **App-wide theme.** The chosen theme (Light, Sepia, Dark or System; default System) again applies to the Library, Settings, sheets and the reader, replacing the reader-only scope from #41. Settings → Appearance says so. Tested: synthetic preview, Sepia applied to the Library and Settings. The updated `SettingsThemeTests` assert that Settings follows each theme.
+- **Settings button.** A gear at the top left of the Library; Settings left the ⋯ menu. Tested: synthetic preview.
+- **Trash.**
+  - Delete in the Library, Archive and Imports now moves an item to Trash, a separate screen from Archive (⋯ → Trash, with a count). It shows "Moved to Trash · Undo" and supports shake to undo. No confirmation, because it is reversible.
+  - In Trash, items can be restored (button, swipe or menu) or deleted permanently (confirmed), and Empty Trash is confirmed. Items are purged after 30 days by the server's hourly cleanup.
+  - Saving a trashed link again restores it.
+  - Trashed items leave Spotlight and Continue Reading, are not auto-downloaded, and keep their existing download until purged.
+  - Backend: additive `items.trashed_at` column and a `trashed` patch field.
+- **Tests.** Tested: moving to Trash with Undo, restoring from Trash, and the Undo bar clearing after a restore elsewhere. Tests: 26 backend (new: trash, restore, re-save restore, 30-day purge), 39 Core (new: trash survives refresh, server trash time decodes) and 18 native, plus the backend build and audit, unsigned device and simulator builds, and the icon checks.
+- **Deferred.**
+  - The 30-day purge on production (needs the backend deploy).
+  - Trash on the physical iPhone.
+- **Review of `36bc832`.** APPROVE, with four findings fixed in the next commit:
+  - **Rejected edits (Medium).** A rejected edit no longer stops a device's sync. A 404 whose body is the backend's "Item not found.", for example an item purged from Trash, drops the edit. Other 4xx responses, including other 404s, keep the edit but still pull the library; they record an `edit_rejected` diagnostic and show a message when the sync run finishes. Every caller that shared that run shows the same result. The message reappears on later syncs while the edit is still rejected. Known limit: if a full-manifest rerun starts before an earlier caller reads the result, the message can wait until the next sync. The sync loop and message handling have no automated test. A unit test covers the status mapping; the sync loop itself is untested.
+  - **Collections** are capped at 20 per article in the app, matching the server, so that path can't be rejected.
+  - **Replays.** A retried save with the same idempotency key no longer restores an item from Trash.
+  - **Delete Permanently** re-checks that the item is still in Trash.
+  - **New tests:** replay, a limited connection, the purge leaving items not in Trash untouched, and an edit for a purged item being rejected.
+- **Re-review of `e22a274`.** APPROVE. Its non-blocking notes are handled in the next commit: the 404 body check, the collections cap, the diagnostic and message for rejected edits, and this wording.
+- **Re-review of `84e7f07`.** REQUEST CHANGES: the rejected-edit message was cleared when the sync finished. Fixed in the next commit by showing it after the sync. The same commit uses specific diagnostic key names, compares the truncated collection name for the cap, and marks the message constant `nonisolated`.
+- **Re-review of `ed7236b`.** REQUEST CHANGES: overlapping or joined syncs could still erase the message. Fixed in the next commit: the text is reset when a run starts (inside the coordinator's operation) and is no longer cleared after reading.
+- **Release order (required).** Deploy and verify the backend before installing this app build. Otherwise an older server rejects `trashed` edits, which are then kept until the server supports them.
+- **Records from #42.** The re-review approved `f735854`. Its non-blocking notes are handled here: the `AGENTS.md` title and icon check, and the icon file destinations in `design/icon-layers/README.md`. The stacked sign-in header at accessibility sizes remains untested, because the iPhone 16e simulator hung.
+
 ### Saved-article metadata for assistants (opt-in), 15 October 2026
 
 - **Change.** The owner asked for Chief's news bulletin to learn from what they save, including Safari saves. A new per-connection `interests` grant, off by default and switchable only from the app, lets an agent call `list_saved_articles` (MCP) or `GET /v1/interests/saved`. These return title, link, site and save time of non-deleted articles, newest first, keyset-paged with a microsecond-exact cursor. Briefs, content, collections and reading state are never returned. Settings → Assistant connections shows a **Share saved-article titles** switch per connection. Revoking a connection deletes its grant. OAuth scopes are unchanged; the app switch is the authorization.
@@ -298,7 +335,8 @@ Checks used the synthetic preview store on the iPhone 17 Pro and the iPhone 16e 
   - The footnote mentions save times and shows only when there are connections.
   - The README, integrations checklist and OAuth consent copy are updated.
   - Not changed: links are returned with their query strings (disclosed in the copy and adapter doc), and the calling agent's own saves are included (intended: they are owner-requested saves).
-- **Not yet done.** Re-review of the fixes, merge, Northflank deploy, an app build carrying the switch, and owner acceptance with Chief's connection. The `ios-design` verification matrix (Dynamic Type, dark/Sepia, VoiceOver) has not been run for the new switch.
+- **Merged with main (Trash, #45).** The listing now also excludes items in Trash; a test trashes and restores one. Round 2 re-review approved `df3af43` before this merge.
+- **Not yet done.** Re-review of the merge, merge, Northflank deploy, an app build carrying the switch, and owner acceptance with Chief's connection. The `ios-design` verification matrix (Dynamic Type, dark/Sepia, VoiceOver) has not been run for the new switch.
 
 ## Not yet tested
 

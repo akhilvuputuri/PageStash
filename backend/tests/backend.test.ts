@@ -483,6 +483,19 @@ test("saved-article metadata needs the owner's per-connection opt-in", async () 
       .interests,
     true,
   );
+  await db.query(
+    "UPDATE items SET trashed_at=now() WHERE owner_id=$1 AND title='Interest 2'",
+    [owner.owner_id],
+  );
+  assert.ok(
+    !(await service.savedArticles(reader, { limit: 200 })).articles.some(
+      (a) => a.title === "Interest 2",
+    ),
+  );
+  await db.query(
+    "UPDATE items SET trashed_at=NULL WHERE owner_id=$1 AND title='Interest 2'",
+    [owner.owner_id],
+  );
   const seen: string[] = [];
   let before: string | undefined;
   for (;;) {
@@ -499,7 +512,8 @@ test("saved-article metadata needs the owner's per-connection opt-in", async () 
     if (!page.next) break;
     before = page.next;
   }
-  // Newest first, every article exactly once, briefs excluded.
+  // Newest first, every article exactly once, briefs excluded. A trashed
+  // article is not an interest; restoring it brings it back.
   assert.deepEqual(seen, ["Interest 4", "Interest 3", "Interest 2", "Interest 1", "Interest 0"]);
   const http = await app.inject({
     method: "GET",
@@ -589,4 +603,73 @@ test("account deletion purges orphan files and invalidates credentials", async (
   assert.equal([...files.keys()].some(k=>k.startsWith(other.owner_id+'/')),false);
   await assert.rejects(()=>service.authenticate(credential.token));
   assert.equal((await db.query('SELECT id FROM items WHERE id=$1',[saved.submission_id])).rows.length,0);
+});
+test("Trash keeps items restorable, a re-save restores them, and old trash is purged", async () => {
+  const brief = await service.save(agent, {
+    title: "A brief for the trash",
+    markdown: "# Trash\nPrepared text for the trash test",
+    idempotency_key: randomUUID(),
+  });
+  assert.equal(await service.runOne(), true);
+  const id = brief.submission_id!;
+  const find = async () =>
+    (await service.library(owner, 0)).items.find((i) => i.id === id)!;
+  await service.update(owner, id, { trashed: true });
+  const trashed = await find();
+  assert.ok(trashed.trashed_at, "trashed items sync with their trash time");
+  assert.equal(trashed.deleted, false);
+  assert.equal(trashed.assets.length, 1, "content stays until the item is purged");
+  await service.update(owner, id, { trashed: false });
+  assert.equal((await find()).trashed_at, null);
+
+  const url = "https://example.com/trash-resave";
+  const first = await service.save(owner, { url, idempotency_key: randomUUID() });
+  await service.update(owner, first.submission_id!, { trashed: true });
+  const again = await service.save(owner, { url, idempotency_key: randomUUID() });
+  assert.equal(again.submission_id, first.submission_id);
+  const restored = (await service.library(owner, 0)).items.find(
+    (i) => i.id === first.submission_id,
+  )!;
+  assert.equal(restored.trashed_at, null, "saving the link again restores it from Trash");
+
+  // A replay of the original request (same idempotency key) is not a new save.
+  const key = randomUUID();
+  const original = await service.save(owner, { url: url + "-replay", idempotency_key: key });
+  await service.update(owner, original.submission_id!, { trashed: true });
+  await service.save(owner, { url: url + "-replay", idempotency_key: key });
+  const replayed = (await service.library(owner, 0)).items.find(
+    (i) => i.id === original.submission_id,
+  )!;
+  assert.ok(replayed.trashed_at, "an idempotent retry leaves the item in Trash");
+
+  // Another connection saving the same link cannot see or restore the owner's trashed item.
+  const shared = await service.save(agent, { url: url + "-agent", idempotency_key: randomUUID() });
+  await service.update(owner, shared.submission_id!, { trashed: true });
+  const fromOther = await service.save(otherAgent, {
+    url: url + "-agent",
+    idempotency_key: randomUUID(),
+  });
+  assert.equal(fromOther.submission_id, null);
+  const stillTrashed = (await service.library(owner, 0)).items.find(
+    (i) => i.id === shared.submission_id,
+  )!;
+  assert.ok(stillTrashed.trashed_at, "a limited connection cannot restore another's item");
+
+  await service.update(owner, id, { trashed: true });
+  assert.equal(await service.purgeTrash(30), 0, "recent trash is kept");
+  await db.query(
+    "UPDATE items SET captured_at=now()-interval '90 days' WHERE id=$1",
+    [first.submission_id],
+  );
+  await db.query("UPDATE items SET trashed_at=now()-interval '31 days' WHERE id=$1", [id]);
+  assert.equal(await service.purgeTrash(30), 1);
+  const purged = await find();
+  assert.equal(purged.deleted, true);
+  assert.equal(purged.assets.length, 0);
+  const untouched = (await service.library(owner, 0)).items.find(
+    (i) => i.id === first.submission_id,
+  )!;
+  assert.equal(untouched.deleted, false, "old items that aren't in Trash are never purged");
+  // An edit for a purged item is rejected, which the app treats as "drop the edit".
+  await assert.rejects(() => service.update(owner, id, { trashed: false }), /not found/);
 });

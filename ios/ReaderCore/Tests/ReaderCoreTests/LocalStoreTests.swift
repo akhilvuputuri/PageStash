@@ -59,6 +59,32 @@ final class LocalStoreTests: XCTestCase {
     try store.edit(item.id, ItemPatch(deleted: true))
     XCTAssertNil(try store.wordCounts()[item.id])
   }
+  func testTrashSurvivesRefreshAndRestoreKeepsTheDownload() throws {
+    let html = Data("<p>Kept while in Trash</p>".utf8)
+    let content = asset(html)
+    let item = ReadingItem(id: UUID().uuidString, title: "Trashable", assets: [content])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [item], cursor: 1))
+    try install(html, asset: content, item: item, store: store)
+    try store.edit(item.id, ItemPatch(trashed: true))
+    XCTAssertTrue(try store.item(item.id)?.isTrashed == true)
+    // A refresh from the server, before it has the edit, must not bring the item back.
+    try store.apply(LibraryPage(items: [item], cursor: 2))
+    XCTAssertTrue(try store.item(item.id)?.isTrashed == true)
+    XCTAssertEqual(try store.pendingEdits().first?.patch.trashed, true)
+    XCTAssertNotNil(try store.readerURL(item.id), "Trash keeps the download for a quick restore")
+    try store.edit(item.id, ItemPatch(trashed: false))
+    XCTAssertFalse(try store.item(item.id)?.isTrashed == true)
+    XCTAssertEqual(try store.pendingEdits().first?.patch.trashed, false)
+  }
+  func testServerTrashTimeDecodes() throws {
+    let json = Data(
+      #"{"id":"a","title":"T","kind":"article","status":"ready","sources":[],"captured_at":"","content_version":1,"progress":0,"collections":[],"archived":false,"deleted":false,"trashed_at":"2026-10-15T01:02:03.000Z","revision":1,"assets":[]}"#
+        .utf8)
+    let decoded = try Wire.decoder().decode(ReadingItem.self, from: json)
+    XCTAssertTrue(decoded.isTrashed)
+    XCTAssertFalse(decoded.needsImportReview)
+  }
   func testSiteNameIsOptionalOnTheWire() throws {
     let json = Data(
       #"{"id":"a","title":"T","kind":"article","status":"ready","sources":[],"captured_at":"","content_version":1,"progress":0,"collections":[],"archived":false,"deleted":false,"revision":1,"assets":[]}"#
