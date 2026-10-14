@@ -11,7 +11,7 @@
 ## 2. Northflank Free
 
 1. Sign in to Northflank and create a **free/Sandbox** project named `offline-reader`. If free provisioning requires card verification, complete that yourself and check that the resource summary stays at $0. Do not upgrade to paid compute.
-2. Connect GitHub with access limited to `akhilvuputuri/offline-reader`. This is a separate grant from the earlier Render installation.
+2. Connect GitHub with access limited to `akhilvuputuri/PageStash` (renamed from `offline-reader` on 15 October 2026). This is a separate grant from the earlier Render installation.
 3. Create one **combined build and deployment service** from `main`, using Dockerfile `backend/Dockerfile` and build context `backend`. Do not add a database or a separate worker: PostgreSQL remains on Supabase and the import worker runs inside this same service.
 4. Select an eligible free compute size. The initial target is at least 512 MB RAM and one replica. Prefer a nearby region when the free tier permits it. Confirm the service does not sleep and there is no paid resource in the project summary.
 5. Expose HTTP container port **8787** using Northflank's generated HTTPS endpoint. Configure an HTTP readiness check on `/health` at that port, with enough initial delay for first-run migrations. Use manual deployments during the personal beta.
