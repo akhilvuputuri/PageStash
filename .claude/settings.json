@@ -4,11 +4,12 @@
       "source": {
         "source": "github",
         "repo": "akhilvuputuri/a-stack",
-        "ref": "ios-design--v0.1.0"
+        "ref": "workflow--v0.1.1"
       }
     }
   },
   "enabledPlugins": {
+    "workflow@a-stack": true,
     "ios-design@a-stack": true
   }
 }
