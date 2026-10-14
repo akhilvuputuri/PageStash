@@ -263,6 +263,17 @@ Checks used the synthetic preview store on the iPhone 17 Pro and the iPhone 16e 
 - `.codex/config.toml` enables both plugins for Codex.
 - Documentation and configuration only. No app, backend or deployment change. Plugin loading in a trusted Claude Code session and in Codex is not yet observed in this repository.
 
+### PageStash name and icon (#34), 14 October 2026
+
+- **Name.** The owner chose **PageStash**. In exact US App Store title searches, nothing used it. A web product called PageStash exists at pagestash.app (web clipping and archiving), and pagestash.com is registered. The owner accepted that for differentiation. No trademark search was done.
+- **What was renamed.** The home-screen name, Share Extension, widget, in-app messages and the OAuth connect page now say PageStash. Bundle identifiers, the project and the `offlinereader://` links keep the original name, so signing, installs and integrations are unaffected.
+- **Icon.** Two cream pages tucked into a sleeve, on terracotta, with light, dark and tinted variants in the asset catalog. All three pass `check-icon.swift` in CI.
+  - The separate layers are in `design/icon-layers/` for an Icon Composer `.icon` once CI uses Xcode 26; Xcode 16.4 cannot compile `.icon` files.
+  - The sign-in screen shows the mark as a rounded tile beside the name.
+  - Observed: the PageStash icon and name on the simulator Home Screen.
+  - The compiled assets contain the dark and tinted renditions. The simulator Home Screen kept the light icon in dark mode, because the Home Screen icon style is a separate setting the tooling could not switch; check it on the device.
+- **Tests.** 25 backend, 37 Core and 18 native tests and the unsigned device build pass. The bundle shows PageStash 0.4.0 (build 8).
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.

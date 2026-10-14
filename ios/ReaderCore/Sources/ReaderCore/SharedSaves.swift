@@ -43,7 +43,7 @@ public enum ShareError: Error, LocalizedError {
     case .changedAccount:
       return "The sign-in or destination changed. Share again with the current account."
     case .authenticationRequired:
-      return "Sign in again in Offline Reader before sending shared links."
+      return "Sign in again in PageStash before sending shared links."
     }
   }
 }

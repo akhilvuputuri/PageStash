@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check app icon artwork
-        run: swift scripts/check-icon.swift ios/OfflineReader/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+        run: for icon in ios/OfflineReader/Assets.xcassets/AppIcon.appiconset/AppIcon*.png; do swift scripts/check-icon.swift "$icon"; done
       - name: Test local storage
         working-directory: ios/ReaderCore
         run: swift test

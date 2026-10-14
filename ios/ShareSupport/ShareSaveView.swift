@@ -33,7 +33,7 @@ import UniformTypeIdentifiers
     do {
       credentials = credentialSource()
       guard let credentials else {
-        message = "Open Offline Reader and sign in before sharing."
+        message = "Open PageStash and sign in before sharing."
         loading = false
         return
       }
@@ -124,13 +124,13 @@ import UniformTypeIdentifiers
           record?.serverStatus == "already_saved"
           ? "A matching request exists. Preparation and offline availability are unverified; check the app."
           : record?.serverStatus == "bookmark"
-            ? "Preparation failed. Check Imports in Offline Reader."
+            ? "Preparation failed. Check Imports in PageStash."
             : record?.serverStatus == "ready"
-              ? "Prepared on the server. Open Offline Reader to download it."
+              ? "Prepared on the server. Open PageStash to download it."
               : "Submitted for preparation. This does not mean downloaded on your phone."
       case .authenticationRequired: message = ShareError.authenticationRequired.localizedDescription
       case .rejected: message = record?.error ?? "The request could not be accepted."
-      default: message = "Queued on this device. Open Offline Reader when online to submit."
+      default: message = "Queued on this device. Open PageStash when online to submit."
       }
     } catch { message = error.localizedDescription }
   }
@@ -142,7 +142,7 @@ struct ShareSaveView: View {
     NavigationStack {
       Form {
         Section("Destination") {
-          Text("Offline Reader").font(.headline)
+          Text("PageStash").font(.headline)
           if let destination = model.destination {
             Text(destination).font(.caption).foregroundStyle(.secondary)
           }
