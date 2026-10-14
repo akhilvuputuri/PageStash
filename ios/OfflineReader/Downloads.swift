@@ -80,7 +80,7 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
         return sum + Int64(transfer.asset.size)
       }
     for item in items
-    where !item.deleted && item.status == "ready"
+    where !item.deleted && !item.isTrashed && item.status == "ready"
       && ((!item.archived && item.progress < 1 && !currentStore.isPaused(item.id))
         || manual.contains(item.id))
     {

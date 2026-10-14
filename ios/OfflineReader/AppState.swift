@@ -29,7 +29,9 @@ import SwiftUI
       pendingOpen = nil
       return
     }
-    guard items.contains(where: { $0.id == pending.id && $0.hasPreparedContent }) else { return }
+    guard
+      items.contains(where: { $0.id == pending.id && $0.hasPreparedContent && !$0.isTrashed })
+    else { return }
     pendingOpen = nil
     openRequest = ReaderRoute(id: pending.id)
   }
