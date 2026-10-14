@@ -129,6 +129,20 @@ struct LibraryView: View {
         .sheet(isPresented: $showSave) { SaveView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showImports) { ImportsView() }
+        .onChange(of: state.openRequest) { _, request in
+          guard let request else { return }
+          state.openRequest = nil
+          let sheetOpen = showSave || showSettings || showImports
+          showSave = false
+          showSettings = false
+          showImports = false
+          if sheetOpen {
+            // Present once the sheet has finished dismissing.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.readerRoute = request }
+          } else {
+            state.readerRoute = request
+          }
+        }
         // The reader is its own presentation, so its reading theme never restyles the Library.
         .fullScreenCover(item: $state.readerRoute) { route in
           NavigationStack { ReaderScreen(itemID: route.id) }

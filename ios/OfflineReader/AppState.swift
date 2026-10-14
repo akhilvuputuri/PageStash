@@ -12,18 +12,26 @@ import SwiftUI
   /// The article open in the full-screen reader. Rows, deep links, Spotlight, the Home Screen quick
   /// action and App Shortcuts all open articles by setting this.
   @Published var readerRoute: ReaderRoute?
-  /// An article asked for before the library loaded (for example a cold-launch deep link).
-  private var pendingOpenID: String?
+  /// A request to open the reader. The Library closes any open sheet first, because SwiftUI cannot
+  /// present the reader over another sheet, then presents `readerRoute`.
+  @Published var openRequest: ReaderRoute?
+  /// An article asked for before the library loaded (for example a cold-launch deep link). It is
+  /// dropped if the article doesn't become readable soon, so it can't pop open much later.
+  private var pendingOpen: (id: String, until: Date)?
   /// Opens an article in the reader, from a row, link, Spotlight, quick action or App Shortcut.
   func open(_ id: String) {
-    pendingOpenID = id
+    pendingOpen = (id, Date().addingTimeInterval(15))
     openPendingItem()
   }
   private func openPendingItem() {
-    guard let id = pendingOpenID, items.contains(where: { $0.id == id && $0.hasPreparedContent })
-    else { return }
-    pendingOpenID = nil
-    if readerRoute?.id != id { readerRoute = ReaderRoute(id: id) }
+    guard let pending = pendingOpen else { return }
+    guard pending.until > Date() else {
+      pendingOpen = nil
+      return
+    }
+    guard items.contains(where: { $0.id == pending.id && $0.hasPreparedContent }) else { return }
+    pendingOpen = nil
+    openRequest = ReaderRoute(id: pending.id)
   }
   /// Word counts of downloaded articles, for reading-time estimates in the Library.
   @Published var wordCounts: [String: Int] = [:]
@@ -222,9 +230,15 @@ import SwiftUI
     }
   }
   func save(_ url: String, key: String) async throws {
+    try await submit(url, key: key, syncAfter: false)
+    try await sync()
+  }
+  /// Submits a link. With `syncAfter`, the library refreshes in the background and its errors don't
+  /// make a successful save look failed.
+  func submit(_ url: String, key: String, syncAfter: Bool = true) async throws {
     guard let api else { throw APIError(message: "Reconnect before submitting an article.") }
     let _: SaveResponse = try await api.save(url: url, key: key)
-    try await sync()
+    if syncAfter { Task { try? await sync() } }
   }
   func edit(_ item: ReadingItem, _ patch: ItemPatch) {
     do {
@@ -316,6 +330,8 @@ import SwiftUI
       store = nil
       items = []
       readingUndo = nil
+      readerRoute = nil
+      SystemIntegration.clear()
       if let root { try? FileManager.default.removeItem(at: root) }
       return
     }
@@ -344,7 +360,8 @@ import SwiftUI
     items = []
     readingUndo = nil
     readerRoute = nil
-    pendingOpenID = nil
+    openRequest = nil
+    pendingOpen = nil
     SystemIntegration.clear()
     lastSync = "Not yet synced"
     UserDefaults.standard.removeObject(forKey: "lastSync")

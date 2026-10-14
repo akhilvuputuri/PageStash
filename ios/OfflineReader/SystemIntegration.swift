@@ -9,7 +9,10 @@ import WidgetKit
   static let spotlightDomain = "library"
   static let continueAction = "continue-reading"
   static let lastOpenedKey = "lastOpenedItem"
-  private static var indexedSignature: Int?
+  private static let signatureKey = "spotlightSignature"
+  /// Bumped by `clear()`, so an index request that started before sign-out never re-adds the library.
+  private static var generation = 0
+  private static var shortcutID: String?
 
   /// The article to resume: the last one opened if it is still unfinished in the Library,
   /// otherwise the most recently saved partly read article.
@@ -34,31 +37,29 @@ import WidgetKit
       ContinueReading(article: article, updated: Date()).save()
       WidgetCenter.shared.reloadTimelines(ofKind: ContinueReading.widgetKind)
     }
-    UIApplication.shared.shortcutItems =
-      next.map {
+    // Reloads are frequent (every download); only touch the quick action when it changes.
+    let shortcut = next.map { "\($0.id)\u{1}\($0.title)" }
+    if shortcut != shortcutID {
+      shortcutID = shortcut
+      UIApplication.shared.shortcutItems =
+        next.map {
         [
           UIApplicationShortcutItem(
             type: continueAction, localizedTitle: "Continue Reading", localizedSubtitle: $0.title,
             icon: UIApplicationShortcutIcon(systemImageName: "book"),
             userInfo: ["id": $0.id as NSString])
         ]
-      } ?? []
+        } ?? []
+    }
     index(items)
   }
   /// Saved articles appear in Spotlight by title, source and author. Only what is on this device
   /// is indexed, and nothing leaves it.
   private static func index(_ items: [ReadingItem]) {
     let visible = items.filter(\.hasPreparedContent)
-    var hasher = Hasher()
-    for item in visible {
-      hasher.combine(item.id)
-      hasher.combine(item.title)
-      hasher.combine(item.archived)
-      hasher.combine(item.siteName)
-    }
-    let signature = hasher.finalize()
-    guard signature != indexedSignature else { return }
-    indexedSignature = signature
+    let stable = stableSignature(visible)
+    let defaults = UserDefaults.standard
+    guard stable != defaults.string(forKey: signatureKey) else { return }
     let searchable = visible.map { item in
       let attributes = CSSearchableItemAttributeSet(contentType: .text)
       attributes.title = item.title
@@ -69,13 +70,34 @@ import WidgetKit
         uniqueIdentifier: item.id, domainIdentifier: spotlightDomain, attributeSet: attributes)
     }
     let index = CSSearchableIndex.default()
+    let started = generation
     index.deleteSearchableItems(withDomainIdentifiers: [spotlightDomain]) { _ in
-      index.indexSearchableItems(searchable)
+      Task { @MainActor in
+        guard started == generation else { return }
+        index.indexSearchableItems(searchable)
+        defaults.set(stable, forKey: signatureKey)
+      }
     }
+  }
+  /// A launch-independent digest of what Spotlight shows, so a cold launch doesn't re-index.
+  private static func stableSignature(_ items: [ReadingItem]) -> String {
+    var value: UInt64 = 0xcbf2_9ce4_8422_2325
+    for item in items {
+      let fields = [
+        item.id, item.title, item.archived ? "1" : "0", item.siteName ?? "", item.author ?? "",
+        item.sourceUrl ?? "",
+      ]
+      for byte in fields.joined(separator: "\u{1}").utf8 + [0] {
+        value = (value ^ UInt64(byte)) &* 0x100_0000_01b3
+      }
+    }
+    return String(value, radix: 16)
   }
   /// Signing out removes everything the system holds about the library.
   static func clear() {
-    indexedSignature = nil
+    generation += 1
+    shortcutID = nil
+    UserDefaults.standard.removeObject(forKey: signatureKey)
     CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [spotlightDomain])
     ContinueReading(article: nil, updated: Date()).save()
     WidgetCenter.shared.reloadTimelines(ofKind: ContinueReading.widgetKind)
@@ -123,7 +145,8 @@ struct SaveLinkIntent: AppIntent {
       throw IntentError.unsupportedLink
     }
     guard AppState.shared.session != nil else { throw IntentError.signedOut }
-    try await AppState.shared.save(url.absoluteString, key: UUID().uuidString)
+    // Report the save itself; the follow-up sync can fail or run late without undoing it.
+    try await AppState.shared.submit(url.absoluteString, key: UUID().uuidString)
     // Saving submits the link; the server prepares it and the app downloads it afterwards.
     return .result(dialog: "Submitted. It appears in your library once it is prepared.")
   }
