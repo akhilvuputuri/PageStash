@@ -1,0 +1,7 @@
+# Enables the a-stack plugins in this trusted project. Install them first:
+# see "Shared skills from a-stack" in AGENTS.md.
+[plugins."workflow@a-stack"]
+enabled = true
+
+[plugins."ios-design@a-stack"]
+enabled = true
