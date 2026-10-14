@@ -256,6 +256,17 @@ Checks used the synthetic preview store on the iPhone 17 Pro and the iPhone 16e 
 - **Tests.** 25 backend, 37 Core and 18 native tests pass, and the unsigned device build passes. New tests cover deep links, Continue Reading selection, the App Group snapshot, Bold Text, the reading-theme scope, and the source-language tag.
 - **Signing.** The widget is a new extension, `com.akhilvuputuri.offlinereader.widget`, in the same App Group. Automatic provisioning must register it before the next signed device build.
 
+
+### Reader 0.3.2 released, 14 October 2026
+
+- [Reader 0.3.2](https://github.com/akhilvuputuri/offline-reader/releases/tag/v0.3.2) (build 7) was released from `2263fc4b93d064a99d262bfca4c0f4a163bc6abe`, PR #41's merge commit from reviewed head `015bc45`. It covers the issues recorded in the section above.
+- **Before merge:** CI passed backend, Core and native presentation tests, the icon check, and device, simulator and preview compilation. PR #41 records an independent review with no high-severity findings; all seven findings were fixed before merge.
+- **Not done at release** (per the release notes):
+  - No physical-iPhone installation and no TestFlight.
+  - The widget is a new extension, so the next signed build needs automatic provisioning to register it.
+- **No backend deploy recorded:** none of `2263fc4` to Northflank. Article language tagging takes effect only after one.
+- This section was added on 15 October 2026 to close the record gap. It contains only facts from the GitHub Release and PR #41.
+
 ### Shared a-stack workflow adopted, 14 October 2026
 
 - This repository now follows the a-stack engineering workflow (`workflow@a-stack`, ref `workflow--v0.1.1`). AGENTS.md carries the shared non-negotiable rules and this repository's bindings: checks, reviewer, merge and release authority, Northflank and iPhone release verification, and this file as the record.
