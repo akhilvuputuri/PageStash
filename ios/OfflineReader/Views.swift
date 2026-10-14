@@ -6,7 +6,7 @@ import SwiftUI
 struct RootView: View {
   @EnvironmentObject var state: AppState
   var body: some View {
-    Group { if state.session == nil { LoginView() } else { LibraryView() } }.appTheme()
+    Group { if state.session == nil { LoginView() } else { LibraryView() } }.readerTheme()
       .onOpenURL { url in
         if let id = ContinueReading.itemID(from: url) { state.open(id) }
       }
@@ -92,13 +92,22 @@ struct LibraryView: View {
   @State private var showSettings = false
   @State private var showImports = false
   @State private var showArchive = false
+  @State private var showTrash = false
   private var pendingImports: Int {
     state.items.filter(\.needsImportReview).count + state.sharedSaves.count
   }
+  private var trashCount: Int { state.items.filter(\.isTrashed).count }
   var body: some View {
     NavigationStack {
       LibraryList(archived: false, showImports: $showImports, transition: transition)
         .toolbar {
+          ToolbarItem(placement: .topBarLeading) {
+            Button {
+              showSettings = true
+            } label: {
+              Image(systemName: "gearshape")
+            }.accessibilityLabel("Settings")
+          }
           ToolbarItem(placement: .topBarTrailing) {
             Button {
               showSave = true
@@ -125,9 +134,9 @@ struct LibraryView: View {
                 Label("Archive", systemImage: "archivebox")
               }
               Button {
-                showSettings = true
+                showTrash = true
               } label: {
-                Label("Settings", systemImage: "gearshape")
+                Label(trashCount > 0 ? "Trash (\(trashCount))" : "Trash", systemImage: "trash")
               }
             } label: {
               Image(systemName: "ellipsis")
@@ -138,6 +147,7 @@ struct LibraryView: View {
         .navigationDestination(isPresented: $showArchive) {
           LibraryList(archived: true, showImports: $showImports, transition: transition)
         }
+        .navigationDestination(isPresented: $showTrash) { TrashList() }
         .sheet(isPresented: $showSave) { SaveView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showImports) { ImportsView() }
@@ -172,7 +182,13 @@ struct LibraryList: View {
   let transition: Namespace.ID
   @State private var query = ""
   @State private var collection = "All"
-  @State private var pendingDelete: ReadingItem?
+  /// The last item moved to Trash, offered for Undo until the next action or dismissal.
+  @State private var trashedUndo: ReadingItem?
+  /// Undo applies only while that item is still in Trash (it may be restored elsewhere).
+  private var showTrashUndo: Bool {
+    guard let undo = trashedUndo else { return false }
+    return state.items.contains { $0.id == undo.id && $0.isTrashed }
+  }
   @State private var collectionTarget: ReadingItem?
   @State private var collectionName = ""
   @State private var archiveCommits = 0
@@ -191,14 +207,15 @@ struct LibraryList: View {
   private var collections: [String] {
     Array(
       Set(
-        state.items.filter { $0.hasPreparedContent && $0.archived == archived }.flatMap(
+        state.items.filter { $0.hasPreparedContent && !$0.isTrashed && $0.archived == archived }
+          .flatMap(
           \.collections))
     ).sorted()
   }
   private var filtered: [ReadingItem] {
     let matches = query.isEmpty ? nil : (try? state.store?.search(query))
     return state.items.filter {
-      $0.hasPreparedContent && $0.archived == archived
+      $0.hasPreparedContent && !$0.isTrashed && $0.archived == archived
         && (collection == "All" || $0.collections.contains(collection))
         && (query.isEmpty || matches?.contains($0.id) == true)
     }
@@ -206,6 +223,7 @@ struct LibraryList: View {
   private func toggleArchive(_ item: ReadingItem) {
     let archived = !item.archived
     state.edit(item, ItemPatch(archived: archived))
+    trashedUndo = nil
     archiveCommits += 1
     // Shake to undo, named after the action.
     undoManager?.registerUndo(withTarget: state) { state in
@@ -214,6 +232,28 @@ struct LibraryList: View {
       }
     }
     undoManager?.setActionName(archived ? "Archive" : "Move to Library")
+  }
+  /// Delete moves to Trash: reversible, so no confirmation, with Undo and shake to undo.
+  private func moveToTrash(_ item: ReadingItem) {
+    state.edit(item, ItemPatch(trashed: true))
+    trashedUndo = item
+    archiveCommits += 1
+    undoManager?.registerUndo(withTarget: state) { state in
+      if let current = state.items.first(where: { $0.id == item.id }) {
+        state.edit(current, ItemPatch(trashed: false))
+      }
+    }
+    undoManager?.setActionName("Move to Trash")
+  }
+  private func undoTrash() {
+    guard let item = trashedUndo,
+      let current = state.items.first(where: { $0.id == item.id && $0.isTrashed })
+    else {
+      trashedUndo = nil
+      return
+    }
+    state.edit(current, ItemPatch(trashed: false))
+    trashedUndo = nil
   }
   @ViewBuilder private func archiveButton(_ item: ReadingItem) -> some View {
     Button {
@@ -257,12 +297,11 @@ struct LibraryList: View {
         .listRowSeparator(.hidden).listRowInsets(
           EdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20)
         )
-        // Archive is safe and reversible, so it takes the full swipe. Delete never does.
+        // Archive takes the full swipe. Delete only moves to Trash, but still needs a deliberate tap.
         .swipeActions(edge: .leading) { archiveButton(item).tint(.gray) }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-          // Not `.destructive`: that role removes the row before the confirmation can be cancelled.
           Button {
-            pendingDelete = item
+            moveToTrash(item)
           } label: {
             Label("Delete", systemImage: "trash")
           }.tint(.red)
@@ -284,9 +323,9 @@ struct LibraryList: View {
           }
           Divider()
           Button(role: .destructive) {
-            pendingDelete = item
+            moveToTrash(item)
           } label: {
-            Label("Delete", systemImage: "trash")
+            Label("Move to Trash", systemImage: "trash")
           }
         }
       }
@@ -332,8 +371,22 @@ struct LibraryList: View {
       }
     }
     .libraryStatusBar {
-      if state.readingUndo != nil || state.message != nil {
+      if state.readingUndo != nil || state.message != nil || showTrashUndo {
         VStack(spacing: 8) {
+          if showTrashUndo {
+            HStack {
+              Text("Moved to Trash").font(.callout)
+              Spacer()
+              Button("Undo") { undoTrash() }
+                .font(.callout.weight(.semibold)).accessibilityLabel("Undo Move to Trash")
+              Button {
+                trashedUndo = nil
+              } label: {
+                Image(systemName: "xmark").frame(minWidth: 44, minHeight: 44)
+              }
+              .accessibilityLabel("Dismiss undo")
+            }
+          }
           if state.readingUndo != nil {
             HStack {
               Text("Moved to Archive").font(.callout)
@@ -371,16 +424,6 @@ struct LibraryList: View {
       }
     }
     .sensoryFeedback(.success, trigger: archiveCommits)
-    .confirmationDialog(
-      "Delete “\(pendingDelete?.title ?? "")”?",
-      isPresented: Binding(
-        get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-      titleVisibility: .visible, presenting: pendingDelete
-    ) { item in
-      Button("Delete Article", role: .destructive) { state.edit(item, ItemPatch(deleted: true)) }
-    } message: { _ in
-      Text("This removes it from your library on every device. Archive keeps it instead.")
-    }
     .alert(
       "Add to Collection",
       isPresented: Binding(
@@ -574,7 +617,7 @@ struct SaveView: View {
           }.disabled(busy || url.isEmpty)
         }
       }
-    }.appTheme()
+    }.readerTheme()
   }
 }
 struct ReaderScreen: View {
@@ -812,7 +855,7 @@ struct ReaderDisplaySheet: View {
           Text("\(percent)% of the reader default. Articles also follow your iPhone text size.")
             .foregroundStyle(tokens.secondaryInk.color)
         }.readerRowBackground()
-        Section("Reading Theme") {
+        Section("Appearance") {
           Picker("Theme", selection: $appearance) {
             Text("Light").tag("light")
             Text("Sepia").tag("sepia")
@@ -881,7 +924,7 @@ struct SettingsView: View {
   var body: some View {
     NavigationStack {
       Form {
-        Section("Reading Theme") {
+        Section("Appearance") {
           Picker("Theme", selection: $appearance) {
             Text("Light").tag("light")
             Text("Sepia").tag("sepia")
@@ -889,7 +932,7 @@ struct SettingsView: View {
             Text("System").tag("system")
           }
           Text(
-            "Articles use this theme. Light uses white pages; Sepia uses warm off-white pages with softer brown text. The Library and Settings follow your iPhone's appearance. While reading, Aa also changes the theme and text size."
+            "Applies throughout PageStash. Sepia uses warm off-white pages with softer brown text; System follows your iPhone's Light or Dark setting. While reading, Aa also changes the theme and text size."
           )
           .font(.footnote).foregroundStyle(tokens.secondaryInk.color)
         }.readerRowBackground()
@@ -943,7 +986,7 @@ struct SettingsView: View {
       }.readerFormBackground().navigationTitle("Settings").toolbar {
         ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } }
       }
-    }.appTheme()
+    }.readerTheme()
   }
 }
 struct ConnectionsView: View {
@@ -1028,7 +1071,7 @@ struct AccountView: View {
     }.readerFormBackground().navigationTitle("Account")
       .sheet(isPresented: $reconnect) {
         LoginView().onChange(of: state.session?.generation) { _, _ in reconnect = false }
-          .appTheme()
+          .readerTheme()
       }.confirmationDialog(
         "Permanently delete your account and all saved articles?", isPresented: $confirmDelete,
         titleVisibility: .visible
@@ -1042,6 +1085,113 @@ struct AccountView: View {
           }
         }
       }
+  }
+}
+
+/// Deleted items wait here, separate from Archive, until restored, deleted permanently, or purged
+/// after 30 days.
+struct TrashList: View {
+  @EnvironmentObject var state: AppState
+  @Environment(\.themeTokens) private var tokens
+  @State private var pendingDelete: ReadingItem?
+  @State private var confirmEmpty = false
+  private var trashed: [ReadingItem] {
+    state.items.filter(\.isTrashed).sorted { ($0.trashedAt ?? "") > ($1.trashedAt ?? "") }
+  }
+  private func restore(_ item: ReadingItem) {
+    state.edit(item, ItemPatch(trashed: false))
+  }
+  var body: some View {
+    List {
+      if trashed.isEmpty {
+        ContentUnavailableView(
+          "Trash is empty", systemImage: "trash",
+          description: Text("Deleted articles stay here for 30 days before they're removed.")
+        ).listRowSeparator(.hidden).listRowBackground(tokens.nativePage)
+      } else {
+        Section {
+          ForEach(trashed) { item in
+            HStack(alignment: .center, spacing: 12) {
+              ArticleRow(item: item)
+              Spacer(minLength: 0)
+              Button("Restore") { restore(item) }
+                .buttonStyle(.borderless).font(.subheadline.weight(.semibold))
+                .accessibilityLabel("Restore \(item.title)")
+            }
+            .listRowBackground(tokens.nativePage)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20))
+            .swipeActions(edge: .leading) {
+              Button {
+                restore(item)
+              } label: {
+                Label("Restore", systemImage: "arrow.uturn.backward")
+              }.tint(.gray)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+              // Not `.destructive`: that role removes the row before the confirmation can be cancelled.
+              Button {
+                pendingDelete = item
+              } label: {
+                Label("Delete Permanently", systemImage: "trash.slash")
+              }.tint(.red)
+            }
+            .contextMenu {
+              Button {
+                restore(item)
+              } label: {
+                Label("Restore", systemImage: "arrow.uturn.backward")
+              }
+              Button(role: .destructive) {
+                pendingDelete = item
+              } label: {
+                Label("Delete Permanently", systemImage: "trash.slash")
+              }
+            }
+          }
+        } footer: {
+          Text("Items are deleted permanently after 30 days in Trash.")
+            .foregroundStyle(tokens.secondaryInk.color)
+        }
+      }
+    }
+    .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .background(tokens.nativePage)
+    .navigationTitle("Trash")
+    .toolbar {
+      if !trashed.isEmpty {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Empty", role: .destructive) { confirmEmpty = true }
+            .accessibilityLabel("Empty Trash")
+        }
+      }
+    }
+    .confirmationDialog(
+      "Delete “\(pendingDelete?.title ?? "")” permanently?",
+      isPresented: Binding(
+        get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+      titleVisibility: .visible, presenting: pendingDelete
+    ) { item in
+      Button("Delete Permanently", role: .destructive) {
+        // Only if it is still in Trash: a sync may have restored it while the dialog was open.
+        if let current = state.items.first(where: { $0.id == item.id && $0.isTrashed }) {
+          state.edit(current, ItemPatch(deleted: true))
+        }
+      }
+    } message: { _ in
+      Text("This removes it from every device and can't be undone.")
+    }
+    .confirmationDialog(
+      "Delete all \(trashed.count) items in Trash permanently?", isPresented: $confirmEmpty,
+      titleVisibility: .visible
+    ) {
+      Button("Empty Trash", role: .destructive) {
+        for item in trashed { state.edit(item, ItemPatch(deleted: true)) }
+      }
+    } message: {
+      Text("They're removed from every device. This can't be undone.")
+    }
   }
 }
 
@@ -1116,7 +1266,9 @@ struct ImportsView: View {
             }
           }.padding(.vertical, 8).readerRowBackground()
             .swipeActions {
-              Button("Remove", role: .destructive) { state.edit(item, ItemPatch(deleted: true)) }
+              Button("Move to Trash", role: .destructive) {
+                state.edit(item, ItemPatch(trashed: true))
+              }
             }
         }
       }.listStyle(.insetGrouped).readerFormBackground()
@@ -1124,6 +1276,6 @@ struct ImportsView: View {
         .navigationTitle("Imports").toolbar {
           ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } }
         }
-    }.appTheme()
+    }.readerTheme()
   }
 }

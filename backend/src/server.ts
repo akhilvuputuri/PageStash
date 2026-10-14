@@ -134,6 +134,7 @@ export async function buildServer(service: Service) {
         progress: z.number().min(0).max(1).optional(),
         archived: z.boolean().optional(),
         deleted: z.boolean().optional(),
+        trashed: z.boolean().optional(),
         collections: z
           .array(z.string().trim().min(1).max(60))
           .max(20)

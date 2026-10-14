@@ -42,6 +42,12 @@ import XCTest
     XCTAssertEqual(
       SystemIntegration.continueItem(items)?.id, "partly", "Archived articles are not resumed")
     XCTAssertNil(SystemIntegration.continueItem([item("done", progress: 1)]))
+    var trashed = item("trashed", progress: 0.6)
+    trashed.trashedAt = "2026-10-15T00:00:00Z"
+    SystemIntegration.didOpen("trashed")
+    XCTAssertEqual(
+      SystemIntegration.continueItem(items + [trashed])?.id, "partly",
+      "Trashed articles are never resumed")
   }
   func testSnapshotRoundTripsThroughTheAppGroup() throws {
     let snapshot = ContinueReading(
