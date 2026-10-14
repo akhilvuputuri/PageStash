@@ -274,6 +274,24 @@ Checks used the synthetic preview store on the iPhone 17 Pro and the iPhone 16e 
   - The compiled assets contain the dark and tinted renditions. The simulator Home Screen kept the light icon in dark mode, because the Home Screen icon style is a separate setting the tooling could not switch; check it on the device.
 - **Tests.** 25 backend, 37 Core and 18 native tests and the unsigned device build pass. The bundle shows PageStash 0.4.0 (build 8).
 
+### Trash, app-wide theme and Settings button, 15 October 2026
+
+Requested by the owner after using 0.4.0 on the iPhone.
+
+- **App-wide theme.** The chosen theme (Light, Sepia, Dark or System; default System) again applies to the Library, Settings, sheets and the reader, replacing the reader-only scope from #41. Settings → Appearance says so. Tested: synthetic preview, Sepia applied to the Library and Settings. The updated `SettingsThemeTests` assert that Settings follows each theme.
+- **Settings button.** A gear at the top left of the Library; Settings left the ⋯ menu. Tested: synthetic preview.
+- **Trash.**
+  - Delete in the Library, Archive and Imports now moves an item to Trash, a separate screen from Archive (⋯ → Trash, with a count). It shows "Moved to Trash · Undo" and supports shake to undo. No confirmation, because it is reversible.
+  - In Trash, items can be restored (button, swipe or menu) or deleted permanently (confirmed), and Empty Trash is confirmed. Items are purged after 30 days by the server's hourly cleanup.
+  - Saving a trashed link again restores it.
+  - Trashed items leave Spotlight and Continue Reading, are not auto-downloaded, and keep their existing download until purged.
+  - Backend: additive `items.trashed_at` column and a `trashed` patch field.
+- **Tests.** Tested: moving to Trash with Undo, restoring from Trash, and the Undo bar clearing after a restore elsewhere. Tests: 26 backend (new: trash, restore, re-save restore, 30-day purge), 39 Core (new: trash survives refresh, server trash time decodes) and 18 native, plus the backend build and audit, unsigned device and simulator builds, and the icon checks.
+- **Deferred.**
+  - The 30-day purge on production (needs the backend deploy).
+  - Trash on the physical iPhone.
+- **Records from #42.** The re-review approved `f735854`. Its non-blocking notes are handled here: the `AGENTS.md` title and icon check, and the icon file destinations in `design/icon-layers/README.md`. The stacked sign-in header at accessibility sizes remains untested, because the iPhone 16e simulator hung.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
