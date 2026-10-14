@@ -45,7 +45,7 @@ OAuth metadata lives at `/.well-known/oauth-authorization-server` and `/.well-kn
 
 ## ChatGPT
 
-Use the custom MCP/plugin developer connection workflow available in your ChatGPT account. Add the HTTPS MCP endpoint, choose OAuth, and complete the Offline Reader consent screen. If prompted for OAuth client configuration, use dynamic registration/public-client auth and S256 PKCE. Enable the connection in a conversation. Ask it to save a public article and then a Markdown brief; verify server status and the app separately.
+Use the custom MCP/plugin developer connection workflow available in your ChatGPT account. Add the HTTPS MCP endpoint, choose OAuth, and complete the PageStash consent screen. If prompted for OAuth client configuration, use dynamic registration/public-client auth and S256 PKCE. Enable the connection in a conversation. Ask it to save a public article and then a Markdown brief; verify server status and the app separately.
 
 Account feature availability and exact UI vary; consult the current [official custom MCP guide](https://developers.openai.com/api/docs/guides/custom-mcp-server). This implementation's protocol is tested locally; **the actual ChatGPT connection has not been tested**.
 

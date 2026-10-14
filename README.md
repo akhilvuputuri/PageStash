@@ -81,7 +81,7 @@ The HTTP/MCP status value `bookmark` is retained for compatibility but now descr
 
 ## Browser sharing
 
-The embedded Offline Reader share destination accepts a webpage URL from Safari/Chrome. It displays the Reader destination and queues the selected link before submitting. Multiple shared links require an explicit choice. Offline shares remain queued on this device and are sent when the app next has connectivity and a valid sign-in; background scheduling is controlled by iOS.
+The embedded PageStash share destination accepts a webpage URL from Safari/Chrome. It displays the PageStash destination and queues the selected link before submitting. Multiple shared links require an explicit choice. Offline shares remain queued on this device and are sent when the app next has connectivity and a valid sign-in; background scheduling is controlled by iOS.
 
 Open the updated app once before first use. Logout clears queued shares. After re-signing in, old queued links require explicit Retry with the same account/destination; installed readable content is retained. Submitted/prepared status is separate from verified offline availability. Reader 0.2.0 is installed and launched on the personal iPhone; the owner confirmed Sepia and browser share submission work. Naturally scheduled background delivery remains unverified.
 

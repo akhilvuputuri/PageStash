@@ -108,7 +108,11 @@ let front = context(opaque: false)
 sleeve(front, light)
 write(front, "Layer-Sleeve.png")
 // The in-app mark: the icon as a rounded tile, so the cream pages stay visible on white screens.
-let mark = context(opaque: false)
+// Drawn at 512 px, which is ample for its largest on-screen size.
+let mark = CGContext(
+  data: nil, width: 512, height: 512, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+mark.scaleBy(x: 0.5, y: 0.5)
 mark.addPath(
   CGPath(
     roundedRect: CGRect(x: 0, y: 0, width: side, height: side), cornerWidth: 230,
