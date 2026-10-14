@@ -134,14 +134,15 @@ import SwiftUI
     } catch { message = error.localizedDescription }
     if let error = UserDefaults.standard.string(forKey: "downloadError") { message = error }
   }
-  /// A kept (rejected) edit from the current sync, shown when the sync finishes.
+  /// A kept (rejected) edit from the latest sync run, shown when it finishes. Reset only when a run
+  /// starts, so every caller that joined a shared run reads the same result.
   private var syncRejection: String?
   func sync(forceManifest: Bool = false) async throws {
     guard let api, let store, let generation = session?.generation else { return }
-    syncRejection = nil
     do {
       try await syncCoordinator.run(fullManifest: forceManifest) { fullManifest in
         guard self.session?.generation == generation else { throw CancellationError() }
+        self.syncRejection = nil
         self.refreshing = true
         let syncStarted = Date()
         BackgroundDiagnostics.shared.record(
@@ -243,7 +244,6 @@ import SwiftUI
       }
       guard self.session?.generation == generation else { return }
       message = syncRejection
-      syncRejection = nil
       UserDefaults.standard.removeObject(forKey: "downloadError")
     } catch {
       if self.session?.generation == generation {
