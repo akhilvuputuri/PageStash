@@ -42,7 +42,7 @@ Endpoint: `https://YOUR_BACKEND/mcp` over Streamable HTTP.
 - `get_save_status(submission_id)`
 - `list_saved_articles(limit?, before?, since?)`: saved-article titles, links, sites and save times, newest first. Works only after the owner turns on **Share saved-article titles** for that connection in Settings → Assistant connections; never returns content, briefs or reading state.
 
-OAuth metadata lives at `/.well-known/oauth-authorization-server` and `/.well-known/oauth-protected-resource`. Public-client dynamic registration is at `/oauth/register`. Scopes are `save status`; consent explicitly excludes browsing/deleting the library. Only the owner application account may sign in during the personal beta.
+OAuth metadata lives at `/.well-known/oauth-authorization-server` and `/.well-known/oauth-protected-resource`. Public-client dynamic registration is at `/oauth/register`. Scopes are `save status`; consent excludes reading article text and deleting anything. Listing saved-article metadata needs the separate in-app opt-in. Only the owner application account may sign in during the personal beta.
 
 ## ChatGPT
 
@@ -56,4 +56,4 @@ Add a custom remote connector using the same MCP URL. Complete OAuth with your a
 
 ## Host acceptance tests
 
-For each host record: account/plan, test date, client registration method, successful consent, all three tools, token refresh, revoked connection rejection, duplicate request behavior, and confirmation that no browse/delete tools exist. Do not mark a host supported based only on a local MCP protocol test.
+For each host record: account/plan, test date, client registration method, successful consent, the three save/status tools, `list_saved_articles` refused before and allowed after the in-app opt-in, token refresh, revoked connection rejection, duplicate request behavior, and confirmation that no content-reading/edit/delete tools exist. Do not mark a host supported based only on a local MCP protocol test.

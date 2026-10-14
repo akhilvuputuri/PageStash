@@ -491,7 +491,8 @@ test("saved-article metadata needs the owner's per-connection opt-in", async () 
         .result.content[0].text,
     );
     for (const a of page.articles) {
-      assert.deepEqual(Object.keys(a).sort(), ["domain", "saved_at", "site", "title", "url"]);
+      assert.deepEqual(Object.keys(a).sort(), ["domain", "prepared", "saved_at", "site", "title", "url"]);
+      assert.equal(a.prepared, false); // still queued in this test
       assert.equal(a.domain, "example.org");
       seen.push(a.title);
     }
@@ -509,6 +510,38 @@ test("saved-article metadata needs the owner's per-connection opt-in", async () 
   assert.equal(http.json().articles[0].title, "Interest 4");
   const bad = await call(fresh.token, { before: "bm90LWEtY3Vyc29y" });
   assert.equal(bad.json().result.isError, true);
+  // Shaped like a cursor but not a real time, or a time PostgreSQL rejects: 400, not 500.
+  for (const forged of [
+    `9999-99-99T99:99:99.000000Z|${randomUUID()}`,
+    `0000-01-01T00:00:00.000000Z|${randomUUID()}`,
+  ]) {
+    const r = await app.inject({
+      method: "GET",
+      url: `/v1/interests/saved?before=${Buffer.from(forged).toString("base64url")}`,
+      headers: { authorization: `Bearer ${fresh.token}` },
+    });
+    assert.equal(r.statusCode, 400, forged);
+  }
+  const ancient = await app.inject({
+    method: "GET",
+    url: "/v1/interests/saved?since=0000-01-01T00:00:00Z",
+    headers: { authorization: `Bearer ${fresh.token}` },
+  });
+  assert.equal(ancient.statusCode, 400);
+  // Paging does not depend on the session's DateStyle or time zone.
+  await db.query("SET DateStyle='SQL, DMY'");
+  await db.query("SET TIME ZONE 'Asia/Singapore'");
+  try {
+    const first = await service.savedArticles(reader, { limit: 3 });
+    const second = await service.savedArticles(reader, { limit: 3, before: first.next! });
+    assert.deepEqual(
+      [...first.articles, ...second.articles].map((a) => a.title),
+      ["Interest 4", "Interest 3", "Interest 2", "Interest 1", "Interest 0"],
+    );
+  } finally {
+    await db.query("SET DateStyle='ISO, MDY'");
+    await db.query("SET TIME ZONE 'UTC'");
+  }
   // Other connections stay limited to their own receipts.
   const other = await app.inject({
     method: "GET",

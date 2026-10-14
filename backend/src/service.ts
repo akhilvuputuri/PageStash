@@ -366,7 +366,8 @@ export class Service {
         .split("|");
       if (
         !time ||
-        !/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{1,6})?[+-]\d\d(:\d\d)?$/.test(time) ||
+        !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/.test(time) ||
+        Number.isNaN(Date.parse(time)) ||
         !id ||
         !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)
       )
@@ -374,32 +375,61 @@ export class Service {
       at = time;
       after = id;
     }
-    const result = await this.db.query<{
+    type Row = {
       id: string;
       title: string;
+      status: string;
       source_url: string;
       site_name: string | null;
       captured_at: Date;
       at: string;
-    }>(
-      // The cursor keeps PostgreSQL's microsecond text form so paging is exact.
-      `SELECT id,title,source_url,site_name,captured_at,(captured_at AT TIME ZONE 'UTC')::text || '+00' AS at FROM items
+    };
+    let result: { rows: Row[] };
+    try {
+      result = await this.db.query<Row>(
+      // The cursor keeps microseconds in a fixed UTC form, independent of the
+      // session's DateStyle and time zone, so paging is exact.
+      `SELECT id,title,status,source_url,site_name,captured_at,
+       to_char(captured_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at FROM items
        WHERE owner_id=$1 AND kind='article' AND deleted=false AND source_url IS NOT NULL
        AND ($2::timestamptz IS NULL OR (captured_at,id) < ($2::timestamptz,$3::uuid))
        AND ($4::timestamptz IS NULL OR captured_at >= $4::timestamptz)
        ORDER BY captured_at DESC,id DESC LIMIT $5`,
       [identity.owner_id, at, after, input.since ?? null, input.limit + 1],
-    );
+      );
+    } catch (error) {
+      // An out-of-range time in a forged cursor or `since` is a bad request.
+      if (String((error as { code?: string }).code ?? "").startsWith("22"))
+        throw new HTTPError(400, "Invalid cursor or time.");
+      throw error;
+    }
     const rows = result.rows.slice(0, input.limit);
     const last = rows.at(-1);
+    const domain = (url: string) => {
+      try {
+        return new URL(url).hostname.replace(/^www\./, "");
+      } catch {
+        return null;
+      }
+    };
     return {
-      articles: rows.map((r) => ({
-        url: r.source_url,
-        title: r.title,
-        site: r.site_name ?? null,
-        domain: new URL(r.source_url).hostname.replace(/^www\./, ""),
-        saved_at: new Date(r.captured_at).toISOString(),
-      })),
+      articles: rows.flatMap((r) => {
+        const host = domain(r.source_url);
+        // A stored link that cannot be parsed is skipped, not fatal for the page.
+        if (!host) return [];
+        return [
+          {
+            url: r.source_url,
+            title: r.title,
+            site: r.site_name ?? null,
+            domain: host,
+            saved_at: new Date(r.captured_at).toISOString(),
+            // False while queued or after a failed import: the title may
+            // still be just the site's host name.
+            prepared: r.status === "ready",
+          },
+        ];
+      }),
       next:
         result.rows.length > input.limit && last
           ? Buffer.from(`${last.at}|${last.id}`).toString("base64url")
