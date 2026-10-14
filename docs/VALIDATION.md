@@ -256,6 +256,13 @@ Checks used the synthetic preview store on the iPhone 17 Pro and the iPhone 16e 
 - **Tests.** 25 backend, 37 Core and 18 native tests pass, and the unsigned device build passes. New tests cover deep links, Continue Reading selection, the App Group snapshot, Bold Text, the reading-theme scope, and the source-language tag.
 - **Signing.** The widget is a new extension, `com.akhilvuputuri.offlinereader.widget`, in the same App Group. Automatic provisioning must register it before the next signed device build.
 
+### Shared a-stack workflow adopted, 14 October 2026
+
+- This repository now follows the a-stack engineering workflow (`workflow@a-stack`, ref `workflow--v0.1.1`). AGENTS.md carries the shared non-negotiable rules and this repository's bindings: checks, reviewer, merge and release authority, Northflank and iPhone release verification, and this file as the record.
+- `ios-design` moves from `ios-design--v0.1.0` to the same ref. That ref carries `ios-design` 0.1.1, where the skill content is unchanged and only the a-stack layout moved.
+- `.codex/config.toml` enables both plugins for Codex.
+- Documentation and configuration only. No app, backend or deployment change. Plugin loading in a trusted Claude Code session and in Codex is not yet observed in this repository.
+
 ### PageStash name and icon (#34), 14 October 2026
 
 - **Name.** The owner chose **PageStash**. In exact US App Store title searches, nothing used it. A web product called PageStash exists at pagestash.app (web clipping and archiving), and pagestash.com is registered. The owner accepted that for differentiation. No trademark search was done.
