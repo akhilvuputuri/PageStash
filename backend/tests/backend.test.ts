@@ -371,7 +371,7 @@ test("MCP exposes discovery, saves briefs, and requires authentication for tool 
       .json()
       .result.tools.map((t: { name: string }) => t.name)
       .sort(),
-    ["get_save_status", "save_document", "save_link"],
+    ["get_save_status", "list_saved_articles", "save_document", "save_link"],
   );
   const payload = {
     jsonrpc: "2.0",
@@ -407,6 +407,175 @@ test("MCP exposes discovery, saves briefs, and requires authentication for tool 
   assert.equal(saved.statusCode, 200);
   assert.ok(JSON.parse(saved.json().result.content[0].text).submission_id);
   assert.equal(await service.runOne(), true);
+});
+test("saved-article metadata needs the owner's per-connection opt-in", async () => {
+  const headers = {
+    accept: "application/json, text/event-stream",
+    host: "127.0.0.1:8787",
+    "content-type": "application/json",
+    "mcp-protocol-version": "2025-03-26",
+  };
+  const fresh = await service.credential(owner.owner_id, "api", "Interests");
+  const reader = await service.authenticate(fresh.token);
+  const base = Date.parse("2026-10-01T00:00:00Z");
+  for (let i = 0; i < 5; i++) {
+    const saved = await service.save(owner, {
+      url: `https://www.example.org/interest-${i}`,
+      idempotency_key: randomUUID(),
+    });
+    // Distinct sub-millisecond times exercise exact keyset paging.
+    await db.query(
+      "UPDATE items SET captured_at=$2::timestamptz + make_interval(secs => 0.000001 * $3::int),title=$4,site_name=$5 WHERE id=$1",
+      [saved.submission_id, new Date(base).toISOString(), i, `Interest ${i}`, "Example"],
+    );
+  }
+  await service.save(reader, {
+    title: "Brief",
+    markdown: "# Agent brief",
+    idempotency_key: randomUUID(),
+  });
+  const call = (token: string, args: Record<string, unknown>) =>
+    app.inject({
+      method: "POST",
+      url: "/mcp",
+      headers: { ...headers, authorization: `Bearer ${token}` },
+      payload: {
+        jsonrpc: "2.0",
+        id: 9,
+        method: "tools/call",
+        params: { name: "list_saved_articles", arguments: args },
+      },
+    });
+  const refused = (await call(fresh.token, { limit: 2 })).json().result;
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /Settings/);
+  // An agent cannot grant itself; only the app can.
+  const self = await app.inject({
+    method: "PATCH",
+    url: `/v1/connections/${fresh.connection_id}`,
+    headers: { authorization: `Bearer ${fresh.token}` },
+    payload: { interests: true },
+  });
+  assert.equal(self.statusCode, 403);
+  const missing = await app.inject({
+    method: "PATCH",
+    url: `/v1/connections/${randomUUID()}`,
+    headers: { authorization: `Bearer ${ownerToken}` },
+    payload: { interests: true },
+  });
+  assert.equal(missing.statusCode, 404);
+  const grant = await app.inject({
+    method: "PATCH",
+    url: `/v1/connections/${fresh.connection_id}`,
+    headers: { authorization: `Bearer ${ownerToken}` },
+    payload: { interests: true },
+  });
+  assert.equal(grant.statusCode, 200);
+  const listed = await app.inject({
+    method: "GET",
+    url: "/v1/connections",
+    headers: { authorization: `Bearer ${ownerToken}` },
+  });
+  assert.equal(
+    listed
+      .json()
+      .connections.find((c: { id: string }) => c.id === fresh.connection_id)
+      .interests,
+    true,
+  );
+  await db.query(
+    "UPDATE items SET trashed_at=now() WHERE owner_id=$1 AND title='Interest 2'",
+    [owner.owner_id],
+  );
+  assert.ok(
+    !(await service.savedArticles(reader, { limit: 200 })).articles.some(
+      (a) => a.title === "Interest 2",
+    ),
+  );
+  await db.query(
+    "UPDATE items SET trashed_at=NULL WHERE owner_id=$1 AND title='Interest 2'",
+    [owner.owner_id],
+  );
+  const seen: string[] = [];
+  let before: string | undefined;
+  for (;;) {
+    const page = JSON.parse(
+      (await call(fresh.token, { limit: 2, since: "2026-09-30T00:00:00Z", ...(before ? { before } : {}) })).json()
+        .result.content[0].text,
+    );
+    for (const a of page.articles) {
+      assert.deepEqual(Object.keys(a).sort(), ["domain", "prepared", "saved_at", "site", "title", "url"]);
+      assert.equal(a.prepared, false); // still queued in this test
+      assert.equal(a.domain, "example.org");
+      seen.push(a.title);
+    }
+    if (!page.next) break;
+    before = page.next;
+  }
+  // Newest first, every article exactly once, briefs excluded. A trashed
+  // article is not an interest; restoring it brings it back.
+  assert.deepEqual(seen, ["Interest 4", "Interest 3", "Interest 2", "Interest 1", "Interest 0"]);
+  const http = await app.inject({
+    method: "GET",
+    url: "/v1/interests/saved?limit=1&since=2026-09-30T00:00:00Z",
+    headers: { authorization: `Bearer ${fresh.token}` },
+  });
+  assert.equal(http.statusCode, 200);
+  assert.equal(http.json().articles[0].title, "Interest 4");
+  const bad = await call(fresh.token, { before: "bm90LWEtY3Vyc29y" });
+  assert.equal(bad.json().result.isError, true);
+  // Shaped like a cursor but not a real time, or a time PostgreSQL rejects: 400, not 500.
+  for (const forged of [
+    `9999-99-99T99:99:99.000000Z|${randomUUID()}`,
+    `0000-01-01T00:00:00.000000Z|${randomUUID()}`,
+  ]) {
+    const r = await app.inject({
+      method: "GET",
+      url: `/v1/interests/saved?before=${Buffer.from(forged).toString("base64url")}`,
+      headers: { authorization: `Bearer ${fresh.token}` },
+    });
+    assert.equal(r.statusCode, 400, forged);
+  }
+  const ancient = await app.inject({
+    method: "GET",
+    url: "/v1/interests/saved?since=0000-01-01T00:00:00Z",
+    headers: { authorization: `Bearer ${fresh.token}` },
+  });
+  assert.equal(ancient.statusCode, 400);
+  // Paging does not depend on the session's DateStyle or time zone.
+  await db.query("SET DateStyle='SQL, DMY'");
+  await db.query("SET TIME ZONE 'Asia/Singapore'");
+  try {
+    const first = await service.savedArticles(reader, { limit: 3 });
+    const second = await service.savedArticles(reader, { limit: 3, before: first.next! });
+    assert.deepEqual(
+      [...first.articles, ...second.articles].map((a) => a.title),
+      ["Interest 4", "Interest 3", "Interest 2", "Interest 1", "Interest 0"],
+    );
+  } finally {
+    await db.query("SET DateStyle='ISO, MDY'");
+    await db.query("SET TIME ZONE 'UTC'");
+  }
+  // Other connections stay limited to their own receipts.
+  const other = await app.inject({
+    method: "GET",
+    url: "/v1/interests/saved",
+    headers: { authorization: `Bearer ${agentToken}` },
+  });
+  assert.equal(other.statusCode, 403);
+  // Revoking the connection drops its opt-in.
+  await app.inject({
+    method: "DELETE",
+    url: `/v1/connections/${fresh.connection_id}`,
+    headers: { authorization: `Bearer ${ownerToken}` },
+  });
+  const grants = await db.query(
+    "SELECT 1 FROM connection_grants WHERE connection_id=$1",
+    [fresh.connection_id],
+  );
+  assert.equal(grants.rows.length, 0);
+  // Leave no queued imports for later worker tests.
+  await db.query("DELETE FROM jobs");
 });
 test("expired worker lease can be reclaimed after a crash", async () => {
   const input = {

@@ -91,6 +91,18 @@ ALTER TABLE items ADD COLUMN IF NOT EXISTS site_name text;
 -- Additive: when an item was moved to Trash, or null when it is not in Trash.
 ALTER TABLE items ADD COLUMN IF NOT EXISTS trashed_at timestamptz;
 INSERT INTO schema_version(version) VALUES(1) ON CONFLICT DO NOTHING;
+-- Additive: per-connection opt-in grants beyond save/status. The owner turns
+-- "interests" on in the app. It is keyed by connection so OAuth token refresh
+-- keeps the same choice.
+CREATE TABLE IF NOT EXISTS connection_grants (
+ owner_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+ connection_id uuid NOT NULL, interests boolean NOT NULL DEFAULT false,
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(owner_id, connection_id)
+);
+CREATE INDEX IF NOT EXISTS saved_articles_owner ON items(owner_id, captured_at DESC, id DESC)
+ WHERE kind='article' AND deleted=false;
+INSERT INTO schema_version(version) VALUES(2) ON CONFLICT DO NOTHING;
 `;
 
 export async function migrate(db: Database) {
@@ -108,6 +120,7 @@ export async function migrate(db: Database) {
     "download_grants",
     "oauth_clients",
     "oauth_codes",
+    "connection_grants",
     "schema_version",
   ])
     await db.query(`ALTER TABLE ${name} ENABLE ROW LEVEL SECURITY`);

@@ -8,7 +8,7 @@ Native SwiftUI app · TypeScript backend · PostgreSQL · private object storage
 
 ## Current status
 
-Implemented: sign-in, library, URL submission, asynchronous article extraction and supported images, Markdown briefs, local reader, persistent download queue, background refresh registration, integrity verification, reading position, search, collections, archive/delete, download removal, credential creation/revocation, OAuth and the three MCP tools.
+Implemented: sign-in, library, URL submission, asynchronous article extraction and supported images, Markdown briefs, local reader, persistent download queue, background refresh registration, integrity verification, reading position, search, collections, archive/delete, download removal, credential creation/revocation, OAuth and the four MCP tools (saved-article listing only with the owner's per-connection opt-in).
 
 The backend is deployed on Northflank Free with Supabase PostgreSQL; live health, anonymous-access rejection, and MCP discovery pass. The native app compiles for both a simulator and an unsigned iPhone build. Simulator checks passed for sign-in, article text/images, an MCP-created brief, cached reading after restarting with the local server stopped, reading position, search, offline edits and download removal/retry. Automated tests cover backend authorization, extraction fixtures, OAuth, MCP, durable jobs, local persistence, interrupted updates, and offline edit races. The owner also confirmed production sign-in and reading article text/images on the physical iPhone after restarting in Airplane Mode with Wi-Fi off. **Naturally scheduled physical-device background execution, TestFlight, and ChatGPT/Claude connections are not yet verified.** See [validation](docs/VALIDATION.md).
 

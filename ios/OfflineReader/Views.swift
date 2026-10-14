@@ -995,6 +995,9 @@ struct ConnectionsView: View {
   @State private var label = "Telegram assistant"
   @State private var newToken: String?
   @State private var error: String?
+  /// Local switch positions while a change is in flight or just failed.
+  @State private var sharing: [String: Bool] = [:]
+  @State private var updating: Set<String> = []
   var body: some View {
     Form {
       Section("Assistant Connections") {
@@ -1018,20 +1021,37 @@ struct ConnectionsView: View {
           Button("Copy credential") { UIPasteboard.general.string = newToken }
         }
         ForEach(connections) { connection in
-          HStack {
-            Text(connection.label)
-            Spacer()
-            Button("Revoke", role: .destructive) {
-              Task {
-                do {
-                  guard let api = state.api else { return }
-                  let _: OK = try await api.request(
-                    "/v1/connections/\(connection.id)", method: "DELETE")
-                  await loadConnections()
-                } catch { self.error = error.localizedDescription }
+          VStack(alignment: .leading) {
+            HStack {
+              Text(connection.label)
+              Spacer()
+              Button("Revoke", role: .destructive) {
+                Task {
+                  do {
+                    guard let api = state.api else { return }
+                    let _: OK = try await api.request(
+                      "/v1/connections/\(connection.id)", method: "DELETE")
+                    await loadConnections()
+                  } catch { self.error = error.localizedDescription }
+                }
               }
             }
+            Toggle(
+              "Share saved-article titles",
+              isOn: Binding(
+                get: { sharing[connection.id] ?? connection.interests ?? false },
+                set: { on in Task { await setInterests(connection, on) } })
+            )
+            .font(.subheadline)
+            // One request at a time per connection, so taps cannot land out of order.
+            .disabled(updating.contains(connection.id))
+            .accessibilityLabel("Share saved-article titles with \(connection.label)")
           }
+        }
+        if !connections.isEmpty {
+          Text(
+            "Sharing lets an assistant read the titles, links, sites and save times of your saved articles to suggest similar reading. It never sees article text, briefs or reading progress."
+          ).font(.footnote).foregroundStyle(.secondary)
         }
         Text("MCP endpoint: \(state.backendURL)/mcp").font(.caption).textSelection(.enabled)
       }.readerRowBackground()
@@ -1040,11 +1060,31 @@ struct ConnectionsView: View {
       await loadConnections()
     }
   }
+  private func setInterests(_ connection: Connection, _ on: Bool) async {
+    guard let api = state.api, !updating.contains(connection.id) else { return }
+    let previous = sharing[connection.id] ?? connection.interests ?? false
+    // Show the new position at once; restore it if the server refuses.
+    sharing[connection.id] = on
+    updating.insert(connection.id)
+    do {
+      let _: OK = try await api.request(
+        "/v1/connections/\(connection.id)", method: "PATCH",
+        body: JSONSerialization.data(withJSONObject: ["interests": on]))
+      error = nil
+    } catch {
+      sharing[connection.id] = previous
+      self.error = error.localizedDescription
+    }
+    updating.remove(connection.id)
+    await loadConnections()
+  }
   private func loadConnections() async {
     do {
       if let api = state.api {
         let response: Connections = try await api.request("/v1/connections")
         connections = response.connections
+        // Server state wins once no change is in flight.
+        sharing = sharing.filter { updating.contains($0.key) }
       }
     } catch { self.error = error.localizedDescription }
   }

@@ -338,6 +338,112 @@ export class Service {
     if (!result.rows[0]) throw new HTTPError(404, "Submission not found.");
     return result.rows[0];
   }
+  async setInterests(identity: Identity, connection: string, on: boolean) {
+    this.app(identity);
+    const result = await this.db.query(
+      `INSERT INTO connection_grants(owner_id,connection_id,interests)
+       SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM credentials WHERE owner_id=$1 AND connection_id=$2 AND kind IN('api','oauth','refresh'))
+       ON CONFLICT(owner_id,connection_id) DO UPDATE SET interests=excluded.interests,updated_at=now() RETURNING connection_id`,
+      [identity.owner_id, connection, on],
+    );
+    if (!result.rows.length) throw new HTTPError(404, "Connection not found.");
+  }
+  /** Saved-article metadata for an agent connection the owner opted in.
+   * Titles, links, sites and save times only: never content, briefs,
+   * collections or reading state. Newest first, keyset-paged. */
+  async savedArticles(
+    identity: Identity,
+    input: { limit: number; before?: string; since?: string },
+  ) {
+    if (identity.kind !== "app") {
+      const grant = await this.db.query(
+        "SELECT 1 FROM connection_grants WHERE owner_id=$1 AND connection_id=$2 AND interests",
+        [identity.owner_id, identity.connection_id],
+      );
+      if (!grant.rows.length)
+        throw new HTTPError(
+          403,
+          "This connection cannot read saved articles. The owner can allow it in Settings → Assistant connections.",
+        );
+    }
+    let at: string | null = null;
+    let after: string | null = null;
+    if (input.before) {
+      const [time, id] = Buffer.from(input.before, "base64url")
+        .toString()
+        .split("|");
+      if (
+        !time ||
+        !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/.test(time) ||
+        Number.isNaN(Date.parse(time)) ||
+        !id ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)
+      )
+        throw new HTTPError(400, "Invalid cursor.");
+      at = time;
+      after = id;
+    }
+    type Row = {
+      id: string;
+      title: string;
+      status: string;
+      source_url: string;
+      site_name: string | null;
+      captured_at: Date;
+      at: string;
+    };
+    let result: { rows: Row[] };
+    try {
+      result = await this.db.query<Row>(
+      // The cursor keeps microseconds in a fixed UTC form, independent of the
+      // session's DateStyle and time zone, so paging is exact.
+      `SELECT id,title,status,source_url,site_name,captured_at,
+       to_char(captured_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at FROM items
+       WHERE owner_id=$1 AND kind='article' AND deleted=false AND trashed_at IS NULL AND source_url IS NOT NULL
+       AND ($2::timestamptz IS NULL OR (captured_at,id) < ($2::timestamptz,$3::uuid))
+       AND ($4::timestamptz IS NULL OR captured_at >= $4::timestamptz)
+       ORDER BY captured_at DESC,id DESC LIMIT $5`,
+      [identity.owner_id, at, after, input.since ?? null, input.limit + 1],
+      );
+    } catch (error) {
+      // An out-of-range time in a forged cursor or `since` is a bad request.
+      if (String((error as { code?: string }).code ?? "").startsWith("22"))
+        throw new HTTPError(400, "Invalid cursor or time.");
+      throw error;
+    }
+    const rows = result.rows.slice(0, input.limit);
+    const last = rows.at(-1);
+    const domain = (url: string) => {
+      try {
+        return new URL(url).hostname.replace(/^www\./, "");
+      } catch {
+        return null;
+      }
+    };
+    return {
+      articles: rows.flatMap((r) => {
+        const host = domain(r.source_url);
+        // A stored link that cannot be parsed is skipped, not fatal for the page.
+        if (!host) return [];
+        return [
+          {
+            url: r.source_url,
+            title: r.title,
+            site: r.site_name ?? null,
+            domain: host,
+            saved_at: new Date(r.captured_at).toISOString(),
+            // False while queued or after a failed import: the title may
+            // still be just the site's host name.
+            prepared: r.status === "ready",
+          },
+        ];
+      }),
+      next:
+        result.rows.length > input.limit && last
+          ? Buffer.from(`${last.at}|${last.id}`).toString("base64url")
+          : null,
+    };
+  }
   async library(identity: Identity, cursor: number) {
     this.app(identity);
     const result = await this.db.query<Item>(

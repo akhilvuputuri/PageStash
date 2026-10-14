@@ -44,6 +44,8 @@ struct Connection: Decodable, Identifiable {
   let label: String
   let kind: String
   let expiresAt: String
+  /// Whether this connection may read saved-article titles, links and sites.
+  let interests: Bool?
 }
 struct Connections: Decodable { let connections: [Connection] }
 struct NewConnection: Decodable {

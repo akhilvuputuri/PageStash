@@ -119,7 +119,7 @@ export async function oauthRoutes(app: FastifyInstance, service: Service) {
     return reply
       .type("text/html")
       .send(
-        `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect PageStash</title><style>body{font:18px system-ui;max-width:480px;margin:60px auto;padding:20px}input,button{display:block;width:100%;padding:12px;margin:12px 0;box-sizing:border-box}small{color:#555}</style><h1>Connect ${escapeHTML(client.name)}</h1><p>Allow this assistant to save articles and briefs and check its submissions. It cannot browse or delete your library.</p><form method="post" action="/oauth/approve">${hidden}<input type="hidden" name="csrf" value="${nonce}"><label>Email<input type="email" name="email" required autocomplete="username"></label><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button type="submit">Sign in and allow saving</button></form><small>Only connect an assistant you trust. Revoke access in the iPhone app.</small>`,
+        `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect PageStash</title><style>body{font:18px system-ui;max-width:480px;margin:60px auto;padding:20px}input,button{display:block;width:100%;padding:12px;margin:12px 0;box-sizing:border-box}small{color:#555}</style><h1>Connect ${escapeHTML(client.name)}</h1><p>Allow this assistant to save articles and briefs and check its submissions. It cannot read article text or delete anything. It can see the titles and links of your saved articles only if you later allow that in the iPhone app.</p><form method="post" action="/oauth/approve">${hidden}<input type="hidden" name="csrf" value="${nonce}"><label>Email<input type="email" name="email" required autocomplete="username"></label><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button type="submit">Sign in and allow saving</button></form><small>Only connect an assistant you trust. Revoke access in the iPhone app.</small>`,
       );
   });
   app.post("/oauth/approve", async (request, reply) => {
@@ -245,8 +245,11 @@ export async function oauthRoutes(app: FastifyInstance, service: Service) {
     const input = z
       .object({ token: z.string(), client_id: z.string() })
       .parse(request.body);
+    // The connection's opt-in grants go with its credentials.
     await service.db.query(
-      `DELETE FROM credentials WHERE connection_id IN(SELECT connection_id FROM credentials WHERE hash=$1 AND label=$2 AND kind IN('oauth','refresh'))`,
+      `WITH target AS (SELECT DISTINCT owner_id,connection_id FROM credentials WHERE hash=$1 AND label=$2 AND kind IN('oauth','refresh')),
+       grants AS (DELETE FROM connection_grants g USING target t WHERE g.owner_id=t.owner_id AND g.connection_id=t.connection_id)
+       DELETE FROM credentials c USING target t WHERE c.connection_id=t.connection_id AND c.owner_id=t.owner_id`,
       [hash(input.token), input.client_id],
     );
     return reply.code(200).send({});

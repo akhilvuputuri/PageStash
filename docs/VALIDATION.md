@@ -333,6 +333,23 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - The 30-day purge in production (first eligible items 30 days after first use).
   - The rejected-edit sync loop has no automated test; only its status mapping is unit-tested.
 
+### Saved-article metadata for assistants (opt-in), 15 October 2026
+
+- **Change.** The owner asked for Chief's news bulletin to learn from what they save, including Safari saves. A new per-connection `interests` grant, off by default and switchable only from the app, lets an agent call `list_saved_articles` (MCP) or `GET /v1/interests/saved`. These return title, link, site and save time of non-deleted articles, newest first, keyset-paged with a microsecond-exact cursor. Briefs, content, collections and reading state are never returned. Settings → Assistant connections shows a **Share saved-article titles** switch per connection. Revoking a connection deletes its grant. OAuth scopes are unchanged; the app switch is the authorization.
+- **Tested.** 26 backend tests pass, including the new test (extended after review with forged cursors, out-of-range times and DateStyle/time-zone independence): refused before opt-in; an agent cannot grant itself (403); unknown connection 404; complete newest-first paging across sub-millisecond timestamps; brief excluded; HTTP fallback; other connections still refused; the grant is removed on revocation. Discovery now lists four tools. The unsigned simulator build passes.
+- **Independent review (Opus 5.5) of `fc5bbc4`: APPROVE**, with eight P3 findings and its own executable checks: idempotent upgrade with row-level security, cross-owner/refresh/app-connection refusals, cascade on account deletion, tie-heavy paging, input parsing and index use. Addressed in the follow-up commit:
+  - Forged cursors and out-of-range `since` values return 400, not 500.
+  - The cursor is a fixed UTC microsecond form, independent of DateStyle and time zone (tested).
+  - OAuth revocation and the expiry sweep delete the connection's grant.
+  - An unparseable stored link is skipped instead of failing the page.
+  - Each article reports `prepared`.
+  - The switch updates at once, sends one request at a time, restores itself on failure and has a per-connection VoiceOver label.
+  - The footnote mentions save times and shows only when there are connections.
+  - The README, integrations checklist and OAuth consent copy are updated.
+  - Not changed: links are returned with their query strings (disclosed in the copy and adapter doc), and the calling agent's own saves are included (intended: they are owner-requested saves).
+- **Merged with main (Trash, #45).** The listing now also excludes items in Trash; a test trashes and restores one. Round 2 re-review approved `df3af43`, and the merge re-review approved `2406ed0`. A later merge brought in only #47's release record (docs).
+- **Not yet done.** Re-review of the merge, merge, Northflank deploy, an app build carrying the switch, and owner acceptance with Chief's connection. The `ios-design` verification matrix (Dynamic Type, dark/Sepia, VoiceOver) has not been run for the new switch.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
