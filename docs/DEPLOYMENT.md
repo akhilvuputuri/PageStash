@@ -18,7 +18,7 @@
 6. Set the runtime environment values from `backend/.env.example`: `NODE_ENV=production`, `HOST=0.0.0.0`, `PORT=8787`, `DEV_AUTH=false`, `PUBLIC_URL` to the **exact generated HTTPS origin**, `DATABASE_URL`, `OWNER_EMAIL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`, `STORAGE_BUCKET=articles`. When using Supabase's URI template containing `[YOUR-PASSWORD]`, enter the existing password separately as `DATABASE_PASSWORD`; the server safely percent-encodes it. Keep `sslmode=verify-full` on the URI. Secrets belong at runtime, not in Docker build arguments. If the public URL is only available after creation, update it and redeploy before testing ingestion.
 7. Deploy. Verify `GET /health`, private storage, an asynchronous brief, an article with images, and revoked-agent rejection. Record live results in `VALIDATION.md`.
 
-Schema changes are additive and run at startup. Reader 0.3.x adds `items.site_name`; after deploying it, newly prepared articles carry their publisher's name, and older clients ignore the field.
+Schema changes are additive and run at startup. Reader 0.3.x adds `items.site_name`; after deploying it, newly prepared articles carry their publisher's name, and older clients ignore the field. A later release adds the `connection_grants` table and the opt-in `list_saved_articles` tool. No existing connection gains access until the owner turns on **Share saved-article titles** in the new app build, and older app builds simply do not show the switch.
 
 The production service does not store articles on the container's ephemeral disk. Restarting or redeploying must retain jobs, articles, and images in PostgreSQL/Supabase Storage. No persistent volume is needed for this server.
 

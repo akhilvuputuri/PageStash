@@ -12,6 +12,11 @@ export const linkInput = z.object({
   url: z.string().url().max(2048),
   idempotency_key: z.string().min(1).max(200),
 });
+export const savedArticlesInput = z.object({
+  limit: z.number().int().min(1).max(200).default(100),
+  before: z.string().min(1).max(200).optional(),
+  since: z.string().datetime({ offset: true }).optional(),
+});
 export const documentInput = z
   .object({
     title: z.string().min(1).max(300),
@@ -128,6 +133,16 @@ export async function buildServer(service: Service) {
         .parse((request.query as { cursor?: string }).cursor ?? 0),
     ),
   );
+  app.get("/v1/interests/saved", async (request) => {
+    const query = request.query as Record<string, string | undefined>;
+    return service.savedArticles(
+      await auth(request),
+      savedArticlesInput.parse({
+        ...query,
+        limit: query.limit === undefined ? undefined : Number(query.limit),
+      }),
+    );
+  });
   app.patch("/v1/items/:id", async (request) => {
     const patch = z
       .object({
@@ -173,7 +188,10 @@ export async function buildServer(service: Service) {
     const identity = await auth(request);
     service.app(identity);
     const result = await service.db.query(
-      "SELECT connection_id AS id,min(label) AS label,min(kind) AS kind,max(expires_at) AS expires_at FROM credentials WHERE owner_id=$1 AND kind IN('api','oauth','refresh') GROUP BY connection_id ORDER BY max(created_at) DESC",
+      `SELECT c.connection_id AS id,min(c.label) AS label,min(c.kind) AS kind,max(c.expires_at) AS expires_at,
+       COALESCE(bool_or(g.interests),false) AS interests
+       FROM credentials c LEFT JOIN connection_grants g ON g.owner_id=c.owner_id AND g.connection_id=c.connection_id
+       WHERE c.owner_id=$1 AND c.kind IN('api','oauth','refresh') GROUP BY c.connection_id ORDER BY max(c.created_at) DESC`,
       [identity.owner_id],
     );
     return { connections: result.rows };
@@ -192,16 +210,31 @@ export async function buildServer(service: Service) {
       365,
     );
   });
+  app.patch("/v1/connections/:id", async (request) => {
+    const identity = await auth(request);
+    const input = z
+      .object({ interests: z.boolean() })
+      .strict()
+      .parse(request.body);
+    await service.setInterests(
+      identity,
+      id.parse((request.params as { id: string }).id),
+      input.interests,
+    );
+    return { ok: true };
+  });
   app.delete("/v1/connections/:id", async (request) => {
     const identity = await auth(request);
     service.app(identity);
+    const connection = id.parse((request.params as { id: string }).id);
     await service.db.query(
       "DELETE FROM credentials WHERE connection_id=$1 AND owner_id=$2 AND kind<>$3",
-      [
-        id.parse((request.params as { id: string }).id),
-        identity.owner_id,
-        "app",
-      ],
+      [connection, identity.owner_id, "app"],
+    );
+    // A revoked connection's opt-ins never carry over to a later credential.
+    await service.db.query(
+      "DELETE FROM connection_grants WHERE connection_id=$1 AND owner_id=$2",
+      [connection, identity.owner_id],
     );
     return { ok: true };
   });
@@ -309,6 +342,22 @@ export async function buildServer(service: Service) {
       },
       async (input) =>
         result(() => service.status(caller(), input.submission_id)),
+    );
+    server.registerTool(
+      "list_saved_articles",
+      {
+        description:
+          "List the owner's saved articles, newest first: title, link, site, domain and save time only. No content, briefs or reading state. Works only after the owner allows it for this connection in app Settings. Use `next` as `before` for the following page.",
+        inputSchema: savedArticlesInput.shape,
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        _meta: { securitySchemes: schemes },
+      },
+      async (input) => result(() => service.savedArticles(caller(), input)),
     );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

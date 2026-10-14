@@ -11,9 +11,9 @@ This task has **not** modified or connected Chief Agent. This document does not 
 | Production origin | `https://p01--reader-api--2sn8tjhm47hb.code.run` |
 | MCP endpoint | `https://p01--reader-api--2sn8tjhm47hb.code.run/mcp` |
 | Transport | MCP Streamable HTTP over HTTPS |
-| Tools to expose | `save_link`, `save_document`, `get_save_status` |
-| Agent permissions | Save articles/briefs and inspect submissions made by that connection |
-| Not permitted | Browse the library, read unrelated submissions, edit/delete articles, manage credentials or delete the account |
+| Tools to expose | `save_link`, `save_document`, `get_save_status`; optionally `list_saved_articles` |
+| Agent permissions | Save articles/briefs and inspect submissions made by that connection. With the owner's per-connection opt-in only: list saved-article metadata (title, link, site, save time) |
+| Not permitted | Read article content, briefs or reading progress, read unrelated submissions' status, edit/delete articles, grant itself permissions, manage credentials or delete the account |
 
 The server is stateless at the MCP transport layer. Use a normal MCP client handshake and `tools/list`; do not expect a durable `Mcp-Session-Id`. Imports are application jobs, **not MCP Tasks**. Poll `get_save_status` rather than a `tasks/get` endpoint. `GET /mcp` is not the integration API; tool calls use POST.
 
@@ -75,6 +75,10 @@ type SubmissionStatus = {
   error: string | null;
 };
 ```
+
+### Saved-article metadata (opt-in)
+
+`list_saved_articles({ limit?: 1–200 (default 100), before?: cursor, since?: ISO datetime })` returns `{"articles":[{"url","title","site","domain","saved_at"}],"next":cursor|null}`, newest first. Pass `next` as `before` for the following page. Only articles are listed (never briefs), whichever connection or app saved them, including Safari shares. It returns no content, collections, archive or reading state. Until the owner turns on **Share saved-article titles** for that connection in Settings → Assistant connections, the call returns `isError` explaining how. An agent cannot turn it on itself, and revoking the connection removes the choice. OAuth scopes are unchanged (`save status`); the app toggle is the authorization. HTTP fallback: `GET /v1/interests/saved?limit=&before=&since=`.
 
 Map the interface to MCP calls as follows. Wire field names are snake_case:
 

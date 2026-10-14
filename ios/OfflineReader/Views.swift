@@ -975,27 +975,47 @@ struct ConnectionsView: View {
           Button("Copy credential") { UIPasteboard.general.string = newToken }
         }
         ForEach(connections) { connection in
-          HStack {
-            Text(connection.label)
-            Spacer()
-            Button("Revoke", role: .destructive) {
-              Task {
-                do {
-                  guard let api = state.api else { return }
-                  let _: OK = try await api.request(
-                    "/v1/connections/\(connection.id)", method: "DELETE")
-                  await loadConnections()
-                } catch { self.error = error.localizedDescription }
+          VStack(alignment: .leading) {
+            HStack {
+              Text(connection.label)
+              Spacer()
+              Button("Revoke", role: .destructive) {
+                Task {
+                  do {
+                    guard let api = state.api else { return }
+                    let _: OK = try await api.request(
+                      "/v1/connections/\(connection.id)", method: "DELETE")
+                    await loadConnections()
+                  } catch { self.error = error.localizedDescription }
+                }
               }
             }
+            Toggle(
+              "Share saved-article titles",
+              isOn: Binding(
+                get: { connection.interests ?? false },
+                set: { on in Task { await setInterests(connection, on) } })
+            ).font(.subheadline)
           }
         }
+        Text(
+          "Sharing lets an assistant read the titles, links and sites of your saved articles to suggest similar reading. It never sees article text, briefs or reading progress."
+        ).font(.footnote).foregroundStyle(.secondary)
         Text("MCP endpoint: \(state.backendURL)/mcp").font(.caption).textSelection(.enabled)
       }.readerRowBackground()
       if let error { Section { Text(error).foregroundStyle(.red) }.readerRowBackground() }
     }.readerFormBackground().navigationTitle("Assistant connections").task {
       await loadConnections()
     }
+  }
+  private func setInterests(_ connection: Connection, _ on: Bool) async {
+    do {
+      guard let api = state.api else { return }
+      let _: OK = try await api.request(
+        "/v1/connections/\(connection.id)", method: "PATCH",
+        body: JSONSerialization.data(withJSONObject: ["interests": on]))
+    } catch { self.error = error.localizedDescription }
+    await loadConnections()
   }
   private func loadConnections() async {
     do {

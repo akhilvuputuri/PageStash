@@ -40,6 +40,7 @@ Endpoint: `https://YOUR_BACKEND/mcp` over Streamable HTTP.
 - `save_link(url, idempotency_key)`
 - `save_document(title, markdown, sources, idempotency_key)`
 - `get_save_status(submission_id)`
+- `list_saved_articles(limit?, before?, since?)`: saved-article titles, links, sites and save times, newest first. Works only after the owner turns on **Share saved-article titles** for that connection in Settings → Assistant connections; never returns content, briefs or reading state.
 
 OAuth metadata lives at `/.well-known/oauth-authorization-server` and `/.well-known/oauth-protected-resource`. Public-client dynamic registration is at `/oauth/register`. Scopes are `save status`; consent explicitly excludes browsing/deleting the library. Only the owner application account may sign in during the personal beta.
 
