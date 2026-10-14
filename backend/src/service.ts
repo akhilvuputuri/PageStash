@@ -519,7 +519,7 @@ export class Service {
           role: "content",
           mime: "text/html",
           filename: "article.html",
-          bytes: Buffer.from(readerHTML(prepared.html, prepared.title)),
+          bytes: Buffer.from(readerHTML(prepared.html, prepared.title, prepared.lang)),
         },
         ...prepared.images.map((i) => ({
           ...i,

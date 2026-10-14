@@ -24,6 +24,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Check app icon artwork
+        run: swift scripts/check-icon.swift ios/OfflineReader/Assets.xcassets/AppIcon.appiconset/AppIcon.png
       - name: Test local storage
         working-directory: ios/ReaderCore
         run: swift test

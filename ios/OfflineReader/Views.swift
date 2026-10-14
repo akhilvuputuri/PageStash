@@ -1,11 +1,20 @@
 import BackgroundTasks
+import CoreSpotlight
 import ReaderCore
 import SwiftUI
 
 struct RootView: View {
   @EnvironmentObject var state: AppState
   var body: some View {
-    Group { if state.session == nil { LoginView() } else { LibraryView() } }.readerTheme()
+    Group { if state.session == nil { LoginView() } else { LibraryView() } }.appTheme()
+      .onOpenURL { url in
+        if let id = ContinueReading.itemID(from: url) { state.open(id) }
+      }
+      .onContinueUserActivity(CSSearchableItemActionType) { activity in
+        if let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String {
+          state.open(id)
+        }
+      }
   }
 }
 struct LoginView: View {
@@ -66,6 +75,7 @@ struct LoginView: View {
 }
 struct LibraryView: View {
   @EnvironmentObject var state: AppState
+  @Namespace private var transition
   @State private var showSave = false
   @State private var showSettings = false
   @State private var showImports = false
@@ -75,7 +85,7 @@ struct LibraryView: View {
   }
   var body: some View {
     NavigationStack {
-      LibraryList(archived: false, showImports: $showImports)
+      LibraryList(archived: false, showImports: $showImports, transition: transition)
         .toolbar {
           ToolbarItem(placement: .topBarTrailing) {
             Button {
@@ -84,6 +94,10 @@ struct LibraryView: View {
               Image(systemName: "plus")
             }.accessibilityLabel("Save article")
           }
+          // Saving and the options menu are unrelated, so they get separate glass groups on iOS 26.
+          #if compiler(>=6.2)
+            if #available(iOS 26.0, *) { ToolbarSpacer(.fixed, placement: .topBarTrailing) }
+          #endif
           ToolbarItem(placement: .topBarTrailing) {
             Menu {
               if pendingImports > 0 {
@@ -110,11 +124,31 @@ struct LibraryView: View {
         }
         // A pushed Archive gets the standard Back button.
         .navigationDestination(isPresented: $showArchive) {
-          LibraryList(archived: true, showImports: $showImports)
+          LibraryList(archived: true, showImports: $showImports, transition: transition)
         }
         .sheet(isPresented: $showSave) { SaveView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showImports) { ImportsView() }
+        .onChange(of: state.openRequest) { _, request in
+          guard let request else { return }
+          state.openRequest = nil
+          let sheetOpen = showSave || showSettings || showImports
+          showSave = false
+          showSettings = false
+          showImports = false
+          if sheetOpen {
+            // Present once the sheet has finished dismissing.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { state.readerRoute = request }
+          } else {
+            state.readerRoute = request
+          }
+        }
+        // The reader is its own presentation, so its reading theme never restyles the Library.
+        .fullScreenCover(item: $state.readerRoute) { route in
+          NavigationStack { ReaderScreen(itemID: route.id) }
+            .readerTheme()
+            .readerZoomTransition(id: route.id, in: transition)
+        }
     }
   }
 }
@@ -123,6 +157,7 @@ struct LibraryList: View {
   @Environment(\.themeTokens) private var tokens
   let archived: Bool
   @Binding var showImports: Bool
+  let transition: Namespace.ID
   @State private var query = ""
   @State private var collection = "All"
   @State private var pendingDelete: ReadingItem?
@@ -131,7 +166,6 @@ struct LibraryList: View {
   @State private var archiveCommits = 0
   @State private var retrying = false
   @Environment(\.undoManager) private var undoManager
-  @Namespace private var transition
   private var imports: [ReadingItem] { state.items.filter(\.needsImportReview) }
   private var importSummary: String {
     let failed = imports.filter { $0.status == "bookmark" }.count
@@ -194,11 +228,18 @@ struct LibraryList: View {
         ).listRowSeparator(.hidden).listRowBackground(tokens.nativePage)
       }
       ForEach(filtered) { item in
-        NavigationLink {
-          ReaderScreen(itemID: item.id).readerZoomTransition(id: item.id, in: transition)
+        Button {
+          state.open(item.id)
         } label: {
-          ArticleRow(item: item)
+          HStack(alignment: .center, spacing: 12) {
+            ArticleRow(item: item)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.forward").font(.footnote.weight(.semibold))
+              .foregroundStyle(.tertiary).accessibilityHidden(true)
+          }
+          .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .readerZoomSource(id: item.id, in: transition)
         .listRowBackground(tokens.nativePage)
         .listRowSeparator(.hidden).listRowInsets(
@@ -521,7 +562,7 @@ struct SaveView: View {
           }.disabled(busy || url.isEmpty)
         }
       }
-    }.readerTheme()
+    }.appTheme()
   }
 }
 struct ReaderScreen: View {
@@ -576,7 +617,8 @@ struct ReaderScreen: View {
                 title: item.title, kind: item.kind, author: item.author,
                 source: URL(string: item.sourceUrl ?? ""),
                 status: offline == .ready ? nil : offline.rawValue,
-                error: item.error, finishLabel: canFinish(item) ? "Done Reading" : nil),
+                error: item.error, finishLabel: canFinish(item) ? "Done Reading" : nil,
+                sources: item.sources.compactMap(URL.init(string:))),
               scrollState: scrollState,
               progress: (try? state.store?.readingPosition(item.id)) ?? item.progress,
               fontSize: fontSize,
@@ -637,6 +679,9 @@ struct ReaderScreen: View {
             }
           }
         }.toolbar {
+          ToolbarItem(placement: .topBarLeading) {
+            CloseButton { dismiss() }
+          }
           // Less frequent actions; the primary ones sit in the bottom bar near the thumb.
           ToolbarItem(placement: .topBarTrailing) {
             Menu {
@@ -702,12 +747,18 @@ struct ReaderScreen: View {
         }
       } else {
         ContentUnavailableView("Item removed", systemImage: "book")
+          .toolbar {
+            ToolbarItem(placement: .topBarLeading) { CloseButton { dismiss() } }
+          }
       }
     }
     .background(Color(hex: tokens.page).ignoresSafeArea())
       .toolbar(scrollState.barsHidden ? .hidden : .visible, for: .navigationBar, .bottomBar)
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: scrollState.barsHidden)
-      .navigationBarTitleDisplayMode(.inline).onAppear { finished = false }.onDisappear {
+      .navigationBarTitleDisplayMode(.inline).onAppear {
+        finished = false
+        SystemIntegration.didOpen(itemID)
+      }.onDisappear {
         if !finished { scrollState.flush?() }
         finished = true
         state.reload()
@@ -749,7 +800,7 @@ struct ReaderDisplaySheet: View {
           Text("\(percent)% of the reader default. Articles also follow your iPhone text size.")
             .foregroundStyle(tokens.secondaryInk.color)
         }.readerRowBackground()
-        Section("Theme") {
+        Section("Reading Theme") {
           Picker("Theme", selection: $appearance) {
             Text("Light").tag("light")
             Text("Sepia").tag("sepia")
@@ -781,6 +832,14 @@ struct ReaderMetadata: View {
           .foregroundStyle(tokens.secondaryInk.color)
         Text("Written by an assistant. It may contain errors; check the sources.")
           .font(.footnote).foregroundStyle(tokens.secondaryInk.color)
+        ForEach(
+          item.sources.compactMap(URL.init(string:)).filter {
+            ["http", "https"].contains($0.scheme ?? "")
+          }.prefix(5), id: \.self
+        ) { url in
+          Link("Source · \(url.host ?? url.absoluteString)", destination: url).font(.footnote)
+            .foregroundStyle(tokens.link.color)
+        }
       }
       Text(item.title).font(.system(size: titleSize, weight: .medium, design: .serif))
         .accessibilityAddTraits(.isHeader)
@@ -810,7 +869,7 @@ struct SettingsView: View {
   var body: some View {
     NavigationStack {
       Form {
-        Section("Appearance") {
+        Section("Reading Theme") {
           Picker("Theme", selection: $appearance) {
             Text("Light").tag("light")
             Text("Sepia").tag("sepia")
@@ -818,12 +877,12 @@ struct SettingsView: View {
             Text("System").tag("system")
           }
           Text(
-            "Light uses white pages. Sepia uses warm off-white pages with softer brown text. While reading, Aa also changes the theme and text size."
+            "Articles use this theme. Light uses white pages; Sepia uses warm off-white pages with softer brown text. The Library and Settings follow your iPhone's appearance. While reading, Aa also changes the theme and text size."
           )
           .font(.footnote).foregroundStyle(tokens.secondaryInk.color)
         }.readerRowBackground()
         if let message = state.sharingMessage {
-          Section("Browser sharing") { Text(message).font(.footnote) }.readerRowBackground()
+          Section("Browser Sharing") { Text(message).font(.footnote) }.readerRowBackground()
         }
         Section("Downloads") {
           Toggle("Allow cellular downloads", isOn: $cellular).onChange(of: cellular) { _, _ in
@@ -841,7 +900,7 @@ struct SettingsView: View {
             "Used: \(ByteCountFormatter.string(fromByteCount:state.store?.diskUsage ?? 0,countStyle:.file))"
           )
         }.readerRowBackground()
-        Section("Background refresh") {
+        Section("Background Refresh") {
           Text(
             UIApplication.shared.backgroundRefreshStatus == .available
               ? "Enabled in iOS" : "Restricted in iOS settings")
@@ -872,7 +931,7 @@ struct SettingsView: View {
       }.readerFormBackground().navigationTitle("Settings").toolbar {
         ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } }
       }
-    }.readerTheme()
+    }.appTheme()
   }
 }
 struct ConnectionsView: View {
@@ -883,7 +942,7 @@ struct ConnectionsView: View {
   @State private var error: String?
   var body: some View {
     Form {
-      Section("Assistant connections") {
+      Section("Assistant Connections") {
         TextField("Credential label", text: $label)
         Button("Create API credential") {
           Task {
@@ -957,7 +1016,7 @@ struct AccountView: View {
     }.readerFormBackground().navigationTitle("Account")
       .sheet(isPresented: $reconnect) {
         LoginView().onChange(of: state.session?.generation) { _, _ in reconnect = false }
-          .readerTheme()
+          .appTheme()
       }.confirmationDialog(
         "Permanently delete your account and all saved articles?", isPresented: $confirmDelete,
         titleVisibility: .visible
@@ -1053,6 +1112,6 @@ struct ImportsView: View {
         .navigationTitle("Imports").toolbar {
           ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } }
         }
-    }.readerTheme()
+    }.appTheme()
   }
 }

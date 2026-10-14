@@ -149,7 +149,7 @@ struct ShareSaveView: View {
         }
         if model.loading { ProgressView("Reading shared link…") }
         if model.candidates.count > 1 {
-          Section("Choose one webpage") {
+          Section("Choose One Webpage") {
             ForEach(model.candidates, id: \.self) { url in
               Button {
                 model.selected = url

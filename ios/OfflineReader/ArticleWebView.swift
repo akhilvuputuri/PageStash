@@ -12,8 +12,14 @@ struct ArticleHeader: Equatable {
   let error: String?
   /// Label for the end-of-article finish link, or nil when finishing does not apply.
   var finishLabel: String? = nil
+  /// Sources an assistant cited for a brief; shown beside the brief's label.
+  var sources: [URL] = []
   var payload: String {
-    var data: [String: String] = ["title": title, "kind": kind]
+    var data: [String: Any] = ["title": title, "kind": kind]
+    let links = sources.filter { ["http", "https"].contains($0.scheme ?? "") }.prefix(5)
+    if !links.isEmpty {
+      data["sources"] = links.map { ["url": $0.absoluteString, "host": $0.host ?? $0.absoluteString] }
+    }
     if let status { data["status"] = status }
     if let finishLabel { data["finish"] = finishLabel }
     if let author { data["author"] = author }
@@ -43,6 +49,8 @@ struct ArticleWebView: UIViewRepresentable {
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.colorSchemeContrast) private var contrast
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @Environment(\.accessibilityReduceMotion) var reduceMotion
+  @Environment(\.legibilityWeight) private var legibilityWeight
   @AppStorage("appearance") private var selectedAppearance = ThemeTokens.defaultAppearance
   let url: URL
   let header: ArticleHeader
@@ -73,6 +81,7 @@ struct ArticleWebView: UIViewRepresentable {
     let appearance: String
     let increasedContrast: Bool
     let compactHeadings: Bool
+    let boldText: Bool
     let topPadding: Double
     let bottomPadding: Double
     let header: ArticleHeader
@@ -80,7 +89,7 @@ struct ArticleWebView: UIViewRepresentable {
   var presentation: Presentation {
     Presentation(
       fontSize: scaledFontSize, appearance: appearance, increasedContrast: contrast == .increased,
-      compactHeadings: dynamicTypeSize.isAccessibilitySize,
+      compactHeadings: dynamicTypeSize.isAccessibilitySize, boldText: legibilityWeight == .bold,
       topPadding: (18 + chromeInsets.top).rounded(), bottomPadding: (18 + chromeInsets.bottom).rounded(),
       header: header)
   }
@@ -114,6 +123,13 @@ struct ArticleWebView: UIViewRepresentable {
       if (metadata.kind === 'brief') {
         const kind=small(add('div','AGENT-CREATED BRIEF'),12); kind.style.letterSpacing='1.5px'; kind.style.fontWeight='600';
         small(add('div','Written by an assistant. It may contain errors; check the sources.'),13).style.marginTop='4px';
+        if (metadata.sources) {
+          const line=small(add('div','Sources: '),13); line.style.marginTop='4px';
+          metadata.sources.forEach((source,index) => {
+            if (index) line.append(', ');
+            const link=document.createElement('a'); link.href=source.url; link.textContent=source.host; line.append(link);
+          });
+        }
       }
       const title=add('h1',metadata.title); title.style.fontSize='\(max(24, scaledFontSize * (dynamicTypeSize.isAccessibilitySize ? 1.15 : 1.4)))px'; title.style.lineHeight='1.2'; title.style.margin='10px 0';
       if (metadata.author) { small(add('div',metadata.author),14).style.marginBottom='8px'; }
@@ -139,6 +155,8 @@ struct ArticleWebView: UIViewRepresentable {
       body.style.backgroundColor='\(tokens.page)';
       body.style.color='\(ink)';
       body.style.fontSize='\(scaledFontSize)px';
+      // Bold Text in Settings thickens article text too, as it does native text.
+      body.style.fontWeight='\(legibilityWeight == .bold ? "600" : "")';
       body.style.fontFamily='ui-serif,Georgia,serif'; body.style.lineHeight='1.6';
       body.style.padding='\(presentation.topPadding)px 18px \(presentation.bottomPadding)px';
       body.style.maxWidth='36em'; body.style.margin='auto'; body.style.overflowWrap='break-word';
@@ -311,7 +329,10 @@ struct ArticleWebView: UIViewRepresentable {
     private func updateBars(_ scroll: UIScrollView) {
       let y = scroll.contentOffset.y
       defer { lastOffset = y }
-      guard !restoring, scroll.isTracking || scroll.isDecelerating else { return }
+      // With Reduce Motion the bars stay put while scrolling; a tap still toggles them, without animation.
+      guard !restoring, !parent.reduceMotion, scroll.isTracking || scroll.isDecelerating else {
+        return
+      }
       let end = scroll.contentSize.height - scroll.bounds.height
       if y < 40 || y > end - 40 {
         setBarsHidden(false)

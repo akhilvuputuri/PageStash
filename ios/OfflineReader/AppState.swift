@@ -9,6 +9,30 @@ import SwiftUI
   @Published var message: String?
   @Published var refreshing = false
   @Published var readingUndo: ReadingUndo?
+  /// The article open in the full-screen reader. Rows, deep links, Spotlight, the Home Screen quick
+  /// action and App Shortcuts all open articles by setting this.
+  @Published var readerRoute: ReaderRoute?
+  /// A request to open the reader. The Library closes any open sheet first, because SwiftUI cannot
+  /// present the reader over another sheet, then presents `readerRoute`.
+  @Published var openRequest: ReaderRoute?
+  /// An article asked for before the library loaded (for example a cold-launch deep link). It is
+  /// dropped if the article doesn't become readable soon, so it can't pop open much later.
+  private var pendingOpen: (id: String, until: Date)?
+  /// Opens an article in the reader, from a row, link, Spotlight, quick action or App Shortcut.
+  func open(_ id: String) {
+    pendingOpen = (id, Date().addingTimeInterval(15))
+    openPendingItem()
+  }
+  private func openPendingItem() {
+    guard let pending = pendingOpen else { return }
+    guard pending.until > Date() else {
+      pendingOpen = nil
+      return
+    }
+    guard items.contains(where: { $0.id == pending.id && $0.hasPreparedContent }) else { return }
+    pendingOpen = nil
+    openRequest = ReaderRoute(id: pending.id)
+  }
   /// Word counts of downloaded articles, for reading-time estimates in the Library.
   @Published var wordCounts: [String: Int] = [:]
   @Published var sharedSaves: [SharedSave] = []
@@ -98,6 +122,10 @@ import SwiftUI
       items = try store?.items() ?? []
       readingUndo = try store?.readingUndo()
       wordCounts = try store?.wordCounts() ?? [:]
+      SystemIntegration.update(items: items) { item in
+        (try? self.store?.readingPosition(item.id)) ?? item.progress
+      }
+      openPendingItem()
       if let shareStore = self.shareStore, let credentials = ShareVault.load() {
         sharedSaves = try shareStore.records(credentials.account)
       }
@@ -202,9 +230,15 @@ import SwiftUI
     }
   }
   func save(_ url: String, key: String) async throws {
+    try await submit(url, key: key, syncAfter: false)
+    try await sync()
+  }
+  /// Submits a link. With `syncAfter`, the library refreshes in the background and its errors don't
+  /// make a successful save look failed.
+  func submit(_ url: String, key: String, syncAfter: Bool = true) async throws {
     guard let api else { throw APIError(message: "Reconnect before submitting an article.") }
     let _: SaveResponse = try await api.save(url: url, key: key)
-    try await sync()
+    if syncAfter { Task { try? await sync() } }
   }
   func edit(_ item: ReadingItem, _ patch: ItemPatch) {
     do {
@@ -296,6 +330,8 @@ import SwiftUI
       store = nil
       items = []
       readingUndo = nil
+      readerRoute = nil
+      SystemIntegration.clear()
       if let root { try? FileManager.default.removeItem(at: root) }
       return
     }
@@ -323,6 +359,10 @@ import SwiftUI
     session = nil
     items = []
     readingUndo = nil
+    readerRoute = nil
+    openRequest = nil
+    pendingOpen = nil
+    SystemIntegration.clear()
     lastSync = "Not yet synced"
     UserDefaults.standard.removeObject(forKey: "lastSync")
     UserDefaults.standard.removeObject(forKey: "downloadError")
@@ -445,6 +485,16 @@ import SwiftUI
 @MainActor final class AppDelegate: NSObject, UIApplicationDelegate {
   static let refreshID = "com.akhilvuputuri.offlinereader.refresh"
   func application(
+    _ application: UIApplication, configurationForConnecting session: UISceneSession,
+    options: UIScene.ConnectionOptions
+  ) -> UISceneConfiguration {
+    // A quick action that launched the app arrives here; one used while running reaches SceneDelegate.
+    if let shortcut = options.shortcutItem { SystemIntegration.handle(shortcut) }
+    let configuration = UISceneConfiguration(name: nil, sessionRole: session.role)
+    configuration.delegateClass = SceneDelegate.self
+    return configuration
+  }
+  func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
@@ -468,6 +518,9 @@ import SwiftUI
     _ = AppState.shared
     Downloads.shared.handleEvents(completion: completionHandler)
   }
+}
+struct ReaderRoute: Identifiable, Equatable {
+  let id: String
 }
 @main struct OfflineReaderApp: App {
   @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate

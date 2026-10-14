@@ -10,6 +10,7 @@ import XCTest
     @Published var font = 20.0
     @Published var dark = false
     @Published var typeSize = DynamicTypeSize.large
+    @Published var bold = false
   }
   struct Harness: View {
     @ObservedObject var controls: Controls
@@ -23,6 +24,7 @@ import XCTest
       )
       .environment(\.colorScheme, controls.dark ? .dark : .light)
       .environment(\.dynamicTypeSize, controls.typeSize)
+      .environment(\.legibilityWeight, controls.bold ? .bold : .regular)
     }
   }
   func evaluate(_ web: WKWebView, _ script: String) async throws -> Any? {
@@ -133,6 +135,13 @@ import XCTest
     controls.typeSize = .large
     try await waitFor { coordinator.fontSize == 30 && !coordinator.restoring }
     XCTAssertEqual(coordinator.currentProgress(web.scrollView), desired, accuracy: 0.02)
+    controls.bold = true
+    try await waitFor { coordinator.presentation?.boldText == true && !coordinator.restoring }
+    let weight = try await evaluate(web, "document.body.style.fontWeight") as? String
+    XCTAssertEqual(weight, "600", "Bold Text must thicken article text")
+    XCTAssertEqual(coordinator.currentProgress(web.scrollView), desired, accuracy: 0.02)
+    controls.bold = false
+    try await waitFor { coordinator.presentation?.boldText == false && !coordinator.restoring }
     controls.dark = true
     try await waitFor { coordinator.appearance == "dark" && !coordinator.restoring }
     let scheme = try await evaluate(web, "document.documentElement.style.colorScheme") as? String
