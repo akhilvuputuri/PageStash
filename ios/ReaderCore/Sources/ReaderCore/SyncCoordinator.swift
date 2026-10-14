@@ -39,3 +39,23 @@ import Foundation
     current = nil
   }
 }
+
+extension SyncCoordinator {
+  public enum RejectedEdit: Equatable, Sendable {
+    /// The item no longer exists on the server (for example, purged from Trash): drop the edit.
+    case discard
+    /// The server refused this edit (for example, an older server without a new field): keep it
+    /// for a later sync, but still pull the library.
+    case keepForLater
+    /// No response or a server error: stop and retry the whole sync later.
+    case retryWholeSync
+  }
+  nonisolated public static func disposition(ofRejectedEdit status: Int?) -> RejectedEdit {
+    guard let status else { return .retryWholeSync }
+    if status == 404 { return .discard }
+    if (400..<500).contains(status) && status != 401 && status != 408 && status != 429 {
+      return .keepForLater
+    }
+    return .retryWholeSync
+  }
+}

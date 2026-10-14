@@ -463,11 +463,44 @@ test("Trash keeps items restorable, a re-save restores them, and old trash is pu
   )!;
   assert.equal(restored.trashed_at, null, "saving the link again restores it from Trash");
 
+  // A replay of the original request (same idempotency key) is not a new save.
+  const key = randomUUID();
+  const original = await service.save(owner, { url: url + "-replay", idempotency_key: key });
+  await service.update(owner, original.submission_id!, { trashed: true });
+  await service.save(owner, { url: url + "-replay", idempotency_key: key });
+  const replayed = (await service.library(owner, 0)).items.find(
+    (i) => i.id === original.submission_id,
+  )!;
+  assert.ok(replayed.trashed_at, "an idempotent retry leaves the item in Trash");
+
+  // Another connection saving the same link cannot see or restore the owner's trashed item.
+  const shared = await service.save(agent, { url: url + "-agent", idempotency_key: randomUUID() });
+  await service.update(owner, shared.submission_id!, { trashed: true });
+  const fromOther = await service.save(otherAgent, {
+    url: url + "-agent",
+    idempotency_key: randomUUID(),
+  });
+  assert.equal(fromOther.submission_id, null);
+  const stillTrashed = (await service.library(owner, 0)).items.find(
+    (i) => i.id === shared.submission_id,
+  )!;
+  assert.ok(stillTrashed.trashed_at, "a limited connection cannot restore another's item");
+
   await service.update(owner, id, { trashed: true });
   assert.equal(await service.purgeTrash(30), 0, "recent trash is kept");
+  await db.query(
+    "UPDATE items SET captured_at=now()-interval '90 days' WHERE id=$1",
+    [first.submission_id],
+  );
   await db.query("UPDATE items SET trashed_at=now()-interval '31 days' WHERE id=$1", [id]);
   assert.equal(await service.purgeTrash(30), 1);
   const purged = await find();
   assert.equal(purged.deleted, true);
   assert.equal(purged.assets.length, 0);
+  const untouched = (await service.library(owner, 0)).items.find(
+    (i) => i.id === first.submission_id,
+  )!;
+  assert.equal(untouched.deleted, false, "old items that aren't in Trash are never purged");
+  // An edit for a purged item is rejected, which the app treats as "drop the edit".
+  await assert.rejects(() => service.update(owner, id, { trashed: false }), /not found/);
 });

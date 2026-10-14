@@ -140,4 +140,13 @@ final class SyncCoordinatorTests: XCTestCase {
     try await coordinator.run(fullManifest: true) { full in retried = full }
     XCTAssertTrue(retried)
   }
+  func testRejectedEditsNeverBlockTheLibraryForever() {
+    XCTAssertEqual(SyncCoordinator.disposition(ofRejectedEdit: 404), .discard)
+    XCTAssertEqual(SyncCoordinator.disposition(ofRejectedEdit: 400), .keepForLater)
+    XCTAssertEqual(SyncCoordinator.disposition(ofRejectedEdit: 409), .keepForLater)
+    for status in [nil, 401, 408, 429, 500, 503] as [Int?] {
+      XCTAssertEqual(
+        SyncCoordinator.disposition(ofRejectedEdit: status), .retryWholeSync, "\(String(describing: status))")
+    }
+  }
 }

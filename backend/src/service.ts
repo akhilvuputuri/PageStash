@@ -307,8 +307,9 @@ export class Service {
         row.status = String(current.status);
       }
     }
-    // Saving a link again brings it back from Trash instead of leaving it hidden there.
-    if (visible && url !== null && url === row.normalized_url)
+    // A new save of the same link brings it back from Trash. A retry of an earlier request (same
+    // idempotency key) is a replay and changes nothing.
+    if (visible && !row.matched_key && url !== null && url === row.normalized_url)
       await this.db.query(
         "UPDATE items SET trashed_at=NULL,revision=nextval('library_revision') WHERE id=$1 AND owner_id=$2 AND trashed_at IS NOT NULL AND deleted=false",
         [row.id, identity.owner_id],

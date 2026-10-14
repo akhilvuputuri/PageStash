@@ -176,7 +176,18 @@ import SwiftUI
         }
         for edit in try store.pendingEdits() {
           try Task.checkCancellation()
-          try await api.patch(edit.itemID, edit.patch)
+          do {
+            try await api.patch(edit.itemID, edit.patch)
+          } catch let error as APIError
+            where SyncCoordinator.disposition(ofRejectedEdit: error.status) != .retryWholeSync
+          {
+            // A rejected edit must never stop the library from syncing.
+            if SyncCoordinator.disposition(ofRejectedEdit: error.status) == .discard {
+              guard self.session?.generation == generation else { throw CancellationError() }
+              try store.acknowledge(edit)
+            }
+            continue
+          }
           try Task.checkCancellation()
           guard self.session?.generation == generation else { throw CancellationError() }
           try store.acknowledge(edit)

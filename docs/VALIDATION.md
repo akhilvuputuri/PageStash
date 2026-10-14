@@ -274,6 +274,15 @@ Checks used the synthetic preview store on the iPhone 17 Pro and the iPhone 16e 
   - The compiled assets contain the dark and tinted renditions. The simulator Home Screen kept the light icon in dark mode, because the Home Screen icon style is a separate setting the tooling could not switch; check it on the device.
 - **Tests.** 25 backend, 37 Core and 18 native tests and the unsigned device build pass. The bundle shows PageStash 0.4.0 (build 8).
 
+### PageStash 0.4.0 shipped, 15 October 2026
+
+- PR #42 conflicted with #43 at first merge. An automation step then published a v0.4.0 release on `6d1d5c5` (without PageStash) and closed #34. Both were reverted within minutes: the release and tag were deleted and #34 was reopened.
+- The branch merged `main` and dropped agent commit trailers per AGENTS.md. The independent re-review approved `f735854`. CI passed on it. It was merged with `--match-head-commit` as `ce18a89`, with an identical tree.
+- [v0.4.0](https://github.com/akhilvuputuri/PageStash/releases/tag/v0.4.0) is tagged on `ce18a89`. #34 is closed.
+- **Backend (tested).** Northflank build `deluxe-support-9320` deployed `ce18a89` to `reader-api`: Running, 1/1 passing probes, 0 restarts. Live `/health` returned 200, anonymous `/v1/library` 401, and OAuth discovery 200. This deploy also brings the 0.3.2 article language tags and the PageStash consent page.
+- **iPhone (tested).** A signed Release build of `32bbd6a` (app code identical to `ce18a89`) was installed and launched on the owner's iPhone 17 as PageStash 0.4.0 (8), with the widget extension provisioned.
+- **Deferred:** dark and tinted Home Screen icons on the device, and the sign-in header at accessibility sizes.
+
 ### Trash, app-wide theme and Settings button, 15 October 2026
 
 Requested by the owner after using 0.4.0 on the iPhone.
@@ -290,6 +299,12 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Deferred.**
   - The 30-day purge on production (needs the backend deploy).
   - Trash on the physical iPhone.
+- **Review of `36bc832`.** APPROVE, with four findings fixed in the next commit:
+  - **Rejected edits (Medium).** A rejected edit no longer stops a device's sync. A 404, for example an item purged from Trash, drops the edit. Other 4xx responses keep the edit but still pull the library. A unit test covers this.
+  - **Replays.** A retried save with the same idempotency key no longer restores an item from Trash.
+  - **Delete Permanently** re-checks that the item is still in Trash.
+  - **New tests:** replay, a limited connection, the purge leaving items not in Trash untouched, and an edit for a purged item being rejected.
+- **Release order (required).** Deploy and verify the backend before installing this app build. Otherwise an older server rejects `trashed` edits, which are then kept until the server supports them.
 - **Records from #42.** The re-review approved `f735854`. Its non-blocking notes are handled here: the `AGENTS.md` title and icon check, and the icon file destinations in `design/icon-layers/README.md`. The stacked sign-in header at accessibility sizes remains untested, because the iPhone 16e simulator hung.
 
 ## Not yet tested

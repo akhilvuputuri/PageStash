@@ -1174,7 +1174,10 @@ struct TrashList: View {
       titleVisibility: .visible, presenting: pendingDelete
     ) { item in
       Button("Delete Permanently", role: .destructive) {
-        state.edit(item, ItemPatch(deleted: true))
+        // Only if it is still in Trash: a sync may have restored it while the dialog was open.
+        if let current = state.items.first(where: { $0.id == item.id && $0.isTrashed }) {
+          state.edit(current, ItemPatch(deleted: true))
+        }
       }
     } message: { _ in
       Text("This removes it from every device and can't be undone.")
