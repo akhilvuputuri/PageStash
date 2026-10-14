@@ -300,12 +300,13 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - The 30-day purge on production (needs the backend deploy).
   - Trash on the physical iPhone.
 - **Review of `36bc832`.** APPROVE, with four findings fixed in the next commit:
-  - **Rejected edits (Medium).** A rejected edit no longer stops a device's sync. A 404 whose body is the backend's "Item not found.", for example an item purged from Trash, drops the edit. Other 4xx responses, including other 404s, keep the edit but still pull the library; they record an `edit_rejected` diagnostic and show a message. A unit test covers the status mapping; the sync loop itself is untested.
+  - **Rejected edits (Medium).** A rejected edit no longer stops a device's sync. A 404 whose body is the backend's "Item not found.", for example an item purged from Trash, drops the edit. Other 4xx responses, including other 404s, keep the edit but still pull the library; they record an `edit_rejected` diagnostic and show a message when the sync finishes. The message reappears on later syncs while the edit is still rejected. A unit test covers the status mapping; the sync loop itself is untested.
   - **Collections** are capped at 20 per article in the app, matching the server, so that path can't be rejected.
   - **Replays.** A retried save with the same idempotency key no longer restores an item from Trash.
   - **Delete Permanently** re-checks that the item is still in Trash.
   - **New tests:** replay, a limited connection, the purge leaving items not in Trash untouched, and an edit for a purged item being rejected.
 - **Re-review of `e22a274`.** APPROVE. Its non-blocking notes are handled in the next commit: the 404 body check, the collections cap, the diagnostic and message for rejected edits, and this wording.
+- **Re-review of `84e7f07`.** REQUEST CHANGES: the rejected-edit message was cleared when the sync finished. Fixed in the next commit by showing it after the sync. The same commit uses specific diagnostic key names, compares the truncated collection name for the cap, and marks the message constant `nonisolated`.
 - **Release order (required).** Deploy and verify the backend before installing this app build. Otherwise an older server rejects `trashed` edits, which are then kept until the server supports them.
 - **Records from #42.** The re-review approved `f735854`. Its non-blocking notes are handled here: the `AGENTS.md` title and icon check, and the icon file destinations in `design/icon-layers/README.md`. The stacked sign-in header at accessibility sizes remains untested, because the iPhone 16e simulator hung.
 

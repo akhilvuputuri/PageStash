@@ -51,7 +51,7 @@ extension SyncCoordinator {
     case retryWholeSync
   }
   /// The backend's message when an edited item no longer exists.
-  public static let missingItemMessage = "Item not found."
+  nonisolated public static let missingItemMessage = "Item not found."
   /// Only the backend's own "item not found" discards an edit; any other 404 (a proxy or a wrong
   /// base path) keeps it, so a misconfiguration can't silently drop every pending edit.
   nonisolated public static func disposition(

@@ -134,8 +134,11 @@ import SwiftUI
     } catch { message = error.localizedDescription }
     if let error = UserDefaults.standard.string(forKey: "downloadError") { message = error }
   }
+  /// A kept (rejected) edit from the current sync, shown when the sync finishes.
+  private var syncRejection: String?
   func sync(forceManifest: Bool = false) async throws {
     guard let api, let store, let generation = session?.generation else { return }
+    syncRejection = nil
     do {
       try await syncCoordinator.run(fullManifest: forceManifest) { fullManifest in
         guard self.session?.generation == generation else { throw CancellationError() }
@@ -188,14 +191,16 @@ import SwiftUI
             BackgroundDiagnostics.shared.record(
               "edit_rejected",
               fields: [
-                "status": error.status ?? 0,
-                "outcome": disposition == .discard ? "discarded" : "kept",
+                "editRejectedStatus": error.status ?? 0,
+                "editRejectedOutcome": disposition == .discard ? "discarded" : "kept",
               ])
             if disposition == .discard {
               guard self.session?.generation == generation else { throw CancellationError() }
               try store.acknowledge(edit)
             } else {
-              self.message = "A change couldn't be saved to your other devices: \(error.message)"
+              // Shown once this sync finishes; kept edits are retried, so it reappears until fixed.
+              self.syncRejection =
+                "A change couldn't be saved to your other devices: \(error.message)"
             }
             continue
           }
@@ -237,7 +242,8 @@ import SwiftUI
         UserDefaults.standard.set(self.lastSync, forKey: "lastSync")
       }
       guard self.session?.generation == generation else { return }
-      message = nil
+      message = syncRejection
+      syncRejection = nil
       UserDefaults.standard.removeObject(forKey: "downloadError")
     } catch {
       if self.session?.generation == generation {
@@ -277,14 +283,15 @@ import SwiftUI
     guard !name.isEmpty else { return }
     // Use the current copy: a sync may have changed collections while the prompt was open.
     let current = items.first { $0.id == item.id } ?? item
-    // The server accepts at most 20 collections per item.
-    guard current.collections.contains(name) || current.collections.count < 20 else {
+    // The server accepts at most 20 collections per item; names are stored truncated to 60.
+    let stored = String(name.prefix(60))
+    guard current.collections.contains(stored) || current.collections.count < 20 else {
       message = "An article can be in up to 20 collections."
       return
     }
     edit(
       current,
-      ItemPatch(collections: Array(Set(current.collections + [String(name.prefix(60))])).sorted()))
+      ItemPatch(collections: Array(Set(current.collections + [stored])).sorted()))
   }
   func download(_ item: ReadingItem) async {
     do {
