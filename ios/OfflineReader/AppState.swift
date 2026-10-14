@@ -179,12 +179,23 @@ import SwiftUI
           do {
             try await api.patch(edit.itemID, edit.patch)
           } catch let error as APIError
-            where SyncCoordinator.disposition(ofRejectedEdit: error.status) != .retryWholeSync
+            where SyncCoordinator.disposition(ofRejectedEdit: error.status, message: error.message)
+              != .retryWholeSync
           {
             // A rejected edit must never stop the library from syncing.
-            if SyncCoordinator.disposition(ofRejectedEdit: error.status) == .discard {
+            let disposition = SyncCoordinator.disposition(
+              ofRejectedEdit: error.status, message: error.message)
+            BackgroundDiagnostics.shared.record(
+              "edit_rejected",
+              fields: [
+                "status": error.status ?? 0,
+                "outcome": disposition == .discard ? "discarded" : "kept",
+              ])
+            if disposition == .discard {
               guard self.session?.generation == generation else { throw CancellationError() }
               try store.acknowledge(edit)
+            } else {
+              self.message = "A change couldn't be saved to your other devices: \(error.message)"
             }
             continue
           }
@@ -266,6 +277,11 @@ import SwiftUI
     guard !name.isEmpty else { return }
     // Use the current copy: a sync may have changed collections while the prompt was open.
     let current = items.first { $0.id == item.id } ?? item
+    // The server accepts at most 20 collections per item.
+    guard current.collections.contains(name) || current.collections.count < 20 else {
+      message = "An article can be in up to 20 collections."
+      return
+    }
     edit(
       current,
       ItemPatch(collections: Array(Set(current.collections + [String(name.prefix(60))])).sorted()))

@@ -50,9 +50,15 @@ extension SyncCoordinator {
     /// No response or a server error: stop and retry the whole sync later.
     case retryWholeSync
   }
-  nonisolated public static func disposition(ofRejectedEdit status: Int?) -> RejectedEdit {
+  /// The backend's message when an edited item no longer exists.
+  public static let missingItemMessage = "Item not found."
+  /// Only the backend's own "item not found" discards an edit; any other 404 (a proxy or a wrong
+  /// base path) keeps it, so a misconfiguration can't silently drop every pending edit.
+  nonisolated public static func disposition(
+    ofRejectedEdit status: Int?, message: String? = nil
+  ) -> RejectedEdit {
     guard let status else { return .retryWholeSync }
-    if status == 404 { return .discard }
+    if status == 404 { return message == missingItemMessage ? .discard : .keepForLater }
     if (400..<500).contains(status) && status != 401 && status != 408 && status != 429 {
       return .keepForLater
     }
