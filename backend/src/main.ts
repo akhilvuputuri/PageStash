@@ -22,6 +22,7 @@ const worker = new ImportWorker(
       await db.query("DELETE FROM download_grants WHERE expires_at<now()");
       await db.query("DELETE FROM oauth_codes WHERE expires_at<now()");
       await db.query("DELETE FROM credentials WHERE expires_at<now()");
+      await service.purgeTrash();
     },
   },
   {},

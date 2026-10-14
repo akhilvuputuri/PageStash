@@ -435,3 +435,39 @@ test("account deletion purges orphan files and invalidates credentials", async (
   await assert.rejects(()=>service.authenticate(credential.token));
   assert.equal((await db.query('SELECT id FROM items WHERE id=$1',[saved.submission_id])).rows.length,0);
 });
+test("Trash keeps items restorable, a re-save restores them, and old trash is purged", async () => {
+  const brief = await service.save(agent, {
+    title: "A brief for the trash",
+    markdown: "# Trash\nPrepared text for the trash test",
+    idempotency_key: randomUUID(),
+  });
+  assert.equal(await service.runOne(), true);
+  const id = brief.submission_id!;
+  const find = async () =>
+    (await service.library(owner, 0)).items.find((i) => i.id === id)!;
+  await service.update(owner, id, { trashed: true });
+  const trashed = await find();
+  assert.ok(trashed.trashed_at, "trashed items sync with their trash time");
+  assert.equal(trashed.deleted, false);
+  assert.equal(trashed.assets.length, 1, "content stays until the item is purged");
+  await service.update(owner, id, { trashed: false });
+  assert.equal((await find()).trashed_at, null);
+
+  const url = "https://example.com/trash-resave";
+  const first = await service.save(owner, { url, idempotency_key: randomUUID() });
+  await service.update(owner, first.submission_id!, { trashed: true });
+  const again = await service.save(owner, { url, idempotency_key: randomUUID() });
+  assert.equal(again.submission_id, first.submission_id);
+  const restored = (await service.library(owner, 0)).items.find(
+    (i) => i.id === first.submission_id,
+  )!;
+  assert.equal(restored.trashed_at, null, "saving the link again restores it from Trash");
+
+  await service.update(owner, id, { trashed: true });
+  assert.equal(await service.purgeTrash(30), 0, "recent trash is kept");
+  await db.query("UPDATE items SET trashed_at=now()-interval '31 days' WHERE id=$1", [id]);
+  assert.equal(await service.purgeTrash(30), 1);
+  const purged = await find();
+  assert.equal(purged.deleted, true);
+  assert.equal(purged.assets.length, 0);
+});

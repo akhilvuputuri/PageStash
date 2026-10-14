@@ -44,20 +44,24 @@ public struct ReadingItem: Codable, Identifiable, Sendable {
   public var collections: [String]
   public var archived: Bool
   public var deleted: Bool
+  /// When the item was moved to Trash (ISO 8601), or nil. Trashed items stay restorable and their
+  /// downloads stay on the device until they are deleted permanently or purged after 30 days.
+  public var trashedAt: String?
+  public var isTrashed: Bool { trashedAt != nil }
   public let revision: Int64
   public let assets: [Asset]
   public var hasPreparedContent: Bool {
     status == "ready"
       || (contentVersion > 0 && assets.contains { $0.role == "content" && $0.safeFilename })
   }
-  public var needsImportReview: Bool { status != "ready" }
+  public var needsImportReview: Bool { status != "ready" && !isTrashed }
   public init(
     id: String, title: String, kind: String = "article", status: String = "ready",
     error: String? = nil, sourceUrl: String? = nil, author: String? = nil,
     siteName: String? = nil, sources: [String] = [],
     capturedAt: String = "", contentVersion: Int = 1, progress: Double = 0,
-    collections: [String] = [], archived: Bool = false, deleted: Bool = false, revision: Int64 = 1,
-    assets: [Asset]
+    collections: [String] = [], archived: Bool = false, deleted: Bool = false,
+    trashedAt: String? = nil, revision: Int64 = 1, assets: [Asset]
   ) {
     self.id = id
     self.title = title
@@ -74,6 +78,7 @@ public struct ReadingItem: Codable, Identifiable, Sendable {
     self.collections = collections
     self.archived = archived
     self.deleted = deleted
+    self.trashedAt = trashedAt
     self.revision = revision
     self.assets = assets
   }
@@ -93,14 +98,17 @@ public struct ItemPatch: Codable, Sendable {
   public var archived: Bool?
   public var collections: [String]?
   public var deleted: Bool?
+  /// Moves the item to Trash (true) or restores it (false).
+  public var trashed: Bool?
   public init(
     progress: Double? = nil, archived: Bool? = nil, collections: [String]? = nil,
-    deleted: Bool? = nil
+    deleted: Bool? = nil, trashed: Bool? = nil
   ) {
     self.progress = progress
     self.archived = archived
     self.collections = collections
     self.deleted = deleted
+    self.trashed = trashed
   }
   public func applying(to item: ReadingItem) -> ReadingItem {
     var copy = item
@@ -108,6 +116,10 @@ public struct ItemPatch: Codable, Sendable {
     if let v = archived { copy.archived = v }
     if let v = collections { copy.collections = v }
     if let v = deleted { copy.deleted = v }
+    if let v = trashed {
+      // Keep the first trash time, as the server does.
+      copy.trashedAt = v ? (item.trashedAt ?? ISO8601DateFormatter().string(from: Date())) : nil
+    }
     return copy
   }
   public mutating func merge(_ newer: ItemPatch) {
@@ -115,6 +127,7 @@ public struct ItemPatch: Codable, Sendable {
     if let v = newer.archived { archived = v }
     if let v = newer.collections { collections = v }
     if let v = newer.deleted { deleted = v }
+    if let v = newer.trashed { trashed = v }
   }
 }
 public struct PendingEdit: Sendable {
