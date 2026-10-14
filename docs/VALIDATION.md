@@ -310,7 +310,7 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - The 30-day purge on production (needs the backend deploy).
   - Trash on the physical iPhone.
 - **Review of `36bc832`.** APPROVE, with four findings fixed in the next commit:
-  - **Rejected edits (Medium).** A rejected edit no longer stops a device's sync. A 404 whose body is the backend's "Item not found.", for example an item purged from Trash, drops the edit. Other 4xx responses, including other 404s, keep the edit but still pull the library; they record an `edit_rejected` diagnostic and show a message when the sync run finishes. Every caller that shared that run shows the same result. The message reappears on later syncs while the edit is still rejected. Known limit: if a full-manifest rerun starts before an earlier caller reads the result, the message can wait until the next sync. The sync loop and message handling have no automated test. A unit test covers the status mapping; the sync loop itself is untested.
+  - **Rejected edits (Medium).** A rejected edit no longer stops a device's sync. A 404 whose body is the backend's "Item not found.", for example an item purged from Trash, drops the edit. Other 4xx responses, including other 404s, keep the edit but still pull the library; they record an `edit_rejected` diagnostic and show a message when the sync run finishes. Every caller that shared that run shows the same result. The message reappears on later syncs while the edit is still rejected. Known limit: if a full-manifest rerun starts before an earlier caller reads the result, the message can wait until the next sync. A unit test covers the status mapping; the sync loop itself is untested.
   - **Collections** are capped at 20 per article in the app, matching the server, so that path can't be rejected.
   - **Replays.** A retried save with the same idempotency key no longer restores an item from Trash.
   - **Delete Permanently** re-checks that the item is still in Trash.
@@ -320,6 +320,18 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Re-review of `ed7236b`.** REQUEST CHANGES: overlapping or joined syncs could still erase the message. Fixed in the next commit: the text is reset when a run starts (inside the coordinator's operation) and is no longer cleared after reading.
 - **Release order (required).** Deploy and verify the backend before installing this app build. Otherwise an older server rejects `trashed` edits, which are then kept until the server supports them.
 - **Records from #42.** The re-review approved `f735854`. Its non-blocking notes are handled here: the `AGENTS.md` title and icon check, and the icon file destinations in `design/icon-layers/README.md`. The stacked sign-in header at accessibility sizes remains untested, because the iPhone 16e simulator hung.
+
+### PageStash 0.4.1 shipped, 15 October 2026
+
+- PR #45 went through five review rounds, all findings fixed. Approved heads: `36bc832`, `e22a274` and `2892867`. Changes were requested on `84e7f07` (the rejected-edit message was cleared) and `ed7236b` (a shared sync run could erase it).
+- `main` gained #44 before the merge. The merge guard stopped instead of releasing. The branch merged `main` as `e934792`, which was reviewed and approved, and passed CI. It was merged with `--match-head-commit` as `d7432f1`, with an identical tree.
+- **Backend first, as required (tested).** Northflank build `airy-vessel-2674` deployed `d7432f1` to `reader-api`: Running, 1/1 passing probes, 0 restarts. The additive `items.trashed_at` migration ran before the server listened. Live `/health` returned 200, anonymous `/v1/library` 401, and OAuth discovery 200.
+- [v0.4.1](https://github.com/akhilvuputuri/PageStash/releases/tag/v0.4.1) (build 9) is tagged on `d7432f1`.
+- **iPhone (tested).** A signed Release build of `d7432f1` (app, Share Extension and widget all 0.4.1 (9)) was installed and launched on the owner's iPhone 17.
+- **Deferred:**
+  - Trash on the device.
+  - The 30-day purge in production (first eligible items 30 days after first use).
+  - The rejected-edit sync loop has no automated test; only its status mapping is unit-tested.
 
 ## Not yet tested
 
