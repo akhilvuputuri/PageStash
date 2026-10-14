@@ -19,7 +19,7 @@ Non-negotiable even without the plugin:
   - Backend: in `backend/`, run `npm ci`, `npm run check`, `npm test`, `npm run build` and `npm audit --omit=dev --audit-level=high`.
   - iOS: in `ios/ReaderCore`, run `swift test`. Then run the unsigned device and simulator `xcodebuild` builds from the README.
   - CI (`.github/workflows/checks.yml`) also runs the app icon check (`swift scripts/check-icon.swift ios/OfflineReader/Assets.xcassets/AppIcon.appiconset/AppIcon.png`), the native presentation tests and, on PRs, an isolated preview build. Run the icon check whenever the icon or `scripts/draw-icon.swift` changes.
-  - Do not run routinely: none are paid. Live endpoint checks against production run only as part of a release. `scripts/verify-backend.mjs` is owner-only: it prompts interactively for the owner's app password and keeps demonstration items in the real library, so run it only when the owner asks.
+  - Do not run routinely: none are paid. Live endpoint checks against production run only as part of a release. `scripts/verify-backend.mjs` is owner-only: by default it targets production with the owner's account, prompts interactively for that app password, and keeps demonstration items in the library. Run it only when the owner asks.
   - Visual checks use the debug-only `--preview-library` synthetic store under the preview bundle identifier, never a real library.
 - **Reviewer:** the most capable model available (Opus 5.5 in Claude sessions). There is no bot review. UI changes are also checked against the `ios-design` skill.
 - **Merge authority:** merge passing, independently approved PRs for changes the owner requested, with `gh pr merge N --merge --match-head-commit SHA`.
