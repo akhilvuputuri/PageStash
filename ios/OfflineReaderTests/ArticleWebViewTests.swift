@@ -38,28 +38,34 @@ import XCTest
       }
     }
   }
-  /// The coordinator under test, so a timeout can report what the reader was waiting for.
-  var coordinator: ArticleWebView.Coordinator?
+  /// The reader under test, so a timeout can report what it was waiting for.
+  weak var coordinator: ArticleWebView.Coordinator?
   weak var web: WKWebView?
-  /// Waits for a condition, returning as soon as it holds. The deadline is generous because CI
-  /// simulators run this test up to 25 times slower than a local Mac (about 10 s against 1.6 s,
-  /// and 40 s on a slow runner), and a 10 s budget per step failed there.
+  /// Waits for a condition, returning as soon as it holds. Passing CI runs take this whole test
+  /// 10–16 s against about 1.5 s locally, and one CI run timed out on the first-load wait with a
+  /// 10 s budget, so each wait allows 30 s.
   func waitFor(
-    line: Int = #line, _ predicate: @escaping @MainActor () async throws -> Bool
+    file: StaticString = #filePath, line: UInt = #line,
+    _ predicate: @escaping @MainActor () async throws -> Bool
   ) async throws {
     let deadline = ContinuousClock.now + .seconds(30)
     while ContinuousClock.now < deadline {
       if try await predicate() { return }
       try await Task.sleep(nanoseconds: 50_000_000)
     }
-    var state = "no coordinator"
+    if try await predicate() { return }
+    var state = "the reader is gone"
     if let coordinator, let web {
+      let scroll = web.scrollView
       state =
-        "restoring=\(coordinator.restoring) fontSize=\(coordinator.fontSize) appearance=\(coordinator.appearance ?? "nil") headerHeight=\(coordinator.headerHeight) contentSize=\(web.scrollView.contentSize) bounds=\(web.scrollView.bounds.size) loading=\(web.isLoading)"
+        "restoring=\(coordinator.restoring) fontSize=\(coordinator.fontSize) appearance=\(coordinator.appearance ?? "nil") headerHeight=\(coordinator.headerHeight) measuredContentHeight=\(coordinator.measuredContentHeight) contentSize=\(scroll.contentSize) zoomScale=\(scroll.zoomScale) bounds=\(scroll.bounds.size) loading=\(web.isLoading)"
+    } else if coordinator == nil {
+      state = "no coordinator yet"
     }
+    let message = "Reader did not settle before deadline: \(state)"
+    XCTFail(message, file: file, line: line)
     throw NSError(
-      domain: "ReaderUITest", code: 1,
-      userInfo: [NSLocalizedDescriptionKey: "Reader did not settle before deadline (line \(line)): \(state)"])
+      domain: "ReaderUITest", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
   }
   func findWeb(_ view: UIView) -> WKWebView? {
     if let web = view as? WKWebView { return web }
@@ -193,5 +199,18 @@ import XCTest
         expected == "sepia"
           ? "rgb(246, 240, 228)" : expected == "dark" ? "rgb(17, 17, 17)" : "rgb(255, 255, 255)")
     }
+    // The document can lay out again after the style script measured it. Here content is added
+    // just before and just after the measurement, in one queue of scripts, so the native size
+    // skips the measured height. Restoring must still finish (by measuring again), or the
+    // reader stops saving its position.
+    let grow = "document.body.insertAdjacentHTML('beforeend', '\(paragraphs)'); 0"
+    web.evaluateJavaScript(grow, completionHandler: nil)
+    coordinator.present(web, progress: desired)
+    _ = try await evaluate(web, grow)
+    try await waitFor { !coordinator.restoring }
+    XCTAssertEqual(
+      coordinator.measuredContentHeight * web.scrollView.zoomScale,
+      web.scrollView.contentSize.height, accuracy: 2 * web.scrollView.zoomScale)
+    XCTAssertEqual(coordinator.currentProgress(web.scrollView), desired, accuracy: 0.02)
   }
 }

@@ -440,21 +440,31 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Owner acceptance of the switch with Chief's connection.
   - Dark theme and VoiceOver on the new row.
 
-### Flaky web-view restoration test, 15 October 2026
+### Reading position could stop saving; flaky web-view restoration test, 15 October 2026
 
-- **Failure.** `ArticleWebViewTests.testLongHeaderScrollAndFontThemeRestoration` failed once in CI: run 38751647140, the pull-request run on `4e1279e`, a docs-only change. Its push run on the same commit passed. The error was "Reader did not settle before deadline", meaning one of the test's `waitFor` conditions wasn't met within its 10 s budget (200 × 50 ms). It was the only failure among the last 40 runs of the workflow.
-- **Cause (measured, with a hypothesis).**
-  - The failing run's result bundle (iOS 18.5 simulator, Xcode 16.4) shows the test ran 40.6 s, and no mid-test snapshot was attached. So the timeout happened in a wait before the theme loop: load, font sizes, Dynamic Type, Bold Text or Dark.
-  - A passing CI run of the same commit took 10.3 s. CI's own summary flags this test as the slowest, at 11–16 s.
-  - Locally (iOS 26.3 simulator) it takes about 1.6 s and passed 30 of 30 runs plus 10 more after the change.
-  - Hypothesis: the slowest steps on an overloaded runner exceeded the 10 s per-step budget. The reader getting stuck (`restoring` never clearing because the native content size never matches the measured document) is not excluded, but was not observed.
-- **Change (test only).**
-  - Each wait now has a 30 s deadline, measured by the clock rather than an iteration count. It still returns as soon as its condition holds, so passing runs aren't slower.
-  - A timeout now names the waiting line and the reader's state (`restoring`, font size, appearance, header height, content size, bounds, loading), so a future failure separates "slow" from "stuck".
-- **Checks (tested).** Native tests pass 18/18, and the restoration test passed 10 of 10 iterations.
-- **Not verified:**
-  - Behavior on the iOS 18.5 runtime locally; only iOS 26.3 is installed here.
-  - That the longer deadline removes the CI flake. That needs more CI runs.
+- **Failure.** `ArticleWebViewTests.testLongHeaderScrollAndFontThemeRestoration` failed once in CI: run 38751647140, the pull-request run on the docs-only `4e1279e`. Its push run on the same commit passed. It was the only failure among the last 40 runs of the workflow. The error was "Reader did not settle before deadline": a `waitFor` condition wasn't met within its 10 s budget.
+- **Which wait (measured).** The thrown error's backtrace in the run's result bundle names the first-load wait (origin/main line 91: not loading, not restoring, header height above 0). No mid-test snapshot was attached, which agrees. Other tests in that run took as long as in a passing run, so a uniformly slow runner is a weak explanation. The test's 40.6 s includes the 10 s timeout itself. Passing CI runs take this test 10–16 s, against about 1.5 s locally.
+- **App bug (reproduced).**
+  - `present` measured the styled document once. Restoring finished only when WebKit's native content size matched that measurement within 2 points.
+  - If the document lays out again after the measurement, the native size never matches, so `restoring` stays set. While it is set, `save` doesn't record the reading position and the bars don't recede, until the next presentation change.
+  - **Reproduced** in a new test step: add content just before and just after the measurement in one queue of scripts. On the previous code, with only a stub property added so the test compiled, the step timed out after 30 s with `restoring=true` and the content size settled at 38,784 pt.
+  - **Hypothesis (not observed in CI):** the CI failure on a cold first load was this same state, from a late layout pass.
+- **Fix (app).** When the native size doesn't match, the reader measures the document again with a read-only script, one request at a time. If the document changed, it uses the new heights. If not, the native size is still catching up, and the existing content-size observer retries. A new presentation resets the state.
+- **Test.**
+  - The new step above.
+  - Each wait has a 30 s deadline measured by the clock, and checks one final time after the deadline.
+  - A timeout fails at the waiting line and reports the reader's state: restoring, font size, appearance, header height, measured and native content height, zoom scale, bounds and loading.
+  - The test holds the coordinator and web view weakly.
+- **Checks (tested, iOS 26.3 simulator):**
+  - The restoration test passed 20 of 20 iterations.
+  - Native tests pass 18/18.
+  - The unsigned device build succeeds with no new warnings.
+- **Independent review of `233ee87`** (the test-only first version): **REQUEST CHANGES.** It corrected the diagnosis: the failing wait was the first load, and the runner wasn't uniformly slow. It flagged the stuck-`restoring` risk and asked for these diagnostics. All of that is addressed above.
+- **Not verified / follow-ups:**
+  - Behavior on the iOS 18.5 runtime locally.
+  - Whether the CI flake is gone, which needs more runs.
+  - The reader still doesn't handle a WebContent process crash (`webViewWebContentProcessDidTerminate`).
+  - The `ios` CI job has no `timeout-minutes`.
 
 ## Not yet tested
 

@@ -225,9 +225,21 @@ struct ArticleWebView: UIViewRepresentable {
     var fontSize: Double { presentation?.fontSize ?? 0 }
     var appearance: String? { presentation?.appearance }
     var headerHeight = 0.0
+    /// The document's header and scroll heights, in CSS pixels, as last measured for restoring.
+    private(set) var measuredHeaderHeight = 0.0
+    private(set) var measuredContentHeight = 0.0
+    private var remeasuring = false
     var position = 0.0
     var generation = 0
     var layoutObservation: NSKeyValueObservation?
+    /// Reads the same heights as the style script, without restyling.
+    static let measureScript = """
+      (() => {
+      const header = window[Symbol.for('OfflineReader.articleHeader')];
+      return {headerHeight: header ? header.offsetTop + header.offsetHeight + 24 : 0,
+        contentHeight: document.documentElement.scrollHeight};
+      })();
+      """
     init(_ parent: ArticleWebView) { self.parent = parent }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
       present(webView, progress: parent.progress)
@@ -236,6 +248,7 @@ struct ArticleWebView: UIViewRepresentable {
       // Carry the pending target through overlapping appearance/environment updates.
       position = progress
       restoring = true
+      remeasuring = false
       layoutObservation?.invalidate()
       layoutObservation = nil
       generation += 1
@@ -256,34 +269,66 @@ struct ArticleWebView: UIViewRepresentable {
           return
         }
         self.headerHeight = measuredHeader
-        // WebKit's DOM layout and its native scroll content size update separately.
-        // Restore only when the native viewport reflects the styled document.
+        self.measuredHeaderHeight = measuredHeader
+        self.measuredContentHeight = measuredContent
         let restore: () -> Void = { [weak self, weak web] in
-          guard let self, let web, self.restoring, current == self.generation,
-            expected == self.loaded
-          else {
-            return
-          }
-          let scale = web.scrollView.zoomScale
-          guard web.scrollView.bounds.height > 0,
-            abs(web.scrollView.contentSize.height - measuredContent * scale) < 2 * scale
-          else { return }
-          self.headerHeight = measuredHeader * scale
-          self.layoutObservation?.invalidate()
-          self.layoutObservation = nil
-          let offset = ReadingScrollPosition.offset(
-            progress: progress, contentHeight: web.scrollView.contentSize.height,
-            viewportHeight: web.scrollView.bounds.height, headerHeight: self.headerHeight)
-          web.scrollView.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
-          self.position = progress
-          self.lastSaved = Date()
-          self.restoring = false
+          guard let self, let web else { return }
+          self.restoreIfLaidOut(web, generation: current, expected: expected, progress: progress)
         }
         self.layoutObservation = web.scrollView.observe(\.contentSize, options: [.new]) { _, _ in
           // Leave the native size setter before restoring; it may clamp the old offset.
           DispatchQueue.main.async(execute: restore)
         }
         DispatchQueue.main.async(execute: restore)
+      }
+    }
+
+    /// WebKit's DOM layout and its native scroll content size update separately.
+    /// Restore only when the native viewport reflects the measured document.
+    func restoreIfLaidOut(
+      _ web: WKWebView, generation current: Int, expected: URL?, progress: Double
+    ) {
+      guard restoring, current == generation, expected == loaded else { return }
+      let scale = web.scrollView.zoomScale
+      guard web.scrollView.bounds.height > 0 else { return }
+      guard abs(web.scrollView.contentSize.height - measuredContentHeight * scale) < 2 * scale
+      else {
+        remeasure(web, generation: current, expected: expected, progress: progress)
+        return
+      }
+      headerHeight = measuredHeaderHeight * scale
+      layoutObservation?.invalidate()
+      layoutObservation = nil
+      let offset = ReadingScrollPosition.offset(
+        progress: progress, contentHeight: web.scrollView.contentSize.height,
+        viewportHeight: web.scrollView.bounds.height, headerHeight: headerHeight)
+      web.scrollView.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
+      position = progress
+      lastSaved = Date()
+      restoring = false
+    }
+
+    /// The document can lay out again after it was measured, for example after a late viewport
+    /// change, so the native size never matches the first measurement. Measure again (one
+    /// request at a time) instead of leaving `restoring` set, which stops saving the position.
+    /// If the document hasn't changed, the native size is still catching up: keep waiting.
+    private func remeasure(
+      _ web: WKWebView, generation current: Int, expected: URL?, progress: Double
+    ) {
+      guard !remeasuring else { return }
+      remeasuring = true
+      web.evaluateJavaScript(Self.measureScript) { [weak self, weak web] value, _ in
+        guard let self, current == self.generation, expected == self.loaded else { return }
+        self.remeasuring = false
+        guard let web, let dimensions = value as? [String: NSNumber],
+          let header = dimensions["headerHeight"]?.doubleValue,
+          let content = dimensions["contentHeight"]?.doubleValue,
+          abs(content - self.measuredContentHeight) >= 1
+            || abs(header - self.measuredHeaderHeight) >= 1
+        else { return }
+        self.measuredHeaderHeight = header
+        self.measuredContentHeight = content
+        self.restoreIfLaidOut(web, generation: current, expected: expected, progress: progress)
       }
     }
 
