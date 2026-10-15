@@ -2,7 +2,7 @@
 
 ## Workflow
 
-This repository follows the [skills engineering workflow](https://github.com/akhilvuputuri/skills/blob/workflow--v0.1.3/plugins/workflow/CORE.md), pinned to marketplace ref `workflow--v0.1.3`. Claude Code loads it through the `workflow@skills` plugin pinned in `.claude/settings.json`. Other agents should read the linked CORE.md at that tag before starting work. The bindings below supply this repository's specifics and win where they are more specific.
+This repository follows the [skills engineering workflow](https://github.com/akhilvuputuri/skills/blob/skills--v0.2.0/CORE.md), pinned to marketplace ref `skills--v0.2.0`. Claude Code loads it through the `skills@skills` plugin pinned in `.claude/settings.json`. Other agents should read the linked CORE.md at that tag before starting work. The bindings below supply this repository's specifics and win where they are more specific.
 
 Non-negotiable even without the plugin:
 
@@ -37,25 +37,28 @@ Non-negotiable even without the plugin:
 
 ## Shared skills from akhilvuputuri/skills
 
-| Plugin | Skills | Use it for |
-| --- | --- | --- |
-| `workflow` | `preflight`, `independent-review`, `ship`, `journal`, `incident`, `experiment`, `adopt` | The development workflow above |
-| `ios-design` | `ios-design` | Any change to how the iOS app looks or feels: SwiftUI views, theming, typography, accessibility, icons, copy. Audits and implementations follow its workflow and verification matrix, and cite the HIG reference it links |
+The `skills@skills` plugin carries both groups:
 
-**Claude Code:** `.claude/settings.json` declares the `skills` marketplace at the pinned tag and enables both plugins. After you trust this folder, Claude Code registers the marketplace and loads them. Check with `claude plugin list`.
+| Skills | Use them for |
+| --- | --- |
+| `preflight`, `independent-review`, `ship`, `journal`, `incident`, `experiment`, `adopt` | The development workflow above |
+| `ios-design` | Any change to how the iOS app looks or feels: SwiftUI views, theming, typography, accessibility, icons, copy. Audits and implementations follow its workflow and verification matrix, and cite the HIG reference it links |
+
+**Claude Code:** `.claude/settings.json` declares the `skills` marketplace at the pinned tag and enables `skills@skills`. After you trust this folder, Claude Code registers the marketplace and loads it. Check with `claude plugin list`.
 
 **Codex:** run these once:
 
 ```sh
-codex plugin marketplace add akhilvuputuri/skills@workflow--v0.1.3
-codex plugin add workflow@skills
-codex plugin add ios-design@skills
+codex plugin marketplace add akhilvuputuri/skills@skills--v0.2.0
+codex plugin add skills@skills
 ```
 
-`.codex/config.toml` keeps both enabled in this trusted project. The Codex plugin has no hooks, so the rules above are Codex's always-on workflow.
+`.codex/config.toml` keeps it enabled in this trusted project. The Codex plugin has no hooks, so the rules above are Codex's always-on workflow.
 
-**Other agents:** run `npx skills add https://github.com/akhilvuputuri/skills/tree/workflow--v0.1.3`. Without skill support, read `plugins/ios-design/skills/ios-design/SKILL.md` at that tag and follow it.
+**Other agents:** run `npx skills add https://github.com/akhilvuputuri/skills/tree/skills--v0.2.0`. Without skill support, read `skills/ios-design/SKILL.md` at that tag and follow it.
 
-Remove any older manually copied `~/.agents/skills/ios-design` before installing the plugin. The marketplace was called `a-stack` before 0.1.2: if you registered it under that name, first remove it. In Claude Code, `claude plugin marketplace remove a-stack` also removes its plugins. In Codex, run `codex plugin remove workflow@a-stack`, `codex plugin remove ios-design@a-stack` and then `codex plugin marketplace remove a-stack`; removing only the marketplace leaves the old plugins enabled, so every skill loads twice.
+Remove any older manually copied `~/.agents/skills/ios-design` before installing the plugin.
 
-**Updating the pin:** akhilvuputuri/skills tags reviewed releases `<plugin>--v<version>`. Claude Code and Codex fetch a new copy only when a plugin's version changes. Change the ref in `.claude/settings.json` and this file in one PR, and never point it at a branch. Codex users rerun `codex plugin marketplace add` with the new ref.
+**Earlier installs.** Up to 0.1.x the marketplace shipped two plugins, `workflow@skills` and `ios-design@skills`. In Claude Code, `claude plugin uninstall workflow@skills` and `claude plugin uninstall ios-design@skills`. In Codex, `codex plugin remove workflow@skills`, `codex plugin remove ios-design@skills` and `codex plugin marketplace remove skills`, then run the Codex steps above. The marketplace was called `a-stack` before 0.1.2: if you registered it under that name, first remove it. In Claude Code, `claude plugin marketplace remove a-stack` also removes its plugins. In Codex, run `codex plugin remove workflow@a-stack`, `codex plugin remove ios-design@a-stack` and then `codex plugin marketplace remove a-stack`; removing only the marketplace leaves the old plugins enabled, so every skill loads twice.
+
+**Updating the pin:** akhilvuputuri/skills tags reviewed releases `skills--v<version>`. Claude Code and Codex fetch a new copy only when the plugin's version changes. Change the ref in `.claude/settings.json` and this file in one PR, and never point it at a branch. Codex users rerun `codex plugin marketplace add` with the new ref.

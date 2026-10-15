@@ -366,6 +366,17 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - Tested, scratch homes: installing from GitHub at `workflow--v0.1.3` gives `workflow@skills` and `ios-design@skills` at 0.1.3 in Claude Code and in Codex 0.159.2.
 - Documentation and configuration only. Not observed: a trusted session of this repository loading the new pin.
 
+### Re-pinned to the single skills plugin, 15 October 2026
+
+- akhilvuputuri/skills now ships one plugin, `skills@skills`, released as `skills--v0.2.0` on `d3af64e` (akhilvuputuri/skills#11). It replaces `workflow@skills` and `ios-design@skills`. The skill content is unchanged apart from migration notes in the adopt skill. `CORE.md` moved to the repository root, and `ios-design` to `skills/ios-design`.
+- The pin moves to `skills--v0.2.0`. `.claude/settings.json` and `.codex/config.toml` enable `skills@skills` only. AGENTS.md updates its CORE.md link, the plugin name, the Codex and npx commands, the ios-design path, and the steps for removing the old plugins.
+- Tested, scratch homes, installing from GitHub at `skills--v0.2.0`:
+  - Claude Code: `skills@skills` 0.2.0 with 8 skills and 1 SessionStart hook.
+  - Codex 0.159.2: each of the 8 skills loaded once.
+  - `npx skills` 1.5.18: 8 skills.
+- Tested from a local clone: the upgrade from 0.1.3 in Claude Code and Codex, following the steps in AGENTS.md.
+- Documentation and configuration only. Not observed: a trusted session of this repository loading the new pin.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
