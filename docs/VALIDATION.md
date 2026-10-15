@@ -475,6 +475,10 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - The unsigned device and simulator builds succeed.
   - Native tests pass 18/18.
   - CI on #53's final head `b545abc` passed both iOS jobs, which run the iOS 18.5 simulator.
+- **Independent review of `8d7843d` (Opus 5.5): APPROVE.** The pbxproj matches the generator, and the app and both extensions build at 0.4.3 (11). It confirmed that only #53 touched `ios/` or `backend/` since `9b001e3`. Native tests passed 18/18 on its iOS 26.3.1 simulator. CI on the PR passed. It was merged with `--match-head-commit 8d7843d` as `ca52825`, with an identical tree.
+- [v0.4.3](https://github.com/akhilvuputuri/PageStash/releases/tag/v0.4.3) (build 11) is tagged on `ca52825`.
+- **iPhone (tested).** A signed generic Release build of `ca52825` (Apple Development, team U44PG44XMJ; the app and both extensions at 0.4.3 (11)) was installed and launched on the owner's iPhone 17. `devicectl` lists PageStash 0.4.3 (11).
+- **Deferred:** observing the fix on the device. The stuck state has only been reproduced with injected content.
 
 ## Not yet tested
 
