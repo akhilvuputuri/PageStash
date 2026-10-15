@@ -389,6 +389,17 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - All three are fixed above and in AGENTS.md.
 - Documentation and configuration only. Not observed: a trusted session of this repository loading the new pin.
 
+### PageStash 0.4.2 release, 15 October 2026
+
+- **Change.** The owner asked for the app on their iPhone to be updated. This release ships #46, the per-connection **Share saved-article titles** switch, which was merged but never built for a device. The only other change is the version bump to 0.4.2 (build 10) in `scripts/generate-project.py`, with `project.pbxproj` regenerated. Nothing else in the app has changed since 0.4.1.
+- **Backend first.** The app's switch sends `PATCH /v1/connections/:id` with `interests`, and the backend before #46 doesn't accept it, so the merged SHA is deployed to Northflank before the app is installed.
+- **Checks (tested, on the release branch):**
+  - Backend: `npm ci`, `npm run check`, 27/27 tests, `npm run build`, and `npm audit` with 0 vulnerabilities.
+  - ReaderCore: `swift test`, 40 tests pass.
+  - The unsigned device and simulator `xcodebuild` builds succeed.
+  - The ReaderCore run used a fresh `--scratch-path`, because the checkout's `.build` cache records a module-cache path from the repository's earlier location and fails before compiling. The cache was left in place.
+- **Deferred:** the `ios-design` matrix for the new switch (Dynamic Type, Sepia and Dark, VoiceOver). The `--preview-library` store has no API, so Assistant Connections is always empty there and the switch cannot be shown with synthetic data. Owner acceptance of the switch with Chief's connection is also deferred.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
