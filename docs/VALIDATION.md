@@ -391,14 +391,28 @@ Requested by the owner after using 0.4.0 on the iPhone.
 
 ### PageStash 0.4.2 release, 15 October 2026
 
-- **Change.** The owner asked for the app on their iPhone to be updated. This release ships #46, the per-connection **Share saved-article titles** switch, which was merged but never built for a device. The only other change is the version bump to 0.4.2 (build 10) in `scripts/generate-project.py`, with `project.pbxproj` regenerated. Nothing else in the app has changed since 0.4.1.
-- **Backend first.** The app's switch sends `PATCH /v1/connections/:id` with `interests`, and the backend before #46 doesn't accept it, so the merged SHA is deployed to Northflank before the app is installed.
+- **Change.** The owner asked for the app on their iPhone to be updated. This release ships #46, the per-connection **Share saved-article titles** switch, which was merged but never built for a device. It also bumps the version to 0.4.2 (build 10) in `scripts/generate-project.py`, with `project.pbxproj` regenerated, and fixes the review findings below. Apart from #46 and these fixes, the app hasn't changed since 0.4.1.
+- **Backend first.** The app's switch sends `PATCH /v1/connections/:id` with `interests`, and the backend before #46 has no PATCH route for it and returns 404, so the merged SHA is deployed to Northflank before the app is installed.
 - **Checks (tested, on the release branch):**
   - Backend: `npm ci`, `npm run check`, 27/27 tests, `npm run build`, and `npm audit` with 0 vulnerabilities.
   - ReaderCore: `swift test`, 40 tests pass.
   - The unsigned device and simulator `xcodebuild` builds succeed.
   - The ReaderCore run used a fresh `--scratch-path`, because the checkout's `.build` cache records a module-cache path from the repository's earlier location and fails before compiling. The cache was left in place.
-- **Deferred:** the `ios-design` matrix for the new switch (Dynamic Type, Sepia and Dark, VoiceOver). The `--preview-library` store has no API, so Assistant Connections is always empty there and the switch cannot be shown with synthetic data. Owner acceptance of the switch with Chief's connection is also deferred.
+- **Independent review of `8c58feb` (Opus 5.5): APPROVE**, with findings in #46's code. Fixed before shipping:
+  - **Medium, Revoke had no confirmation, and the switch's row could trigger it.** It was a default-style button in the same Form row as the switch. Revoke is now borderless, so only the button acts, and it asks "Revoke “name”?" before revoking. Its destructive red is restored, because borderless took the theme's ink. Its VoiceOver label names the connection.
+  - **Low, stale reload.** A slower, older connections response could overwrite a newer one and show a stale switch. Each response now applies only if it is the latest request.
+  - Not changed: a successful switch change still clears an earlier unrelated error.
+- **Also fixed (ios-design):** the sharing footnote used `.secondary`, which reads too faint on Sepia. It now uses the theme's `secondaryInk`, like the app's other footnotes.
+- **Debug-only preview connections.** Under `--preview-library`, Assistant Connections now shows two synthetic connections (Chief on, Telegram off), and switching or revoking changes only local state. This is compiled only in Debug builds.
+- **Simulator checks, preview bundle on an iPhone 17 Pro with iOS 26.3, Sepia (tested):**
+  - Tapping the label "Share saved-article titles" did nothing: no revoke and no change to the switch.
+  - Revoke showed the confirmation, and dismissing it kept the connection.
+  - Revoke is red, and the footnote matches the other footnotes.
+  - At accessibility-extra-extra-extra-large, the switch label wraps, and the name and Revoke stay on one line.
+- **Rerun after the fix:** native tests 18/18 and the unsigned device build pass.
+- **Deferred:**
+  - Dark theme and VoiceOver on the switch were not checked visually. The colors come from contrast-tested tokens and system red.
+  - Owner acceptance of the switch with Chief's connection.
 
 ## Not yet tested
 

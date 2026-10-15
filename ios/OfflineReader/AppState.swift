@@ -44,7 +44,7 @@ import SwiftUI
     UserDefaults.standard.string(forKey: "lastSync") ?? "Not yet synced"
   private(set) var store: LocalStore?
   private let syncCoordinator = SyncCoordinator()
-  private var previewMode = false
+  private(set) var previewMode = false
   var backendURL: String {
     get {
       UserDefaults.standard.string(forKey: "backendURL")

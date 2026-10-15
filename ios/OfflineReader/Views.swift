@@ -991,6 +991,7 @@ struct SettingsView: View {
 }
 struct ConnectionsView: View {
   @EnvironmentObject var state: AppState
+  @Environment(\.themeTokens) private var tokens
   @State private var connections: [Connection] = []
   @State private var label = "Telegram assistant"
   @State private var newToken: String?
@@ -998,6 +999,9 @@ struct ConnectionsView: View {
   /// Local switch positions while a change is in flight or just failed.
   @State private var sharing: [String: Bool] = [:]
   @State private var updating: Set<String> = []
+  @State private var pendingRevoke: Connection?
+  /// Counts list requests, so a slower, older response can't overwrite a newer one.
+  @State private var reloads = 0
   var body: some View {
     Form {
       Section("Assistant Connections") {
@@ -1025,16 +1029,13 @@ struct ConnectionsView: View {
             HStack {
               Text(connection.label)
               Spacer()
-              Button("Revoke", role: .destructive) {
-                Task {
-                  do {
-                    guard let api = state.api else { return }
-                    let _: OK = try await api.request(
-                      "/v1/connections/\(connection.id)", method: "DELETE")
-                    await loadConnections()
-                  } catch { self.error = error.localizedDescription }
-                }
-              }
+              Button("Revoke", role: .destructive) { pendingRevoke = connection }
+                // Borderless, so only the button revokes: a default-style button in a Form
+                // makes the whole row, including the switch's label, trigger it.
+                .buttonStyle(.borderless)
+                // Borderless takes the theme's ink, so restore the destructive color.
+                .foregroundStyle(.red)
+                .accessibilityLabel("Revoke \(connection.label)")
             }
             Toggle(
               "Share saved-article titles",
@@ -1051,7 +1052,7 @@ struct ConnectionsView: View {
         if !connections.isEmpty {
           Text(
             "Sharing lets an assistant read the titles, links, sites and save times of your saved articles to suggest similar reading. It never sees article text, briefs or reading progress."
-          ).font(.footnote).foregroundStyle(.secondary)
+          ).font(.footnote).foregroundStyle(tokens.secondaryInk.color)
         }
         Text("MCP endpoint: \(state.backendURL)/mcp").font(.caption).textSelection(.enabled)
       }.readerRowBackground()
@@ -1059,8 +1060,37 @@ struct ConnectionsView: View {
     }.readerFormBackground().navigationTitle("Assistant connections").task {
       await loadConnections()
     }
+    .confirmationDialog(
+      "Revoke “\(pendingRevoke?.label ?? "")”?",
+      isPresented: Binding(
+        get: { pendingRevoke != nil }, set: { if !$0 { pendingRevoke = nil } }),
+      titleVisibility: .visible, presenting: pendingRevoke
+    ) { connection in
+      Button("Revoke", role: .destructive) { Task { await revoke(connection) } }
+    } message: { _ in
+      Text("Its credential stops working at once. To reconnect, create a new one.")
+    }
+  }
+  private func revoke(_ connection: Connection) async {
+    #if DEBUG
+      if state.previewMode {
+        connections.removeAll { $0.id == connection.id }
+        return
+      }
+    #endif
+    do {
+      guard let api = state.api else { return }
+      let _: OK = try await api.request("/v1/connections/\(connection.id)", method: "DELETE")
+      await loadConnections()
+    } catch { self.error = error.localizedDescription }
   }
   private func setInterests(_ connection: Connection, _ on: Bool) async {
+    #if DEBUG
+      if state.previewMode {
+        sharing[connection.id] = on
+        return
+      }
+    #endif
     guard let api = state.api, !updating.contains(connection.id) else { return }
     let previous = sharing[connection.id] ?? connection.interests ?? false
     // Show the new position at once; restore it if the server refuses.
@@ -1079,9 +1109,26 @@ struct ConnectionsView: View {
     await loadConnections()
   }
   private func loadConnections() async {
+    #if DEBUG
+      if state.previewMode {
+        if connections.isEmpty {
+          connections = [
+            Connection(
+              id: "preview-chief", label: "Chief", kind: "agent", expiresAt: "", interests: true),
+            Connection(
+              id: "preview-telegram", label: "Telegram assistant", kind: "agent", expiresAt: "",
+              interests: false),
+          ]
+        }
+        return
+      }
+    #endif
+    reloads += 1
+    let request = reloads
     do {
       if let api = state.api {
         let response: Connections = try await api.request("/v1/connections")
+        guard request == reloads else { return }
         connections = response.connections
         // Server state wins once no change is in flight.
         sharing = sharing.filter { updating.contains($0.key) }
