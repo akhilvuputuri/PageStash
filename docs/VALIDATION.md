@@ -358,6 +358,14 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Review of `b852049` (Opus 5.5): REQUEST CHANGES.** (1) Medium: removing only the Codex `a-stack` marketplace left `workflow@a-stack` and `ios-design@a-stack` enabled, so every shared skill loaded twice (reviewer tested in a scratch `CODEX_HOME`). AGENTS.md now removes both plugins first. (2) Low: README still said the repository kept its old name. Fixed.
 - Documentation and configuration only. No app, backend or deployment change. The Northflank GitHub connection was not rechecked after the rename. Confirm it on the next backend build.
 
+### Workflow re-pinned to workflow--v0.1.3, 15 October 2026
+
+- The pin moves from `workflow--v0.1.2` to `workflow--v0.1.3` (akhilvuputuri/skills `f5aef0a`), which carries `workflow` 0.1.3 and `ios-design` 0.1.3. One ref covers both current versions.
+  - Workflow 0.1.3 completes the Codex steps for moving off `a-stack` in the adopt skill (akhilvuputuri/skills#10).
+  - ios-design 0.1.3 adds field notes from shipping PageStash (akhilvuputuri/skills#9).
+- Tested, scratch homes: installing from GitHub at `workflow--v0.1.3` gives `workflow@skills` and `ios-design@skills` at 0.1.3 in Claude Code and in Codex 0.159.2.
+- Documentation and configuration only. Not observed: a trusted session of this repository loading the new pin.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
