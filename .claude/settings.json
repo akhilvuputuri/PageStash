@@ -1,4 +1,7 @@
 {
+  "enabledPlugins": {
+    "skills@skills": true
+  },
   "extraKnownMarketplaces": {
     "skills": {
       "source": {
@@ -7,8 +10,5 @@
         "ref": "skills--v0.2.0"
       }
     }
-  },
-  "enabledPlugins": {
-    "skills@skills": true
   }
 }
