@@ -38,14 +38,38 @@ import XCTest
       }
     }
   }
-  func waitFor(_ predicate: @escaping @MainActor () async throws -> Bool) async throws {
-    for _ in 0..<200 {
+  /// The reader under test, so a timeout can report what it was waiting for.
+  weak var coordinator: ArticleWebView.Coordinator?
+  weak var web: WKWebView?
+  /// Waits for a condition, returning as soon as it holds. Passing CI runs take this whole test
+  /// 10–16 s against about 1.5 s locally, and one CI run timed out on the first-load wait with a
+  /// 10 s budget, so each wait allows 30 s.
+  func waitFor(
+    file: StaticString = #filePath, line: UInt = #line,
+    _ predicate: @escaping @MainActor () async throws -> Bool
+  ) async throws {
+    let deadline = ContinuousClock.now + .seconds(30)
+    while ContinuousClock.now < deadline {
       if try await predicate() { return }
       try await Task.sleep(nanoseconds: 50_000_000)
     }
+    if try await predicate() { return }
+    var state = "the reader is gone"
+    if let coordinator, let web {
+      let scroll = web.scrollView
+      state =
+        "restoring=\(coordinator.restoring) fontSize=\(coordinator.fontSize) appearance=\(coordinator.appearance ?? "nil") headerHeight=\(coordinator.headerHeight) measuredContentHeight=\(coordinator.measuredContentHeight) contentSize=\(scroll.contentSize) zoomScale=\(scroll.zoomScale) bounds=\(scroll.bounds.size) loading=\(web.isLoading)"
+    } else if coordinator == nil {
+      state = "no coordinator yet"
+    }
+    let message = "Reader did not settle before deadline: \(state)"
+    XCTFail(message, file: file, line: line)
     throw NSError(
-      domain: "ReaderUITest", code: 1,
-      userInfo: [NSLocalizedDescriptionKey: "Reader did not settle before deadline"])
+      domain: "ReaderUITest", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+  }
+  /// Queues a script without waiting for it, so the next call queues behind it.
+  func send(_ web: WKWebView, _ script: String) {
+    web.evaluateJavaScript(script)
   }
   func findWeb(_ view: UIView) -> WKWebView? {
     if let web = view as? WKWebView { return web }
@@ -88,6 +112,8 @@ import XCTest
     try await waitFor { self.findWeb(host.view) != nil }
     let web = try XCTUnwrap(findWeb(host.view))
     let coordinator = try XCTUnwrap(web.navigationDelegate as? ArticleWebView.Coordinator)
+    self.coordinator = coordinator
+    self.web = web
     try await waitFor { !web.isLoading && !coordinator.restoring && coordinator.headerHeight > 0 }
     let headingCount = try await evaluate(web, "document.querySelectorAll('h1').length") as? Int
     XCTAssertEqual(headingCount, 1)
@@ -177,5 +203,18 @@ import XCTest
         expected == "sepia"
           ? "rgb(246, 240, 228)" : expected == "dark" ? "rgb(17, 17, 17)" : "rgb(255, 255, 255)")
     }
+    // The document can lay out again after the style script measured it. Here content is added
+    // just before and just after the measurement, in one queue of scripts, so the native size
+    // skips the measured height. Restoring must still finish (by measuring again), or the
+    // reader stops saving its position.
+    let grow = "document.body.insertAdjacentHTML('beforeend', '\(paragraphs)'); 0"
+    send(web, grow)
+    coordinator.present(web, progress: desired)
+    _ = try await evaluate(web, grow)
+    try await waitFor { !coordinator.restoring }
+    XCTAssertEqual(
+      coordinator.measuredContentHeight * web.scrollView.zoomScale,
+      web.scrollView.contentSize.height, accuracy: 2 * web.scrollView.zoomScale)
+    XCTAssertEqual(coordinator.currentProgress(web.scrollView), desired, accuracy: 0.02)
   }
 }
