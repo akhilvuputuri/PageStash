@@ -1,15 +1,15 @@
 {
   "extraKnownMarketplaces": {
-    "a-stack": {
+    "skills": {
       "source": {
         "source": "github",
-        "repo": "akhilvuputuri/a-stack",
-        "ref": "workflow--v0.1.1"
+        "repo": "akhilvuputuri/skills",
+        "ref": "workflow--v0.1.2"
       }
     }
   },
   "enabledPlugins": {
-    "workflow@a-stack": true,
-    "ios-design@a-stack": true
+    "workflow@skills": true,
+    "ios-design@skills": true
   }
 }

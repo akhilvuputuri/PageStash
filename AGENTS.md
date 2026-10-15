@@ -2,7 +2,7 @@
 
 ## Workflow
 
-This repository follows the [a-stack engineering workflow](https://github.com/akhilvuputuri/a-stack/blob/workflow--v0.1.1/plugins/workflow/CORE.md), pinned to marketplace ref `workflow--v0.1.1`. Claude Code loads it through the `workflow@a-stack` plugin pinned in `.claude/settings.json`. Other agents should read the linked CORE.md at that tag before starting work. The bindings below supply this repository's specifics and win where they are more specific.
+This repository follows the [skills engineering workflow](https://github.com/akhilvuputuri/skills/blob/workflow--v0.1.2/plugins/workflow/CORE.md), pinned to marketplace ref `workflow--v0.1.2`. Claude Code loads it through the `workflow@skills` plugin pinned in `.claude/settings.json`. Other agents should read the linked CORE.md at that tag before starting work. The bindings below supply this repository's specifics and win where they are more specific.
 
 Non-negotiable even without the plugin:
 
@@ -35,27 +35,27 @@ Non-negotiable even without the plugin:
 - **Diagnostics:** the Northflank service UI and the live endpoint checks above. There is no capability or doctor command. Production secrets live only in Northflank and Supabase; never in Git, chat or CI.
 - **Exceptions:** none.
 
-## Shared skills from a-stack
+## Shared skills from akhilvuputuri/skills
 
 | Plugin | Skills | Use it for |
 | --- | --- | --- |
 | `workflow` | `preflight`, `independent-review`, `ship`, `journal`, `incident`, `experiment`, `adopt` | The development workflow above |
 | `ios-design` | `ios-design` | Any change to how the iOS app looks or feels: SwiftUI views, theming, typography, accessibility, icons, copy. Audits and implementations follow its workflow and verification matrix, and cite the HIG reference it links |
 
-**Claude Code:** `.claude/settings.json` declares the a-stack marketplace at the pinned tag and enables both plugins. After you trust this folder, Claude Code registers the marketplace and loads them. Check with `claude plugin list`.
+**Claude Code:** `.claude/settings.json` declares the `skills` marketplace at the pinned tag and enables both plugins. After you trust this folder, Claude Code registers the marketplace and loads them. Check with `claude plugin list`.
 
 **Codex:** run these once:
 
 ```sh
-codex plugin marketplace add akhilvuputuri/a-stack@workflow--v0.1.1
-codex plugin add workflow@a-stack
-codex plugin add ios-design@a-stack
+codex plugin marketplace add akhilvuputuri/skills@workflow--v0.1.2
+codex plugin add workflow@skills
+codex plugin add ios-design@skills
 ```
 
 `.codex/config.toml` keeps both enabled in this trusted project. The Codex plugin has no hooks, so the rules above are Codex's always-on workflow.
 
-**Other agents:** run `npx skills add https://github.com/akhilvuputuri/a-stack/tree/workflow--v0.1.1`. Without skill support, read `plugins/ios-design/skills/ios-design/SKILL.md` at that tag and follow it.
+**Other agents:** run `npx skills add https://github.com/akhilvuputuri/skills/tree/workflow--v0.1.2`. Without skill support, read `plugins/ios-design/skills/ios-design/SKILL.md` at that tag and follow it.
 
-Remove any older manually copied `~/.agents/skills/ios-design` before installing the plugin.
+Remove any older manually copied `~/.agents/skills/ios-design` before installing the plugin. The marketplace was called `a-stack` before 0.1.2: if you registered it under that name, first remove it. In Claude Code, `claude plugin marketplace remove a-stack` also removes its plugins. In Codex, run `codex plugin remove workflow@a-stack`, `codex plugin remove ios-design@a-stack` and then `codex plugin marketplace remove a-stack`; removing only the marketplace leaves the old plugins enabled, so every skill loads twice.
 
-**Updating the pin:** a-stack tags reviewed releases `<plugin>--v<version>`. Claude Code and Codex fetch a new copy only when a plugin's version changes. Change the ref in `.claude/settings.json` and this file in one PR, and never point it at a branch. Codex users rerun `codex plugin marketplace add` with the new ref.
+**Updating the pin:** akhilvuputuri/skills tags reviewed releases `<plugin>--v<version>`. Claude Code and Codex fetch a new copy only when a plugin's version changes. Change the ref in `.claude/settings.json` and this file in one PR, and never point it at a branch. Codex users rerun `codex plugin marketplace add` with the new ref.

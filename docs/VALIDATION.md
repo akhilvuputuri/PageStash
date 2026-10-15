@@ -350,6 +350,14 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Merged with main (Trash, #45).** The listing now also excludes items in Trash; a test trashes and restores one. Round 2 re-review approved `df3af43`, and the merge re-review approved `2406ed0`. A later merge brought in only #47's release record (docs).
 - **Not yet done.** Re-review of the merge, merge, Northflank deploy, an app build carrying the switch, and owner acceptance with Chief's connection. The `ios-design` verification matrix (Dynamic Type, dark/Sepia, VoiceOver) has not been run for the new switch.
 
+### Repositories renamed; workflow re-pinned, 15 October 2026
+
+- The GitHub repository `akhilvuputuri/offline-reader` is now `akhilvuputuri/PageStash`. The shared skills repository `akhilvuputuri/a-stack` is now `akhilvuputuri/skills`, and its marketplace is now named `skills`. Reported: both renamed with `gh repo rename`, and the old URLs still resolve through GitHub's redirect. Links in dated entries above keep the old names.
+- The marketplace pin moves to `skills` at `workflow--v0.1.2`, which carries `workflow` 0.1.2 and `ios-design` 0.1.2. The plugin IDs are now `workflow@skills` and `ios-design@skills`. AGENTS.md, `.claude/settings.json` and `.codex/config.toml` change together. The skill content changes only in naming, plus migration steps in the adopt skill.
+- Tested, scratch homes: installing from GitHub at `workflow--v0.1.2` works in Claude Code (`workflow@skills` and `ios-design@skills` at 0.1.2), Codex 0.159.2 (both plugins at 0.1.2) and `npx skills` 1.5.18 (8 skills). The settings JSON and Codex TOML parse. Not observed: Claude Code or Codex loading the pin in a trusted session of this repository.
+- **Review of `b852049` (Opus 5.5): REQUEST CHANGES.** (1) Medium: removing only the Codex `a-stack` marketplace left `workflow@a-stack` and `ios-design@a-stack` enabled, so every shared skill loaded twice (reviewer tested in a scratch `CODEX_HOME`). AGENTS.md now removes both plugins first. (2) Low: README still said the repository kept its old name. Fixed.
+- Documentation and configuration only. No app, backend or deployment change. The Northflank GitHub connection was not rechecked after the rename. Confirm it on the next backend build.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
