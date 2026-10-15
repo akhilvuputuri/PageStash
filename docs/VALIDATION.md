@@ -467,6 +467,15 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - The reader still doesn't handle a WebContent process crash (`webViewWebContentProcessDidTerminate`).
   - The `ios` CI job has no `timeout-minutes`.
 
+### PageStash 0.4.3 release, 15 October 2026
+
+- **Change.** Ships #53 to the owner's iPhone. The reader no longer stops saving the reading position when an article lays out again after being measured. It also bumps the version to 0.4.3 (build 11) in `scripts/generate-project.py`, with `project.pbxproj` regenerated. Apart from #53, nothing has changed in the app or backend since 0.4.2 (`9b001e3`). So there is no backend deploy: Northflank keeps `peaceful-mass-6217`.
+- **Checks (tested, on the release branch):**
+  - ReaderCore: 40 tests pass.
+  - The unsigned device and simulator builds succeed.
+  - Native tests pass 18/18.
+  - CI on #53's final head `b545abc` passed both iOS jobs, which run the iOS 18.5 simulator.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
