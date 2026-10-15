@@ -399,7 +399,7 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - The unsigned device and simulator `xcodebuild` builds succeed.
   - The ReaderCore run used a fresh `--scratch-path`, because the checkout's `.build` cache records a module-cache path from the repository's earlier location and fails before compiling. The cache was left in place.
 - **Independent review of `8c58feb` (Opus 5.5): APPROVE**, with findings in #46's code. Fixed before shipping:
-  - **Medium, Revoke had no confirmation, and the switch's row could trigger it.** It was a default-style button in the same Form row as the switch. Revoke is now borderless, so only the button acts, and it asks "Revoke “name”?" before revoking. Its destructive red is restored, because borderless took the theme's ink. Its VoiceOver label names the connection.
+  - **Medium, Revoke had no confirmation, and the switch's row could trigger it** (the reviewer's hypothesis, from SwiftUI's Form behavior and the borderless buttons elsewhere in the app; not reproduced before the fix). It was a default-style button in the same Form row as the switch. Revoke is now borderless, so only the button acts, and it asks "Revoke “name”?" before revoking. Its destructive red is restored, because borderless took the theme's ink. Its VoiceOver label names the connection.
   - **Low, stale reload.** A slower, older connections response could overwrite a newer one and show a stale switch. Each response now applies only if it is the latest request.
   - Not changed: a successful switch change still clears an earlier unrelated error.
 - **Also fixed (ios-design):** the sharing footnote used `.secondary`, which reads too faint on Sepia. It now uses the theme's `secondaryInk`, like the app's other footnotes.
@@ -413,6 +413,29 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Deferred:**
   - Dark theme and VoiceOver on the switch were not checked visually. The colors come from contrast-tested tokens and system red.
   - Owner acceptance of the switch with Chief's connection.
+- **Re-review of `d5bb693` (Opus 5.5): APPROVE.** The reviewer repeated the simulator checks:
+  - Tapping the name, the switch label or the empty row did nothing.
+  - Revoke showed the confirmation; confirming on Telegram removed only that row.
+  - The Release binary contains none of the preview fixture strings.
+  - Low findings, not fixed:
+    - The confirmation popover points at the middle of the list, not at the Revoke that was tapped.
+    - If the newest list request fails, an older successful response is still ignored, so the rows can stay stale until the next load. The switch positions stay correct.
+    - A failed older request can still show its error.
+    - Revoke is a text button and may be smaller than 44 pt.
+- **Merged** with `--match-head-commit d5bb693` as `9b001e3`, with an identical tree, after CI passed the backend and iOS jobs.
+
+### PageStash 0.4.2 shipped, 15 October 2026
+
+- **Backend first (tested).** Northflank build `peaceful-mass-6217` deployed `9b001e3` to `reader-api` by continuous deployment from `main`.
+  - Running, 1/1 passing probes, 0 restarts, and 0% 5xx.
+  - Live `/health` returned 200, anonymous `/v1/library` 401, and OAuth discovery 200.
+  - The new routes answer: anonymous `PATCH /v1/connections/:id` changed from 404 to 401 once the new instance was serving, and `/v1/interests/saved` returned 401.
+  - Northflank's GitHub source shows `akhilvuputuri/PageStash`, which confirms the connection after the repository rename.
+- [v0.4.2](https://github.com/akhilvuputuri/PageStash/releases/tag/v0.4.2) (build 10) is tagged on `9b001e3`.
+- **iPhone (tested).** A signed generic Release build of `9b001e3` (Apple Development, team U44PG44XMJ) was installed and launched on the owner's iPhone 17. The app and both extensions are 0.4.2 (10), and `devicectl` lists PageStash 0.4.2 (10).
+- **Deferred:**
+  - Owner acceptance of the switch with Chief's connection.
+  - Dark theme and VoiceOver on the new row.
 
 ## Not yet tested
 
