@@ -417,16 +417,19 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Tapping the name, the switch label or the empty row did nothing.
   - Revoke showed the confirmation; confirming on Telegram removed only that row.
   - The Release binary contains none of the preview fixture strings.
-  - Low findings, not fixed:
+  - Low findings and a nit, not fixed:
     - The confirmation popover points at the middle of the list, not at the Revoke that was tapped.
     - If the newest list request fails, an older successful response is still ignored, so the rows can stay stale until the next load. The switch positions stay correct.
     - A failed older request can still show its error.
-    - Revoke is a text button and may be smaller than 44 pt.
+    - Nit: Revoke is a text button and may be smaller than 44 pt.
 - **Merged** with `--match-head-commit d5bb693` as `9b001e3`, with an identical tree, after CI passed the backend and iOS jobs.
 
 ### PageStash 0.4.2 shipped, 15 October 2026
 
-- **Backend first (tested).** Northflank build `peaceful-mass-6217` deployed `9b001e3` to `reader-api` by continuous deployment from `main`.
+- **Backend first (tested).** Northflank build `peaceful-mass-6217` of `9b001e3` was started manually from the service's Commits page and deployed to `reader-api`.
+  - **How Northflank deploys (reported, unchanged by this release).** The service shows CI (build on push) off and CD on: "Always deploying latest builds from the branch main". The same CD setting was shown during the 0.4.0 and 0.4.1 deploys.
+  - So a merge builds and deploys nothing, which is why #46's backend wasn't live until now. Only a manually started build of `main` deploys, and it deploys once it finishes. That is the manual-build process AGENTS.md and DEPLOYMENT.md describe, and this docs-only PR won't deploy anything.
+  - DEPLOYMENT.md's "Use manual deployments" is accurate for builds, but doesn't mention that a finished build deploys without a separate step. A follow-up could say so.
   - Running, 1/1 passing probes, 0 restarts, and 0% 5xx.
   - Live `/health` returned 200, anonymous `/v1/library` 401, and OAuth discovery 200.
   - The new routes answer: anonymous `PATCH /v1/connections/:id` changed from 404 to 401 once the new instance was serving, and `/v1/interests/saved` returned 401.
