@@ -229,6 +229,7 @@ struct ArticleWebView: UIViewRepresentable {
     private(set) var measuredHeaderHeight = 0.0
     private(set) var measuredContentHeight = 0.0
     private var remeasuring = false
+    private var recheckAfterRemeasure = false
     var position = 0.0
     var generation = 0
     var layoutObservation: NSKeyValueObservation?
@@ -249,6 +250,7 @@ struct ArticleWebView: UIViewRepresentable {
       position = progress
       restoring = true
       remeasuring = false
+      recheckAfterRemeasure = false
       layoutObservation?.invalidate()
       layoutObservation = nil
       generation += 1
@@ -315,17 +317,26 @@ struct ArticleWebView: UIViewRepresentable {
     private func remeasure(
       _ web: WKWebView, generation current: Int, expected: URL?, progress: Double
     ) {
-      guard !remeasuring else { return }
+      guard !remeasuring else {
+        // The native size changed while measuring; check it again once the reply arrives.
+        recheckAfterRemeasure = true
+        return
+      }
       remeasuring = true
+      recheckAfterRemeasure = false
       web.evaluateJavaScript(Self.measureScript) { [weak self, weak web] value, _ in
         guard let self, current == self.generation, expected == self.loaded else { return }
         self.remeasuring = false
+        let recheck = self.recheckAfterRemeasure
+        self.recheckAfterRemeasure = false
         guard let web, let dimensions = value as? [String: NSNumber],
           let header = dimensions["headerHeight"]?.doubleValue,
-          let content = dimensions["contentHeight"]?.doubleValue,
-          abs(content - self.measuredContentHeight) >= 1
-            || abs(header - self.measuredHeaderHeight) >= 1
+          let content = dimensions["contentHeight"]?.doubleValue
         else { return }
+        let changed =
+          abs(content - self.measuredContentHeight) >= 1
+          || abs(header - self.measuredHeaderHeight) >= 1
+        guard changed || recheck else { return }
         self.measuredHeaderHeight = header
         self.measuredContentHeight = content
         self.restoreIfLaidOut(web, generation: current, expected: expected, progress: progress)

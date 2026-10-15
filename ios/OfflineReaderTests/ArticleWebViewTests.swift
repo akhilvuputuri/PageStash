@@ -67,6 +67,10 @@ import XCTest
     throw NSError(
       domain: "ReaderUITest", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
   }
+  /// Queues a script without waiting for it, so the next call queues behind it.
+  func send(_ web: WKWebView, _ script: String) {
+    web.evaluateJavaScript(script)
+  }
   func findWeb(_ view: UIView) -> WKWebView? {
     if let web = view as? WKWebView { return web }
     return view.subviews.compactMap { findWeb($0) }.first
@@ -204,7 +208,7 @@ import XCTest
     // skips the measured height. Restoring must still finish (by measuring again), or the
     // reader stops saving its position.
     let grow = "document.body.insertAdjacentHTML('beforeend', '\(paragraphs)'); 0"
-    web.evaluateJavaScript(grow, completionHandler: nil)
+    send(web, grow)
     coordinator.present(web, progress: desired)
     _ = try await evaluate(web, grow)
     try await waitFor { !coordinator.restoring }

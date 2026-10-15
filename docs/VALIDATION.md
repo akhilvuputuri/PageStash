@@ -448,8 +448,9 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - `present` measured the styled document once. Restoring finished only when WebKit's native content size matched that measurement within 2 points.
   - If the document lays out again after the measurement, the native size never matches, so `restoring` stays set. While it is set, `save` doesn't record the reading position and the bars don't recede, until the next presentation change.
   - **Reproduced** in a new test step: add content just before and just after the measurement in one queue of scripts. On the previous code, with only a stub property added so the test compiled, the step timed out after 30 s with `restoring=true` and the content size settled at 38,784 pt.
-  - **Hypothesis (not observed in CI):** the CI failure on a cold first load was this same state, from a late layout pass.
-- **Fix (app).** When the native size doesn't match, the reader measures the document again with a read-only script, one request at a time. If the document changed, it uses the new heights. If not, the native size is still catching up, and the existing content-size observer retries. A new presentation resets the state.
+  - The reproduction injects document content from the test. The app disables page JavaScript, so in the app only a natural late layout pass (for example a late viewport or zoom update in a cold web process) could cause this, and none has been observed.
+  - **Hypothesis (not observed in CI):** the CI failure on a cold first load was this same state, from such a late layout pass.
+- **Fix (app).** When the native size doesn't match, the reader measures the document again with a read-only script, one request at a time. If the document changed, it uses the new heights. If not, the native size is still catching up, and the existing content-size observer retries. A size change that arrives while a measurement is in flight triggers one more check after the reply. A new presentation resets the state.
 - **Test.**
   - The new step above.
   - Each wait has a 30 s deadline measured by the clock, and checks one final time after the deadline.
@@ -458,7 +459,7 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Checks (tested, iOS 26.3 simulator):**
   - The restoration test passed 20 of 20 iterations.
   - Native tests pass 18/18.
-  - The unsigned device build succeeds with no new warnings.
+  - The unsigned device build succeeds, with no new warnings in the app or test targets.
 - **Independent review of `233ee87`** (the test-only first version): **REQUEST CHANGES.** It corrected the diagnosis: the failing wait was the first load, and the runner wasn't uniformly slow. It flagged the stuck-`restoring` risk and asked for these diagnostics. All of that is addressed above.
 - **Not verified / follow-ups:**
   - Behavior on the iOS 18.5 runtime locally.
