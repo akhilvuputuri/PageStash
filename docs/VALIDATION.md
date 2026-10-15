@@ -366,6 +366,29 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - Tested, scratch homes: installing from GitHub at `workflow--v0.1.3` gives `workflow@skills` and `ios-design@skills` at 0.1.3 in Claude Code and in Codex 0.159.2.
 - Documentation and configuration only. Not observed: a trusted session of this repository loading the new pin.
 
+### Re-pinned to the single skills plugin, 15 October 2026
+
+- akhilvuputuri/skills now ships one plugin, `skills@skills`, released as `skills--v0.2.0` on `d3af64e` (akhilvuputuri/skills#11). It replaces `workflow@skills` and `ios-design@skills`. The skill content is unchanged apart from migration notes in the adopt skill. `CORE.md` moved to the repository root, and `ios-design` to `skills/ios-design`.
+- The pin moves to `skills--v0.2.0`. `.claude/settings.json` and `.codex/config.toml` enable `skills@skills` only. AGENTS.md updates its CORE.md link, the plugin name, the Codex and npx commands, the ios-design path, and the steps for removing the old plugins.
+- Tested, scratch homes, installing from GitHub at `skills--v0.2.0`:
+  - Claude Code: `skills@skills` 0.2.0 with 8 skills and 1 SessionStart hook.
+  - Codex 0.159.2: each of the 8 skills loaded once.
+  - `npx skills` 1.5.18: 8 skills.
+- **Upgrade from the `workflow--v0.1.3` pin, tested from GitHub sources in scratch homes:**
+  - **Codex:** the AGENTS.md steps leave only `skills@skills` 0.2.0.
+  - **Claude Code** (project scope, as installed through this repository's settings):
+    - After the new settings are pulled, the old plugins show as disabled.
+    - `claude plugin uninstall … --scope project` removes them. Without `--scope` it fails.
+    - `marketplace update` does not move the registered marketplace to the new ref. Re-adding it at `skills--v0.2.0` with `--scope project` does, and installing `skills@skills` then succeeds.
+    - Because `.claude/settings.json` is committed in Claude Code's own key order (`enabledPlugins` first), those commands leave the file unchanged.
+- **Hypothesis, not observed:** a restarted Claude Code session in a trusted checkout moves to the new ref on its own. The binary contains reconciliation for a changed marketplace `ref`, but that would need a model session.
+- **Independent review** (Opus 5.5) of `12f3e26`: **REQUEST CHANGES**.
+  - The Claude uninstall steps lacked `--scope project`.
+  - The "Updating the pin" Codex advice failed for a marketplace already registered at another ref.
+  - This entry overstated a local-clone migration test.
+  - All three are fixed above and in AGENTS.md.
+- Documentation and configuration only. Not observed: a trusted session of this repository loading the new pin.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.

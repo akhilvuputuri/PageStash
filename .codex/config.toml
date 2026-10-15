@@ -1,7 +1,4 @@
-# Enables the skills plugins in this trusted project. Install them first:
+# Enables the skills plugin in this trusted project. Install it first:
 # see "Shared skills from akhilvuputuri/skills" in AGENTS.md.
-[plugins."workflow@skills"]
-enabled = true
-
-[plugins."ios-design@skills"]
+[plugins."skills@skills"]
 enabled = true
