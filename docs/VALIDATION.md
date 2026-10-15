@@ -440,6 +440,22 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Owner acceptance of the switch with Chief's connection.
   - Dark theme and VoiceOver on the new row.
 
+### Flaky web-view restoration test, 15 October 2026
+
+- **Failure.** `ArticleWebViewTests.testLongHeaderScrollAndFontThemeRestoration` failed once in CI: run 38751647140, the pull-request run on `4e1279e`, a docs-only change. Its push run on the same commit passed. The error was "Reader did not settle before deadline", meaning one of the test's `waitFor` conditions wasn't met within its 10 s budget (200 × 50 ms). It was the only failure among the last 40 runs of the workflow.
+- **Cause (measured, with a hypothesis).**
+  - The failing run's result bundle (iOS 18.5 simulator, Xcode 16.4) shows the test ran 40.6 s, and no mid-test snapshot was attached. So the timeout happened in a wait before the theme loop: load, font sizes, Dynamic Type, Bold Text or Dark.
+  - A passing CI run of the same commit took 10.3 s. CI's own summary flags this test as the slowest, at 11–16 s.
+  - Locally (iOS 26.3 simulator) it takes about 1.6 s and passed 30 of 30 runs plus 10 more after the change.
+  - Hypothesis: the slowest steps on an overloaded runner exceeded the 10 s per-step budget. The reader getting stuck (`restoring` never clearing because the native content size never matches the measured document) is not excluded, but was not observed.
+- **Change (test only).**
+  - Each wait now has a 30 s deadline, measured by the clock rather than an iteration count. It still returns as soon as its condition holds, so passing runs aren't slower.
+  - A timeout now names the waiting line and the reader's state (`restoring`, font size, appearance, header height, content size, bounds, loading), so a future failure separates "slow" from "stuck".
+- **Checks (tested).** Native tests pass 18/18, and the restoration test passed 10 of 10 iterations.
+- **Not verified:**
+  - Behavior on the iOS 18.5 runtime locally; only iOS 26.3 is installed here.
+  - That the longer deadline removes the CI flake. That needs more CI runs.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.

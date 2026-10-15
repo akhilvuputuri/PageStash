@@ -38,14 +38,28 @@ import XCTest
       }
     }
   }
-  func waitFor(_ predicate: @escaping @MainActor () async throws -> Bool) async throws {
-    for _ in 0..<200 {
+  /// The coordinator under test, so a timeout can report what the reader was waiting for.
+  var coordinator: ArticleWebView.Coordinator?
+  weak var web: WKWebView?
+  /// Waits for a condition, returning as soon as it holds. The deadline is generous because CI
+  /// simulators run this test up to 25 times slower than a local Mac (about 10 s against 1.6 s,
+  /// and 40 s on a slow runner), and a 10 s budget per step failed there.
+  func waitFor(
+    line: Int = #line, _ predicate: @escaping @MainActor () async throws -> Bool
+  ) async throws {
+    let deadline = ContinuousClock.now + .seconds(30)
+    while ContinuousClock.now < deadline {
       if try await predicate() { return }
       try await Task.sleep(nanoseconds: 50_000_000)
     }
+    var state = "no coordinator"
+    if let coordinator, let web {
+      state =
+        "restoring=\(coordinator.restoring) fontSize=\(coordinator.fontSize) appearance=\(coordinator.appearance ?? "nil") headerHeight=\(coordinator.headerHeight) contentSize=\(web.scrollView.contentSize) bounds=\(web.scrollView.bounds.size) loading=\(web.isLoading)"
+    }
     throw NSError(
       domain: "ReaderUITest", code: 1,
-      userInfo: [NSLocalizedDescriptionKey: "Reader did not settle before deadline"])
+      userInfo: [NSLocalizedDescriptionKey: "Reader did not settle before deadline (line \(line)): \(state)"])
   }
   func findWeb(_ view: UIView) -> WKWebView? {
     if let web = view as? WKWebView { return web }
@@ -88,6 +102,8 @@ import XCTest
     try await waitFor { self.findWeb(host.view) != nil }
     let web = try XCTUnwrap(findWeb(host.view))
     let coordinator = try XCTUnwrap(web.navigationDelegate as? ArticleWebView.Coordinator)
+    self.coordinator = coordinator
+    self.web = web
     try await waitFor { !web.isLoading && !coordinator.restoring && coordinator.headerHeight > 0 }
     let headingCount = try await evaluate(web, "document.querySelectorAll('h1').length") as? Int
     XCTAssertEqual(headingCount, 1)
