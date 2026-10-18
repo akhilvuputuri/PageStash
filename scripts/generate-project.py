@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 # The app and every embedded extension must share these.
-MARKETING_VERSION, BUILD = '0.4.3', '11'
+MARKETING_VERSION, BUILD = '0.4.4', '12'
 ios = root / 'ios'
 project = ios / 'OfflineReader.xcodeproj'
 project.mkdir(exist_ok=True)

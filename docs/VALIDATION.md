@@ -503,6 +503,7 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Not verified until deploy:**
   - The restarts stop.
   - The Watsons item becomes a retryable import on the owner's phone.
+
 ### Save links from articles, 19 October 2026
 
 - **Change.** The owner asked for links in downloaded articles to be saved for later by holding them.
@@ -540,6 +541,12 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - A real save against the backend from the reader (preview mode makes no network calls). The delivery path is the existing share-extension path, which `ShareSaveTests` cover.
   - Saving while offline on a device.
   - Holding a link with VoiceOver, and Dark theme and the largest text sizes for the message.
+
+### PageStash 0.4.4 release, 19 October 2026
+
+- **Change.** Ships #56, saving links from articles by holding them, to the owner's iPhone. It also bumps the version to 0.4.4 (build 12) in `scripts/generate-project.py`, with `project.pbxproj` regenerated, and adds a blank line before the link-saving entry above.
+  - The backend is unchanged since #57's deploy (`b430bdb`, Northflank `adorable-train-8027`). The feature uses the existing save endpoint, so there is no backend deploy.
+- **Checks (tested, on the release branch):** ReaderCore 41 tests pass, the unsigned device and simulator builds succeed, and native tests pass 18/18.
 
 ## Not yet tested
 
