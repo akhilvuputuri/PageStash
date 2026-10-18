@@ -8,7 +8,6 @@ import { Service, type Identity } from "../src/service.js";
 import { buildServer } from "../src/server.js";
 import { discard, normalizedURL, publicAddress, safeFetch } from "../src/fetch.js";
 import { createServer } from "node:http";
-import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
 import { request } from "undici";
 import { extract, sanitize, markdownDocument, readerHTML, languageTag } from "../src/content.js";
@@ -679,33 +678,29 @@ test("Trash keeps items restorable, a re-save restores them, and old trash is pu
 });
 
 test("discarding an unread response body never raises an unhandled error", async () => {
-  // Production (Node 22.23.3) ended with "Unhandled 'error' event" on undici's BodyReadable:
-  // destroying an unread body after a non-200 response emitted RequestAbortedError with no
-  // listener. A body that emits that error on destroy reproduces the mechanism here.
-  const aborting = () => {
-    const body = new EventEmitter() as EventEmitter & { destroy(): void };
-    body.destroy = () => {
-      body.emit(
-        "error",
-        Object.assign(new Error("Request aborted"), { code: "UND_ERR_ABORTED" }),
-      );
-    };
-    return body;
-  };
-  assert.throws(() => aborting().destroy(), { code: "UND_ERR_ABORTED" });
-  assert.doesNotThrow(() => discard(aborting()));
-  // And against a real undici response that is still streaming.
-  const server = createServer((_request, response) => {
-    response.writeHead(403, { "content-type": "text/html" });
-    response.write("x".repeat(1024));
+  // Production ended with "Unhandled 'error' event" (UND_ERR_ABORTED) on undici's BodyReadable.
+  // It happens when an unread body has fully arrived, as with a short error page or a redirect:
+  // a bare destroy() then emits RequestAbortedError with no listener. (A body still streaming
+  // is protected by undici's own listener, so it can't reproduce this.)
+  const server = createServer((request, response) => {
+    if (request.url === "/redirect") {
+      response.writeHead(302, { location: "/next", "content-length": "0" });
+      response.end();
+    } else {
+      response.writeHead(403, { "content-type": "text/html" });
+      response.end("x".repeat(1024));
+    }
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
   try {
-    const response = await request(`http://127.0.0.1:${port}/`);
-    discard(response.body);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(response.body.destroyed, true);
+    for (const path of ["/blocked", "/redirect"]) {
+      const response = await request(`http://127.0.0.1:${port}${path}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      discard(response.body);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(response.body.destroyed, true, path);
+    }
   } finally {
     server.closeAllConnections();
     server.close();

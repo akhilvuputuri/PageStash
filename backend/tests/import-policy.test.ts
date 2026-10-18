@@ -244,6 +244,17 @@ test("a job whose attempts ended the process is kept as a retryable bookmark", a
     assert.equal(await service.retry(owner, receipt.submission_id!), true);
     await service.runOne();
     assert.equal((await service.status(agent, receipt.submission_id!)).status, "ready");
+    // Two crashed claims leave one real attempt: the third claim still prepares the article.
+    const second = await service.save(agent, {
+      url: "https://example.com/crashed-twice",
+      idempotency_key: randomUUID(),
+    });
+    await service.db.query(
+      "UPDATE jobs SET attempts=2,lease_token=gen_random_uuid(),lease_until=now()-interval '1 second',available_at=now() WHERE id=$1",
+      [second.submission_id],
+    );
+    await service.runOne();
+    assert.equal((await service.status(agent, second.submission_id!)).status, "ready");
   }));
 
 test("retry route remains app-only and same-key concurrent saves have one durable queue entry", async () =>
