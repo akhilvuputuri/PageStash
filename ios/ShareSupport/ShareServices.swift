@@ -125,7 +125,7 @@ enum ShareVault {
       // Timeout can follow a committed write. Keep the same operation key for retry.
       try store.finish(
         claimed, state: .queued,
-        error: "Queued on this device. Open PageStash when online to submit.")
+        error: ShareServicesText.offline)
     }
   }
 }
