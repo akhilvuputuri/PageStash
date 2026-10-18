@@ -33,6 +33,47 @@ public struct SharedSave: Codable, Identifiable, Sendable {
     self.url = url
   }
 }
+/// What saving a link held in an article did, worded for the reader. `saved` is false when the
+/// message is a problem to keep on screen.
+public struct LinkSaveResult: Equatable, Sendable {
+  public let message: String
+  public let saved: Bool
+  public init(_ message: String, saved: Bool) {
+    self.message = message
+    self.saved = saved
+  }
+  /// The message for a delivered (or kept) save record, from its state and the server's status.
+  public static func describing(_ record: SharedSave?) -> LinkSaveResult {
+    guard let record else {
+      return LinkSaveResult("Couldn't confirm this save. Check Imports.", saved: false)
+    }
+    switch record.state {
+    case .accepted:
+      switch record.serverStatus {
+      case "ready": return LinkSaveResult("Already in PageStash.", saved: true)
+      case "already_saved": return LinkSaveResult("Already saved in PageStash.", saved: true)
+      case "bookmark":
+        return LinkSaveResult(
+          "Saved, but it couldn't be prepared. Retry from Imports.", saved: false)
+      default: return LinkSaveResult("Saved. PageStash is preparing it.", saved: true)
+      }
+    case .queued, .sending:
+      // Without a server reason, delivery failed on the network: the next sync sends it.
+      guard let reason = record.error, reason != ShareServicesText.offline else {
+        return LinkSaveResult("Kept on this iPhone. PageStash sends it later.", saved: true)
+      }
+      return LinkSaveResult("\(reason) Kept on this iPhone to send later.", saved: false)
+    case .authenticationRequired:
+      return LinkSaveResult("Sign in again in PageStash, then retry from Imports.", saved: false)
+    case .rejected:
+      return LinkSaveResult(record.error ?? "This link couldn't be saved.", saved: false)
+    }
+  }
+}
+/// Wording shared by the delivery code and the reader.
+public enum ShareServicesText {
+  public static let offline = "Queued on this device. Open PageStash when online to submit."
+}
 public enum ShareError: Error, LocalizedError {
   case invalidURL, unavailable, changedAccount, authenticationRequired
   public var errorDescription: String? {

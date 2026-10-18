@@ -353,30 +353,26 @@ import SwiftUI
     } catch { message = error.localizedDescription }
   }
   /// Saves a link held in an article. It is kept on this device first, like a share, so it is
-  /// sent later if the phone is offline. Returns what happened, for the reader to show.
-  func saveLink(_ url: URL) async -> (message: String, saved: Bool) {
+  /// sent later if delivery fails. Returns what happened, for the reader to show.
+  func saveLink(_ url: URL) async -> LinkSaveResult {
     #if DEBUG
-      if previewMode { return ("Saved. It downloads once it's prepared.", true) }
+      if previewMode { return LinkSaveResult("Saved. PageStash is preparing it.", saved: true) }
     #endif
     guard let shareStore, let credentials = ShareVault.load() else {
-      return (ShareError.authenticationRequired.localizedDescription, false)
+      return LinkSaveResult("Sign in again in PageStash to save links.", saved: false)
     }
     do {
       let id = try shareStore.enqueue(url, id: UUID().uuidString, account: credentials.account).id
       try await ShareServices.deliver(shareStore, credentials: credentials, id: id)
       let record = try shareStore.records(credentials.account).first { $0.id == id }
       reload()
-      switch record?.state {
-      case .accepted:
-        Task { try? await sync() }
-        return record?.serverStatus == "already_saved"
-          ? ("Already saved in PageStash.", true) : ("Saved. It downloads once it's prepared.", true)
-      case .queued, .sending: return ("Saved on this iPhone. It's sent when you're online.", true)
-      case .authenticationRequired:
-        return (ShareError.authenticationRequired.localizedDescription, false)
-      case .rejected, nil: return (record?.error ?? "This link couldn't be saved.", false)
-      }
-    } catch { return (error.localizedDescription, false) }
+      if record?.state == .accepted { Task { try? await sync() } }
+      return LinkSaveResult.describing(record)
+    } catch ShareError.changedAccount {
+      return LinkSaveResult("The sign-in changed while saving. Try again.", saved: false)
+    } catch ShareError.authenticationRequired {
+      return LinkSaveResult("Sign in again in PageStash to save links.", saved: false)
+    } catch { return LinkSaveResult(error.localizedDescription, saved: false) }
   }
   func removeSharedSave(_ id: String) {
     do {
@@ -485,7 +481,7 @@ import SwiftUI
         let store = try LocalStore(root: root)
         func content(_ title: String) -> (Data, Asset) {
           let body =
-            "<p>Synthetic content with <a href='https://example.com/related-article'>a related article</a> to hold.</p>"
+            "<p>Synthetic content with <a href='https://example.com/related-article'>a related article</a> to hold, and <a href='mailto:reader@example.com'>an email link</a>.</p>"
             + (1...24).map {
               "<p>Paragraph \($0). This is synthetic reading content for checking layout, text size and the finished-reading flow.</p>"
             }.joined()

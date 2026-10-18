@@ -379,10 +379,7 @@ struct ArticleWebView: UIViewRepresentable {
     ) {
       let link = elementInfo.linkURL.flatMap { try? SharedLink.validate($0.absoluteString) }
       guard let link, let save = parent.onSaveLink else {
-        completionHandler(
-          UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { suggested in
-            UIMenu(children: suggested)
-          })
+        completionHandler(nil)
         return
       }
       completionHandler(

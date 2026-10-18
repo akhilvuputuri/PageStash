@@ -636,12 +636,22 @@ struct ReaderScreen: View {
   @State private var collection = ""
   @State private var showCollection = false
   /// The result of saving a held link: successes fade, problems stay until tapped.
-  @State private var linkNotice: (message: String, saved: Bool)?
+  @State private var linkNotice: LinkSaveResult?
   @State private var linkNoticeDismissal: Task<Void, Never>?
+  /// Links being sent now; holding one again while it is sent does nothing.
+  @State private var savingLinks: Set<URL> = []
+  private static let savingNotice = LinkSaveResult("Saving…", saved: true)
   private var item: ReadingItem? { state.items.first { $0.id == itemID } }
   private func saveLink(_ url: URL) {
+    guard !savingLinks.contains(url) else { return }
+    savingLinks.insert(url)
+    linkNoticeDismissal?.cancel()
+    withAnimation(reduceMotion ? nil : .default) {
+      linkNotice = Self.savingNotice
+    }
     Task {
       let result = await state.saveLink(url)
+      savingLinks.remove(url)
       UINotificationFeedbackGenerator().notificationOccurred(result.saved ? .success : .warning)
       UIAccessibility.post(notification: .announcement, argument: result.message)
       linkNoticeDismissal?.cancel()
@@ -737,12 +747,14 @@ struct ReaderScreen: View {
                 } label: {
                   Label(
                     linkNotice.message,
-                    systemImage: linkNotice.saved ? "checkmark.circle" : "exclamationmark.triangle")
+                    systemImage: linkNotice == Self.savingNotice
+                      ? "arrow.up.circle"
+                      : linkNotice.saved ? "checkmark.circle" : "exclamationmark.triangle")
                 }
                 .font(.subheadline)
                 .foregroundStyle(linkNotice.saved ? tokens.ink.color : tokens.warning.color)
                 .padding(.horizontal, 16).padding(.vertical, 10)
-                .background(.regularMaterial, in: .capsule)
+                .background(.thickMaterial, in: .capsule)
                 .padding()
                 .accessibilityHint("Dismisses this message")
                 .transition(.move(edge: .bottom).combined(with: .opacity))

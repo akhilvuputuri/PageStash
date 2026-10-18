@@ -113,4 +113,40 @@ final class SharedSaveTests: XCTestCase {
     try store.activate(next)
     XCTAssertTrue(try store.records(next).isEmpty)
   }
+  func testLinkSaveMessagesFollowWhatTheServerDid() {
+    func record(
+      _ state: SharedSaveState, server: String? = nil, error: String? = nil
+    ) -> SharedSave {
+      var save = SharedSave(
+        id: UUID().uuidString, account: account(), url: URL(string: "https://example.com/a")!)
+      save.state = state
+      save.serverStatus = server
+      save.error = error
+      return save
+    }
+    func check(_ record: SharedSave?, _ message: String, saved: Bool) {
+      XCTAssertEqual(LinkSaveResult.describing(record), LinkSaveResult(message, saved: saved))
+    }
+    check(record(.accepted, server: "queued"), "Saved. PageStash is preparing it.", saved: true)
+    check(record(.accepted, server: "processing"), "Saved. PageStash is preparing it.", saved: true)
+    // The app sees an existing item's own status, never "already_saved".
+    check(record(.accepted, server: "ready"), "Already in PageStash.", saved: true)
+    check(
+      record(.accepted, server: "bookmark"),
+      "Saved, but it couldn't be prepared. Retry from Imports.", saved: false)
+    check(
+      record(.queued, error: ShareServicesText.offline),
+      "Kept on this iPhone. PageStash sends it later.", saved: true)
+    check(record(.sending), "Kept on this iPhone. PageStash sends it later.", saved: true)
+    // Online but refused for now (a server error or the queue limit): say why, and keep it.
+    check(
+      record(.queued, error: "Personal beta library or import queue limit reached."),
+      "Personal beta library or import queue limit reached. Kept on this iPhone to send later.",
+      saved: false)
+    check(
+      record(.authenticationRequired),
+      "Sign in again in PageStash, then retry from Imports.", saved: false)
+    check(record(.rejected, error: "Link refused."), "Link refused.", saved: false)
+    check(nil, "Couldn't confirm this save. Check Imports.", saved: false)
+  }
 }

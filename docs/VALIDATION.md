@@ -482,19 +482,37 @@ Requested by the owner after using 0.4.0 on the iPhone.
 
 ### Save links from articles, 19 October 2026
 
-- **Change.** The owner asked for links in downloaded articles to be saved for later by holding them. Holding an `http`/`https` link in the reader now shows the system link menu with **Save to PageStash** first, titled with the link's host. The system's own actions follow (Open, Add to Reading List, Copy Link, Share). The menu shows no web preview, so holding a link never loads the page.
-  - **Offline-safe.** A save uses the share extension's queue (`SharedSaveStore` with `ShareServices.deliver`). The link is validated and stored on the device first, with its own operation key, then sent. If the phone is offline it stays queued, and the existing sync sends it later. While it is being prepared it is listed in Imports, the same as a shared link.
-  - **Feedback.**
-    - A success haptic and a VoiceOver announcement.
-    - A message at the bottom of the reader: "Saved. It downloads once it's prepared.", "Already saved in PageStash.", or "Saved on this iPhone. It's sent when you're online.". Successes fade after 4 s.
-    - Problems (sign in again, a rejected link) use the warning color and stay until tapped. Animation follows Reduce Motion.
-  - Links the save rules reject (other schemes, credentials or nonstandard ports, over 2,048 characters) keep the plain system menu.
-  - The debug-only preview store now includes one `example.com` link, and in preview mode a save reports success without any network call.
+- **Change.** The owner asked for links in downloaded articles to be saved for later by holding them.
+  - Holding an `http`/`https` link in the reader shows the system link menu with **Save to PageStash** first, titled with the link's host, followed by the system's own actions (Open, Add to Reading List, Copy Link, Share). It has no web preview, so holding a link never loads the page.
+  - Other links and images get WebKit's default menu unchanged (the delegate passes `nil`).
+- **Offline-safe.** A save uses the share extension's queue (`SharedSaveStore` with `ShareServices.deliver`). The link is validated and stored on the device first, with its own operation key, then sent. If delivery fails it stays queued, and the existing sync sends it later. While it is being prepared it is listed in Imports, the same as a shared link.
+- **Feedback.**
+  - "Saving…" shows at once. Holding the same link again while it is sent does nothing.
+  - The result is chosen by `LinkSaveResult.describing`, from the record's state and the server's status:
+
+    | Server result | Message |
+    | --- | --- |
+    | Queued or processing | "Saved. PageStash is preparing it." |
+    | An existing ready item | "Already in PageStash." |
+    | An existing failed item | "Saved, but it couldn't be prepared. Retry from Imports." |
+    | Network failure | "Kept on this iPhone. PageStash sends it later." |
+    | Server reason, such as the queue limit | that reason, plus "Kept on this iPhone to send later." |
+    | Sign-in required, or rejected | a problem message |
+
+  - Successes fade after 4 s; problems use the warning color and stay until tapped. A haptic and a VoiceOver announcement accompany each result.
+  - The fade is a deliberate exception to `ios-design`'s "nothing important disappears on a timer": the save stays listed in Imports.
+  - The debug-only preview store now includes an `example.com` link and an email link. In preview mode a save reports success without any network call.
+- **Tests (tested).** A ReaderCore unit test covers every message: ReaderCore 41 tests, native tests 18/18, and the unsigned device build has no new warnings in the changed files.
 - **Simulator checks (tested, preview bundle, iPhone 17 Pro, iOS 26.3, Sepia):**
-  - Holding the link showed "example.com", Save to PageStash, then the system actions.
-  - Saving showed the success message, which faded.
+  - Holding the web link showed "example.com", Save to PageStash, then the system actions. Saving showed "Saved. PageStash is preparing it." above the toolbar.
+  - Holding the email link showed WebKit's default Email, Message, Add to Contacts and Copy Email menu.
   - Holding and dismissing the menu kept the bars visible.
-- **Checks (tested).** Native tests pass 18/18, and the unsigned device build succeeds with no new warnings in the changed files.
+- **Independent review of `9cc758d` (Opus 5.5): REQUEST CHANGES.** All addressed above.
+  - The success copy was wrong for an existing ready or failed item, and the app never sees `already_saved`.
+  - "Sent when you're online" was shown even when the server refused for now.
+  - Non-saveable links had lost WebKit's default menu.
+  - Repeated taps re-sent a save that was still in flight.
+  - The fade was undocumented.
 - **Not verified:**
   - A real save against the backend from the reader (preview mode makes no network calls). The delivery path is the existing share-extension path, which `ShareSaveTests` cover.
   - Saving while offline on a device.
