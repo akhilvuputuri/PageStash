@@ -635,7 +635,25 @@ struct ReaderScreen: View {
   @State private var chromeInsets = EdgeInsets()
   @State private var collection = ""
   @State private var showCollection = false
+  /// The result of saving a held link: successes fade, problems stay until tapped.
+  @State private var linkNotice: (message: String, saved: Bool)?
+  @State private var linkNoticeDismissal: Task<Void, Never>?
   private var item: ReadingItem? { state.items.first { $0.id == itemID } }
+  private func saveLink(_ url: URL) {
+    Task {
+      let result = await state.saveLink(url)
+      UINotificationFeedbackGenerator().notificationOccurred(result.saved ? .success : .warning)
+      UIAccessibility.post(notification: .announcement, argument: result.message)
+      linkNoticeDismissal?.cancel()
+      withAnimation(reduceMotion ? nil : .default) { linkNotice = result }
+      guard result.saved else { return }
+      linkNoticeDismissal = Task {
+        try? await Task.sleep(for: .seconds(4))
+        guard !Task.isCancelled else { return }
+        withAnimation(reduceMotion ? nil : .default) { linkNotice = nil }
+      }
+    }
+  }
   /// Measure the bars only while they show; hiding them must not re-pad the article.
   @State private var currentTopInset = 0.0
   private func measureChrome(_ insets: EdgeInsets) {
@@ -679,7 +697,8 @@ struct ReaderScreen: View {
               fontSize: fontSize,
               chromeInsets: chromeInsets,
               paging: paging,
-              onFinish: { finish(item) }
+              onFinish: { finish(item) },
+              onSaveLink: { saveLink($0) }
             ) { progress in
               if !finished { try? state.store?.recordReadingPosition(item.id, progress) }
             }
@@ -708,6 +727,25 @@ struct ReaderScreen: View {
                   Spacer(minLength: 0)
                 }
                 .ignoresSafeArea().allowsHitTesting(false)
+              }
+            }
+            .overlay(alignment: .bottom) {
+              if let linkNotice {
+                Button {
+                  linkNoticeDismissal?.cancel()
+                  withAnimation(reduceMotion ? nil : .default) { self.linkNotice = nil }
+                } label: {
+                  Label(
+                    linkNotice.message,
+                    systemImage: linkNotice.saved ? "checkmark.circle" : "exclamationmark.triangle")
+                }
+                .font(.subheadline)
+                .foregroundStyle(linkNotice.saved ? tokens.ink.color : tokens.warning.color)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(.regularMaterial, in: .capsule)
+                .padding()
+                .accessibilityHint("Dismisses this message")
+                .transition(.move(edge: .bottom).combined(with: .opacity))
               }
             }
 

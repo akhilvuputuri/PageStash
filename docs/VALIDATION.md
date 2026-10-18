@@ -480,6 +480,26 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **iPhone (tested).** A signed generic Release build of `ca52825` (Apple Development, team U44PG44XMJ; the app and both extensions at 0.4.3 (11)) was installed and launched on the owner's iPhone 17. `devicectl` lists PageStash 0.4.3 (11).
 - **Deferred:** observing the fix on the device. The stuck state has only been reproduced with injected content.
 
+### Save links from articles, 19 October 2026
+
+- **Change.** The owner asked for links in downloaded articles to be saved for later by holding them. Holding an `http`/`https` link in the reader now shows the system link menu with **Save to PageStash** first, titled with the link's host. The system's own actions follow (Open, Add to Reading List, Copy Link, Share). The menu shows no web preview, so holding a link never loads the page.
+  - **Offline-safe.** A save uses the share extension's queue (`SharedSaveStore` with `ShareServices.deliver`). The link is validated and stored on the device first, with its own operation key, then sent. If the phone is offline it stays queued, and the existing sync sends it later. While it is being prepared it is listed in Imports, the same as a shared link.
+  - **Feedback.**
+    - A success haptic and a VoiceOver announcement.
+    - A message at the bottom of the reader: "Saved. It downloads once it's prepared.", "Already saved in PageStash.", or "Saved on this iPhone. It's sent when you're online.". Successes fade after 4 s.
+    - Problems (sign in again, a rejected link) use the warning color and stay until tapped. Animation follows Reduce Motion.
+  - Links the save rules reject (other schemes, credentials or nonstandard ports, over 2,048 characters) keep the plain system menu.
+  - The debug-only preview store now includes one `example.com` link, and in preview mode a save reports success without any network call.
+- **Simulator checks (tested, preview bundle, iPhone 17 Pro, iOS 26.3, Sepia):**
+  - Holding the link showed "example.com", Save to PageStash, then the system actions.
+  - Saving showed the success message, which faded.
+  - Holding and dismissing the menu kept the bars visible.
+- **Checks (tested).** Native tests pass 18/18, and the unsigned device build succeeds with no new warnings in the changed files.
+- **Not verified:**
+  - A real save against the backend from the reader (preview mode makes no network calls). The delivery path is the existing share-extension path, which `ShareSaveTests` cover.
+  - Saving while offline on a device.
+  - Holding a link with VoiceOver, and Dark theme and the largest text sizes for the message.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.

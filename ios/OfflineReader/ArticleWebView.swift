@@ -63,6 +63,8 @@ struct ArticleWebView: UIViewRepresentable {
   /// Page-by-page scrolling: each swipe moves one screen, overlapping by a line.
   var paging = false
   var onFinish: (() -> Void)? = nil
+  /// Saves a web link from the article to the library; offered when a link is held.
+  var onSaveLink: ((URL) -> Void)? = nil
   let onProgress: (Double) -> Void
   private var tokens: ThemeTokens { ThemeTokens.resolve(selectedAppearance, colorScheme) }
   var appearance: String { tokens.name }
@@ -180,6 +182,7 @@ struct ArticleWebView: UIViewRepresentable {
     configuration.websiteDataStore = .nonPersistent()
     let web = WKWebView(frame: .zero, configuration: configuration)
     web.navigationDelegate = context.coordinator
+    web.uiDelegate = context.coordinator
     web.scrollView.delegate = context.coordinator
     web.scrollView.contentInsetAdjustmentBehavior = .never
     web.isOpaque = false
@@ -213,7 +216,7 @@ struct ArticleWebView: UIViewRepresentable {
     }
   }
 
-  final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate,
+  final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UIScrollViewDelegate,
     UIGestureRecognizerDelegate
   {
     var parent: ArticleWebView
@@ -368,6 +371,29 @@ struct ArticleWebView: UIViewRepresentable {
       // Only the top-level article file may navigate; images are confined by CSP/read access.
       decisionHandler(
         target.standardizedFileURL == parent.url.standardizedFileURL ? .allow : .cancel)
+    }
+    /// Holding a web link adds Save to PageStash ahead of the system's own link actions.
+    func webView(
+      _ webView: WKWebView, contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
+      completionHandler: @escaping (UIContextMenuConfiguration?) -> Void
+    ) {
+      let link = elementInfo.linkURL.flatMap { try? SharedLink.validate($0.absoluteString) }
+      guard let link, let save = parent.onSaveLink else {
+        completionHandler(
+          UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { suggested in
+            UIMenu(children: suggested)
+          })
+        return
+      }
+      completionHandler(
+        UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { suggested in
+          let action = UIAction(
+            title: "Save to PageStash", image: UIImage(systemName: "tray.and.arrow.down")
+          ) { _ in save(link) }
+          return UIMenu(
+            title: link.host() ?? "",
+            children: [UIMenu(options: .displayInline, children: [action])] + suggested)
+        })
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
       if Date().timeIntervalSince(lastSaved) > 2 { save(scrollView) }
