@@ -222,6 +222,30 @@ test("transient failures stop after bounded retries and hide provider details", 
     assert.equal(await service.runOne(), false);
   }));
 
+test("a job whose attempts ended the process is kept as a retryable bookmark", async () =>
+  fixture(async (service, owner, agent, _other, setFailure) => {
+    // Preparing would now succeed, so only the attempt guard can make this a bookmark.
+    setFailure(null);
+    const receipt = await service.save(agent, {
+      url: "https://example.com/crashes",
+      idempotency_key: randomUUID(),
+    });
+    // Three claims whose processes exited before recording a failure: each counted an attempt
+    // and left an expired lease.
+    await service.db.query(
+      "UPDATE jobs SET attempts=3,lease_token=gen_random_uuid(),lease_until=now()-interval '1 second',available_at=now() WHERE id=$1",
+      [receipt.submission_id],
+    );
+    assert.equal(await service.runOne(), true);
+    const state = await service.status(agent, receipt.submission_id!);
+    assert.equal(state.status, "bookmark");
+    assert.equal(state.error, "Import could not complete. Retry from Imports.");
+    assert.equal(await service.runOne(), false, "the job is not claimed again");
+    assert.equal(await service.retry(owner, receipt.submission_id!), true);
+    await service.runOne();
+    assert.equal((await service.status(agent, receipt.submission_id!)).status, "ready");
+  }));
+
 test("retry route remains app-only and same-key concurrent saves have one durable queue entry", async () =>
   fixture(async (service, owner, agent, _other) => {
     const input = {

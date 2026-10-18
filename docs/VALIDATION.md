@@ -480,6 +480,27 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **iPhone (tested).** A signed generic Release build of `ca52825` (Apple Development, team U44PG44XMJ; the app and both extensions at 0.4.3 (11)) was installed and launched on the owner's iPhone 17. `devicectl` lists PageStash 0.4.3 (11).
 - **Deferred:** observing the fix on the device. The stuck state has only been reproduced with injected content.
 
+### Backend crash loop from one import, 19 October 2026
+
+- **Reported.** The owner saw an article stuck on downloading.
+- **Device (tested, read-only copy of the app's database, kept outside the repository).** The item was a link to `www.watsons.com.sg`, saved 16 October 06:39 UTC. On the device it had `status=processing`, content version 0 and no assets, so there was nothing to download. The server never finished preparing it.
+- **Production (observed in Northflank).**
+  - `reader-api` at `9b001e3` showed "Up 2 hours, 13 restarts" and "1 issue reported by pods". At least 16 earlier pods had been terminated, most after 25 restarts, across about three days.
+  - Every exit had the same stack: `node:events` "Unhandled 'error' event", `RequestAbortedError` (`UND_ERR_ABORTED`) emitted by undici's `BodyReadable._destroy`, from `safeFetch` (`dist/fetch.js:78`, the non-200 branch's `response.body.destroy()`), from `prepareArticle`, `runOne` and `ImportWorker.tick`. Exits came about 10 minutes apart, matching the job lease.
+  - So the source answered with a non-200 status (likely a bot challenge). Destroying its unread body emitted an error nobody listened for, and Node ended the process before `runOne` could record the failure. The job's lease then expired, and the next claim crashed again. Attempts are counted at claim, but the three-attempt limit was only applied in the catch block, so the job never ended.
+  - Other saves were still prepared between crashes. The API was briefly unavailable on each restart.
+- **Fix.**
+  - `fetch.ts`: `discard(body)` attaches an error listener before destroying a body. All five early exits in `safeFetch` use it.
+  - `service.ts`: a claimed job that already has more than `MAX_ATTEMPTS` (3) attempts ends as a bookmark with "Import could not complete. Retry from Imports." without being fetched again. Retry from Imports creates a fresh job.
+- **Tests (tested).**
+  - The `discard` test reproduces the mechanism deterministically: a body that emits `UND_ERR_ABORTED` on destroy throws an unhandled error with a bare `destroy()`, and doesn't with `discard`. It also discards a real, still-streaming undici 403 response.
+  - The attempt-guard test sets up three crashed claims (attempts 3, expired lease). The next claim marks the item a bookmark even though preparing would now succeed, doesn't claim it again, and Retry then prepares it.
+  - Backend: 29/29 tests, `npm run check`, `npm run build`, and `npm audit` with 0 vulnerabilities.
+- **Not reproduced locally.** A bare `destroy()` on a real undici body didn't crash under Node 22.15.0 here, but production runs Node 22.23.3. The deterministic test copies the production stack, not that version's timing.
+- **Not verified until deploy:**
+  - The restarts stop.
+  - The Watsons item becomes a retryable import on the owner's phone.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.

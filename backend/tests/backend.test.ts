@@ -6,7 +6,11 @@ import { openDatabase, migrate, type Database } from "../src/db.js";
 import { configuration } from "../src/config.js";
 import { Service, type Identity } from "../src/service.js";
 import { buildServer } from "../src/server.js";
-import { normalizedURL, publicAddress, safeFetch } from "../src/fetch.js";
+import { discard, normalizedURL, publicAddress, safeFetch } from "../src/fetch.js";
+import { createServer } from "node:http";
+import { EventEmitter } from "node:events";
+import type { AddressInfo } from "node:net";
+import { request } from "undici";
 import { extract, sanitize, markdownDocument, readerHTML, languageTag } from "../src/content.js";
 let db: Database,
   service: Service,
@@ -672,4 +676,38 @@ test("Trash keeps items restorable, a re-save restores them, and old trash is pu
   assert.equal(untouched.deleted, false, "old items that aren't in Trash are never purged");
   // An edit for a purged item is rejected, which the app treats as "drop the edit".
   await assert.rejects(() => service.update(owner, id, { trashed: false }), /not found/);
+});
+
+test("discarding an unread response body never raises an unhandled error", async () => {
+  // Production (Node 22.23.3) ended with "Unhandled 'error' event" on undici's BodyReadable:
+  // destroying an unread body after a non-200 response emitted RequestAbortedError with no
+  // listener. A body that emits that error on destroy reproduces the mechanism here.
+  const aborting = () => {
+    const body = new EventEmitter() as EventEmitter & { destroy(): void };
+    body.destroy = () => {
+      body.emit(
+        "error",
+        Object.assign(new Error("Request aborted"), { code: "UND_ERR_ABORTED" }),
+      );
+    };
+    return body;
+  };
+  assert.throws(() => aborting().destroy(), { code: "UND_ERR_ABORTED" });
+  assert.doesNotThrow(() => discard(aborting()));
+  // And against a real undici response that is still streaming.
+  const server = createServer((_request, response) => {
+    response.writeHead(403, { "content-type": "text/html" });
+    response.write("x".repeat(1024));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    const response = await request(`http://127.0.0.1:${port}/`);
+    discard(response.body);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(response.body.destroyed, true);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
 });
