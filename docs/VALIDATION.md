@@ -545,8 +545,28 @@ Requested by the owner after using 0.4.0 on the iPhone.
 ### PageStash 0.4.4 release, 19 October 2026
 
 - **Change.** Ships #56, saving links from articles by holding them, to the owner's iPhone. It also bumps the version to 0.4.4 (build 12) in `scripts/generate-project.py`, with `project.pbxproj` regenerated, and adds a blank line before the link-saving entry above.
-  - The backend is unchanged since #57's deploy (`b430bdb`, Northflank `adorable-train-8027`). The feature uses the existing save endpoint, so there is no backend deploy.
+  - The backend is unchanged since #57's deploy (`b430bdb`, Northflank `adorable-train-8027`, recorded below). The feature uses the existing save endpoint, so there is no backend deploy.
 - **Checks (tested, on the release branch):** ReaderCore 41 tests pass, the unsigned device and simulator builds succeed, and native tests pass 18/18.
+
+- **Independent review of `c501a14` (Opus 5.5): APPROVE.** It confirmed:
+  - the pbxproj matches the generator, and every target is at 0.4.4 (12);
+  - only #56 changed `ios/` since `ca52825`;
+  - `backend/` equals `b430bdb`;
+  - native tests pass 18/18 and ReaderCore 41 tests pass on its export.
+- **Merged.** After CI on the PR passed, it was merged with `--match-head-commit c501a14` as `5059f55`, with an identical tree.
+- [v0.4.4](https://github.com/akhilvuputuri/PageStash/releases/tag/v0.4.4) (build 12) is tagged on `5059f55`.
+- **iPhone (tested).** A signed generic Release build of `5059f55` was installed on the owner's iPhone 17 (Apple Development, team U44PG44XMJ; the app and both extensions at 0.4.4 (12); the preview link is not in the Release binary). `devicectl` lists PageStash 0.4.4 (12).
+- **Not confirmed:** launching from the Mac. It failed with `FBSOpenApplicationServiceErrorDomain` error 1, likely a locked phone, and then the device disconnected.
+
+### Crash-loop fix deployed, 19 October 2026
+
+- **Deploy (reported, from Northflank).** #57 merged as `b430bdb`. Northflank build `adorable-train-8027` of `b430bdb` was started manually from the Commits page and deployed to `reader-api` by the service's existing deploy-on-build setting.
+- **Live checks (tested):**
+  - `/health` returned 200, anonymous `/v1/library` 401, and OAuth discovery 200.
+  - Anonymous `PATCH /v1/connections/:id` returned 401.
+  - A health check every 15 s for 15 minutes after the deploy returned 200 all 60 times.
+- **Restarts stopped (reported, from Northflank).** "Up 19 minutes, 0 restarts". The previous build had crashed about every 10 minutes, at each lease expiry.
+- **Not verified:** the Watsons item becoming a retryable import on the owner's phone. The guard should end its job on the first claim after the old lease expired.
 
 ## Not yet tested
 
