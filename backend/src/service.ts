@@ -17,6 +17,9 @@ import {
   type Prepared,
 } from "./content.js";
 
+/** Import attempts before an article is kept as a bookmark that can be retried from Imports. */
+const MAX_ATTEMPTS = 3;
+
 export const hash = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
 export const secret = () => randomBytes(32).toString("base64url");
@@ -599,6 +602,16 @@ export class Service {
     );
     const row = job.rows[0];
     if (!row) return false;
+    // Each claim counts an attempt, but only a failure the worker catches can end a job. A job
+    // whose attempts ended the process instead (its lease expired) must not be retried forever.
+    if (row.attempts > MAX_ATTEMPTS) {
+      await this.db.query(
+        `WITH claimed AS (DELETE FROM jobs WHERE id=$1 AND lease_token=$2 RETURNING id)
+         UPDATE items SET status='bookmark',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) AND deleted=false`,
+        [row.id, lease, "Import could not complete. Retry from Imports."],
+      );
+      return true;
+    }
     const uploaded: string[] = [];
     try {
       const active = await this.db.query(
@@ -695,7 +708,7 @@ export class Service {
           ? error.message.slice(0, 240)
           : "Import could not complete. Retry from Imports.";
       const terminal =
-        row.attempts >= 3 || (error instanceof ImportFailure && error.terminal);
+        row.attempts >= MAX_ATTEMPTS || (error instanceof ImportFailure && error.terminal);
       if (terminal) {
         await this.db.query(
           `WITH claimed AS (DELETE FROM jobs WHERE id=$1 AND lease_token=$2 RETURNING id)

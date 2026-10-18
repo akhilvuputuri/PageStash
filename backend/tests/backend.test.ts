@@ -6,7 +6,10 @@ import { openDatabase, migrate, type Database } from "../src/db.js";
 import { configuration } from "../src/config.js";
 import { Service, type Identity } from "../src/service.js";
 import { buildServer } from "../src/server.js";
-import { normalizedURL, publicAddress, safeFetch } from "../src/fetch.js";
+import { discard, normalizedURL, publicAddress, safeFetch } from "../src/fetch.js";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { request } from "undici";
 import { extract, sanitize, markdownDocument, readerHTML, languageTag } from "../src/content.js";
 let db: Database,
   service: Service,
@@ -672,4 +675,34 @@ test("Trash keeps items restorable, a re-save restores them, and old trash is pu
   assert.equal(untouched.deleted, false, "old items that aren't in Trash are never purged");
   // An edit for a purged item is rejected, which the app treats as "drop the edit".
   await assert.rejects(() => service.update(owner, id, { trashed: false }), /not found/);
+});
+
+test("discarding an unread response body never raises an unhandled error", async () => {
+  // Production ended with "Unhandled 'error' event" (UND_ERR_ABORTED) on undici's BodyReadable.
+  // It happens when an unread body has fully arrived, as with a short error page or a redirect:
+  // a bare destroy() then emits RequestAbortedError with no listener. (A body still streaming
+  // is protected by undici's own listener, so it can't reproduce this.)
+  const server = createServer((request, response) => {
+    if (request.url === "/redirect") {
+      response.writeHead(302, { location: "/next", "content-length": "0" });
+      response.end();
+    } else {
+      response.writeHead(403, { "content-type": "text/html" });
+      response.end("x".repeat(1024));
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    for (const path of ["/blocked", "/redirect"]) {
+      const response = await request(`http://127.0.0.1:${port}${path}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      discard(response.body);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(response.body.destroyed, true, path);
+    }
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
 });

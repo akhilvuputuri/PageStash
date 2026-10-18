@@ -480,6 +480,30 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **iPhone (tested).** A signed generic Release build of `ca52825` (Apple Development, team U44PG44XMJ; the app and both extensions at 0.4.3 (11)) was installed and launched on the owner's iPhone 17. `devicectl` lists PageStash 0.4.3 (11).
 - **Deferred:** observing the fix on the device. The stuck state has only been reproduced with injected content.
 
+### Backend crash loop from one import, 19 October 2026
+
+- **Reported.** The owner saw an article stuck on downloading.
+- **Device (tested, read-only copy of the app's database, kept outside the repository).** The item was a link to `www.watsons.com.sg`, saved 16 October 06:39 UTC. On the device it had `status=processing`, content version 0 and no assets, so there was nothing to download. The server never finished preparing it.
+- **Production (reported, from the Northflank service page and logs).**
+  - `reader-api` at `9b001e3` showed "Up 2 hours, 13 restarts" and "1 issue reported by pods". At least 16 earlier pods had been terminated, most after 25 restarts, across about three days.
+  - Every exit had the same stack: `node:events` "Unhandled 'error' event", `RequestAbortedError` (`UND_ERR_ABORTED`) emitted by undici's `BodyReadable._destroy`, from `safeFetch` (`dist/fetch.js:78`, the non-200 branch's `response.body.destroy()`), from `prepareArticle`, `runOne` and `ImportWorker.tick`. Exits came about 10 minutes apart, matching the job lease.
+  - Other saves were still prepared between crashes. The API was briefly unavailable on each restart.
+- **Mechanism (tested locally, Node 22.15.0, undici 7.30.0; the independent reviewer confirmed it over HTTP and HTTPS).**
+  - When an unread response body has fully arrived (a short error page, or a redirect with a small or empty body), `destroy()` makes undici emit `RequestAbortedError` on the next turn with no listener, and Node ends the process. A body still streaming is protected by undici's own no-op listener and doesn't crash.
+  - The process ended before `runOne` could record the failure. The job's lease then expired, and the next claim crashed again. Attempts are counted at claim, but the three-attempt limit was only applied in the catch block, so the job never ended.
+  - **Hypotheses:** Watsons answered with a short block or challenge page. Before this fix, any source that redirected with a fully received body would also have crashed the process.
+- **Fix.**
+  - `fetch.ts`: `discard(body)` attaches an error listener before destroying a body. All five early exits in `safeFetch` use it.
+  - `service.ts`: a claimed job that already has more than `MAX_ATTEMPTS` (3) attempts ends as a bookmark with "Import could not complete. Retry from Imports." without being fetched again. Retry from Imports creates a fresh job, with attempts back at 0.
+- **Tests (tested, both checked by mutation).**
+  - The `discard` test fetches a fully received 403 page and an empty-body 302 from a local server, then discards each unread body. Replacing `discard` with a bare `destroy()` fails it with an uncaught `UND_ERR_ABORTED`.
+  - The attempt-guard test covers two cases. After three crashed claims (attempts 3, expired lease), the next claim makes the item a bookmark even though preparing would now succeed; it isn't claimed again, and Retry then prepares it. After two crashed claims, the next claim still prepares the article. Changing the guard to `>=` fails it.
+  - Backend: 29/29 tests, `npm run check`, `npm run build`, and `npm audit` with 0 vulnerabilities.
+- **Independent review of `fada680` (Opus 5.5): REQUEST CHANGES.** It confirmed the fix and the guard, reproduced the crash locally, and showed that the first version's test used a still-streaming body that couldn't fail. It also corrected an earlier claim in this entry that the crash didn't reproduce locally. All of this is addressed above.
+- **Not verified until deploy:**
+  - The restarts stop.
+  - The Watsons item becomes a retryable import on the owner's phone.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.

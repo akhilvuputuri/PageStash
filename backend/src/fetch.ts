@@ -29,6 +29,13 @@ export function normalizedURL(raw: string): string {
   return u.toString();
 }
 
+/** Stops reading a response body without crashing the process. Undici reports an abandoned body
+ * as an 'error' event; with no listener, Node treats that as an uncaught exception. */
+export function discard(body: { on(event: "error", listener: () => void): unknown; destroy(): unknown }) {
+  body.on("error", () => {});
+  body.destroy();
+}
+
 export interface Fetched {
   bytes: Buffer;
   mime: string;
@@ -77,14 +84,14 @@ export async function safeFetch(raw: string, limit: number): Promise<Fetched> {
         });
         if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
           const location = response.headers.location;
-          response.body.destroy();
+          discard(response.body);
           if (!location || Array.isArray(location))
             throw new ImportFailure("Invalid redirect.");
           url = normalizedURL(new URL(location, url).toString());
           continue;
         }
         if (response.statusCode !== 200) {
-          response.body.destroy();
+          discard(response.body);
           throw new ImportFailure(
             `Source returned HTTP ${response.statusCode}; authentication and paywalls are not bypassed.`,
             response.statusCode < 500 &&
@@ -95,11 +102,11 @@ export async function safeFetch(raw: string, limit: number): Promise<Fetched> {
           response.headers["content-encoding"] &&
           response.headers["content-encoding"] !== "identity"
         ) {
-          response.body.destroy();
+          discard(response.body);
           throw new ImportFailure("Unsupported compressed response.");
         }
         if (Number(response.headers["content-length"]) > limit) {
-          response.body.destroy();
+          discard(response.body);
           throw new ImportFailure("Source exceeds the download size limit.");
         }
         const chunks: Buffer[] = [];
@@ -107,7 +114,7 @@ export async function safeFetch(raw: string, limit: number): Promise<Fetched> {
         for await (const chunk of response.body) {
           size += chunk.length;
           if (size > limit) {
-            response.body.destroy();
+            discard(response.body);
             throw new ImportFailure("Source exceeds the download size limit.");
           }
           chunks.push(Buffer.from(chunk));
