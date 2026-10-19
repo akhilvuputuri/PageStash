@@ -32,6 +32,8 @@ rm -rf "$work"
 xcodebuild -project ios/OfflineReader.xcodeproj -scheme OfflineReader -configuration Release \
   -destination 'generic/platform=iOS' -archivePath "$work/OfflineReader.xcarchive" \
   -allowProvisioningUpdates archive
+# Archiving rewrites the shared scheme in Xcode's own format; keep the committed one.
+git checkout -- ios/OfflineReader.xcodeproj/xcshareddata
 xcodebuild -exportArchive -archivePath "$work/OfflineReader.xcarchive" \
   -exportOptionsPlist ios/ExportOptions-TestFlight.plist -exportPath "$work/export" \
   -allowProvisioningUpdates
