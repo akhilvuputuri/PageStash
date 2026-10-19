@@ -568,6 +568,18 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Restarts stopped (reported, from Northflank).** "Up 19 minutes, 0 restarts". The previous build had crashed about every 10 minutes, at each lease expiry.
 - **Not verified:** the Watsons item becoming a retryable import on the owner's phone. The guard should end its job on the first claim after the old lease expired.
 
+### Internal TestFlight as the release channel, 19 October 2026
+
+- **Decision (reported).** The owner asked to switch app releases to TestFlight so updates arrive without connecting the iPhone to the Mac. The installed build's profile, valid until 8 October 2027, uses an App Group, which confirms the paid Apple Developer Program. A free team would get 7-day profiles.
+- **Change.**
+  - `scripts/upload-testflight.sh` refuses to run on a dirty tree, archives a Release build, and uploads it with `ios/ExportOptions-TestFlight.plist` (`app-store-connect`, destination `upload`, team `U44PG44XMJ`, automatic signing, `testFlightInternalTestingOnly`). It authenticates through the Apple account signed in to Xcode and stores no credentials. Output goes to the ignored `work/` directory.
+  - `docs/DEPLOYMENT.md` steps 5–6 describe the owner-only one-time setup and the per-release upload.
+  - `AGENTS.md` makes internal TestFlight the authorized app release channel. App Review, external testers and App Store publishing still need a specific request.
+- **Checks (tested).** `plutil -lint` passes on the export options, and `sh -n` passes on the script.
+- **Not yet done:**
+  - The owner's App Store Connect setup (app record, agreements, encryption and privacy answers, internal tester).
+  - The first upload, its processing, and installation through TestFlight.
+
 ## Not yet tested
 
 - TestFlight upload. Signed physical-device installation and launch have passed.
