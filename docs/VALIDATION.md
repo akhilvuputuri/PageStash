@@ -599,11 +599,12 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - At the owner's request, `ios/OfflineReader/Info.plist` and `Info-Debug.plist` declare `ITSAppUsesNonExemptEncryption = NO`, which is the owner's answer.
   - Checked in the code: the app uses only iOS-provided cryptography (URLSession HTTPS, Keychain `SecItem` calls and CryptoKit SHA-256), with no other packages.
   - `AGENTS.md` and `DEPLOYMENT.md` now say any new cryptography goes back to the owner. The key takes effect from the next uploaded build.
-- **Upload script.** Archiving rewrote `xcshareddata/xcschemes/OfflineReader.xcscheme` in Xcode's format, leaving the tree dirty, so the next upload would refuse. The script now restores the committed scheme after archiving.
+- **Upload script.** Archiving rewrote `xcshareddata/xcschemes/OfflineReader.xcscheme` in Xcode's format, leaving the tree dirty, so the next upload would refuse. After its guards pass, the script now restores the committed project on exit, including when the archive or upload fails.
+- **Independent review of `1e787a5` (Opus 5.5): APPROVE.** It confirmed the key builds into the app as false, and that the app's only cryptography is CryptoKit SHA-256 hashing, Keychain calls and URLSession/WebKit HTTPS. Its Low findings are addressed: restore on every exit, the outdated "Not yet tested" line, and step 5's wording.
 
 ## Not yet tested
 
-- TestFlight upload. Signed physical-device installation and launch have passed.
+- Installation from TestFlight on the iPhone (build 0.4.4 (12) is uploaded and Testing for the owner). Signed physical-device installation and launch have passed.
 - Complete SwiftUI accessibility/layout coverage and physical-device rendering. Main simulator flows have passed interactive checks.
 - Further physical-device coverage beyond the owner's successful article/image offline restart check.
 - Naturally scheduled background refresh over multiple days, low-power restrictions, reboot/force-quit behavior and background transfer relaunch callbacks.
