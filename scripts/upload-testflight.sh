@@ -26,6 +26,9 @@ if [ -n "$status" ]; then
   echo "Refusing to upload: the project doesn't match scripts/generate-project.py." >&2
   exit 1
 fi
+# Archiving rewrites the shared scheme in Xcode's own format. Always put the committed project
+# back, even if the archive or upload fails, so the next run's clean-tree check passes.
+trap 'git checkout -- ios/OfflineReader.xcodeproj' EXIT
 release=$(sed -n "s/^MARKETING_VERSION, BUILD = '\(.*\)', '\(.*\)'$/\1 (\2)/p" scripts/generate-project.py)
 work="work/testflight-$(git rev-parse --short HEAD)"
 rm -rf "$work"

@@ -586,9 +586,25 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - The signing rule conflicted with the distribution certificate Xcode creates.
   - The dirty-tree guard was fragile.
 
+### First TestFlight build; export compliance key, 20 October 2026
+
+- **#60 merged before its iOS CI finished.** It merged as `b5aa62e` at approved head `73ab5ca` while both iOS jobs were still pending, because the scripted wait timed out and its guard (`grep -v fail`) didn't require every check to pass. AGENTS.md allows only passing merges. Both iOS jobs then passed. #60 changed docs and the upload script only.
+- **Setup (reported in the owner's browser).** The owner signed in to App Store Connect and asked for the app to be added. The agent created the app record (name PageStash, English (U.S.), bundle ID `com.akhilvuputuri.offlinereader`, SKU `pagestash`, Full Access; App Store Connect ID 6824560307). It also created the internal group "Owner" with automatic distribution, holding only the owner. The owner accepted the updated Apple Developer Program License Agreement themselves.
+- **First upload (tested).**
+  - `scripts/upload-testflight.sh` on `b5aa62e` (origin/main, 0.4.4 (12)) archived successfully. The export then failed: Xcode found no account with App Store Connect access for the team.
+  - After the owner opened Xcode's Apple Accounts settings, which were signed in, rerunning the export from the same archive uploaded, at 20 October 00:04.
+  - App Store Connect processed the build, which then showed Missing Compliance. The owner answered the compliance question for build 12 ("None of the algorithms mentioned above"), and the build became **Testing** for the Owner group, with 1 invite.
+  - Not yet observed: installation from TestFlight on the iPhone.
+- **Export compliance key (this change).**
+  - At the owner's request, `ios/OfflineReader/Info.plist` and `Info-Debug.plist` declare `ITSAppUsesNonExemptEncryption = NO`, which is the owner's answer.
+  - Checked in the code: the app uses only iOS-provided cryptography (URLSession HTTPS, Keychain `SecItem` calls and CryptoKit SHA-256), with no other packages.
+  - `AGENTS.md` and `DEPLOYMENT.md` now say any new cryptography goes back to the owner. The key takes effect from the next uploaded build.
+- **Upload script.** Archiving rewrote `xcshareddata/xcschemes/OfflineReader.xcscheme` in Xcode's format, leaving the tree dirty, so the next upload would refuse. After its guards pass, the script now restores the committed project on exit, including when the archive or upload fails.
+- **Independent review of `1e787a5` (Opus 5.5): APPROVE.** It confirmed the key builds into the app as false, and that the app's only cryptography is CryptoKit SHA-256 hashing, Keychain calls and URLSession/WebKit HTTPS. Its Low findings are addressed: restore on every exit, the outdated "Not yet tested" line, and step 5's wording.
+
 ## Not yet tested
 
-- TestFlight upload. Signed physical-device installation and launch have passed.
+- Installation from TestFlight on the iPhone (build 0.4.4 (12) is uploaded and Testing for the owner). Signed physical-device installation and launch have passed.
 - Complete SwiftUI accessibility/layout coverage and physical-device rendering. Main simulator flows have passed interactive checks.
 - Further physical-device coverage beyond the owner's successful article/image offline restart check.
 - Naturally scheduled background refresh over multiple days, low-power restrictions, reboot/force-quit behavior and background transfer relaunch callbacks.
