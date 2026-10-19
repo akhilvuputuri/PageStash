@@ -572,13 +572,19 @@ Requested by the owner after using 0.4.0 on the iPhone.
 
 - **Decision (reported).** The owner asked to switch app releases to TestFlight so updates arrive without connecting the iPhone to the Mac. The installed build's profile, valid until 8 October 2027, uses an App Group, which confirms the paid Apple Developer Program. A free team would get 7-day profiles.
 - **Change.**
-  - `scripts/upload-testflight.sh` refuses to run on a dirty tree, archives a Release build, and uploads it with `ios/ExportOptions-TestFlight.plist` (`app-store-connect`, destination `upload`, team `U44PG44XMJ`, automatic signing, `testFlightInternalTestingOnly`). It authenticates through the Apple account signed in to Xcode and stores no credentials. Output goes to the ignored `work/` directory.
+  - `scripts/upload-testflight.sh` refuses to run unless the tree is clean, HEAD is `origin/main` after a fetch, and the project matches the generator. It then archives a Release build, and uploads it with `ios/ExportOptions-TestFlight.plist` (`app-store-connect`, destination `upload`, team `U44PG44XMJ`, automatic signing, `testFlightInternalTestingOnly`). It authenticates through the Apple account signed in to Xcode and stores no credentials. Output goes to the ignored `work/` directory.
   - `docs/DEPLOYMENT.md` steps 5–6 describe the owner-only one-time setup and the per-release upload.
   - `AGENTS.md` makes internal TestFlight the authorized app release channel. App Review, external testers and App Store publishing still need a specific request.
 - **Checks (tested).** `plutil -lint` passes on the export options, and `sh -n` passes on the script.
 - **Not yet done:**
   - The owner's App Store Connect setup (app record, agreements, encryption and privacy answers, internal tester).
   - The first upload, its processing, and installation through TestFlight.
+  - The owner's export compliance answer for each build (or the `ITSAppUsesNonExemptEncryption` key). Without it, every build waits at Missing Compliance.
+- **Independent review of `600ed8b` (Opus 5.5): REQUEST CHANGES.** All addressed above:
+  - The per-build export compliance step was missing.
+  - The script would upload any checked-out commit.
+  - The signing rule conflicted with the distribution certificate Xcode creates.
+  - The dirty-tree guard was fragile.
 
 ## Not yet tested
 
