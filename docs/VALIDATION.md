@@ -653,6 +653,12 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - A real generated note's quality, latency and cost.
   - The app side, which needs an authorized TestFlight build.
 
+### PageStash 0.5.0 release, 28 October 2026
+
+- **Change.** Ships owner-only Reading Context (#62) to the owner's iPhone through internal TestFlight, authorized by the owner. It bumps the version to 0.5.0 (build 13) in `scripts/generate-project.py`, with `project.pbxproj` regenerated.
+  - The backend it needs is already deployed: `99d4a1f` (Northflank `festive-grip-2837`), with `OPENROUTER_API_KEY` set. See the deploy entry above.
+- **Checks (tested, on the release branch).** ReaderCore 45 tests pass, and the unsigned device and simulator builds succeed. Native presentation tests run in CI.
+
 ## Not yet tested
 
 - Reading context against a real provider: answer quality, latency and cost per note, and the sheet in Dark and with VoiceOver.
