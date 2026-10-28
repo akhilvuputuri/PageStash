@@ -642,14 +642,14 @@ Requested by the owner after using 0.4.0 on the iPhone.
 ### Reading context and audit fix deployed, 28 October 2026
 
 - **Secret (reported).** In the Northflank UI the owner added `OPENROUTER_API_KEY` to `reader-api`'s runtime variables and saved it. The agent only opened the page and switched it to edit mode; it never typed or read the value. `READING_CONTEXT_MODEL` and `READING_CONTEXT_DAILY_LIMIT` are unset, so the defaults apply (`google/gemini-3.8-flash`, 30 a day).
-- **Deploy (reported, from Northflank).** With the owner's authorization, build `festive-grip-2837` of `99d4a1f` (#62, on top of #63) was started manually from the Commits page. It succeeded and was deployed to `reader-api` by the existing deploy-on-build setting. The service shows Running 1/1 on `99d4a1f`, "Up 6 minutes, 0 restarts".
+- **Deploy (reported, from Northflank).** With the owner's authorization, build `festive-grip-2837` of `99d4a1f` (#62, on top of #63) was started manually from the Commits page. It succeeded and was deployed to `reader-api` by the existing deploy-on-build setting. The service shows Running 1/1 on `99d4a1f`, "Up 6 minutes, 0 restarts". The health-probe status wasn't read separately in the UI.
 - **Live checks (tested, 14:10–14:14 UTC).**
   - `/health` 200, anonymous `/v1/library` 401, and OAuth discovery 200.
   - Anonymous `GET /v1/features` and `POST /v1/items/:id/context` both returned 401. The old build would have answered 404, so the new routes are live.
   - `/health` returned 200 on all 12 checks, one every 15 seconds.
-  - A 200 from `/health` means startup, including the schema version 3 migration, completed.
+- **Inference, not measured.** `main.ts` awaits `migrate` before listening, so a 200 from `/health` implies the schema version 3 migration completed.
 - **Not yet verified:**
-  - `/v1/features` returning `reading_context: true` for the owner's app session.
+  - `/v1/features` returning `reading_context: true` for the owner's app session. This depends on the production `OWNER_EMAIL` matching the signed-in account.
   - A real generated note's quality, latency and cost.
   - The app side, which needs an authorized TestFlight build.
 
