@@ -50,6 +50,9 @@ public struct ReadingItem: Codable, Identifiable, Sendable {
   public var isTrashed: Bool { trashedAt != nil }
   public let revision: Int64
   public let assets: [Asset]
+  /// The server's saved reading context, sent with the item for entitled owners. The local store
+  /// moves it into its own table on sync, so stored items don't carry it.
+  public var readingContext: ReadingContext?
   public var hasPreparedContent: Bool {
     status == "ready"
       || (contentVersion > 0 && assets.contains { $0.role == "content" && $0.safeFilename })
@@ -61,7 +64,8 @@ public struct ReadingItem: Codable, Identifiable, Sendable {
     siteName: String? = nil, sources: [String] = [],
     capturedAt: String = "", contentVersion: Int = 1, progress: Double = 0,
     collections: [String] = [], archived: Bool = false, deleted: Bool = false,
-    trashedAt: String? = nil, revision: Int64 = 1, assets: [Asset]
+    trashedAt: String? = nil, revision: Int64 = 1, readingContext: ReadingContext? = nil,
+    assets: [Asset]
   ) {
     self.id = id
     self.title = title
@@ -80,6 +84,7 @@ public struct ReadingItem: Codable, Identifiable, Sendable {
     self.deleted = deleted
     self.trashedAt = trashedAt
     self.revision = revision
+    self.readingContext = readingContext
     self.assets = assets
   }
 }

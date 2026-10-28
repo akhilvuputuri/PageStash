@@ -25,6 +25,7 @@ import {
   contextPrompt,
   documentText,
   parseContext,
+  ContextProviderError,
   type ContextModel,
   type ContextResult,
   type HistoryEntry,
@@ -91,8 +92,23 @@ export interface ReadingContext extends ContextResult {
   stale: boolean;
 }
 
+type Owner = Pick<Identity, "owner_id">;
+interface SavedContextRow {
+  item_id: string;
+  content_version: number;
+  history_digest: string;
+  history_count: number;
+  model: string;
+  result: ContextResult;
+  generated_at: Date | string;
+}
+/** Background attempts per content version before an item waits for the owner to ask. */
+const BACKGROUND_ATTEMPTS = 3;
+
 export class Service {
   onQueued?: () => void;
+  /** Called when an import publishes readable content, so background reading context can start. */
+  onPrepared?: () => void;
   /** Generations in progress, so a repeated tap waits for the same answer instead of paying twice. */
   private contextRuns = new Map<string, Promise<ReadingContext>>();
   constructor(
@@ -479,6 +495,11 @@ export class Service {
       "SELECT * FROM items WHERE owner_id=$1 AND revision>$2 ORDER BY revision LIMIT 100",
       [identity.owner_id, cursor],
     );
+    // Saved notes travel with their items, so they are on the phone before anyone opens them.
+    const contexts =
+      this.contextModel && (await this.entitled(identity, READING_CONTEXT))
+        ? await this.savedContexts(identity, result.rows)
+        : new Map<string, ReadingContext>();
     const items = [];
     for (const row of result.rows) {
       const assets = row.deleted
@@ -508,6 +529,7 @@ export class Service {
         revision: Number(row.revision),
         captured_at: new Date(row.captured_at).toISOString(),
         assets: manifest,
+        ...(contexts.has(row.id) ? { reading_context: contexts.get(row.id) } : {}),
       });
     }
     return {
@@ -564,6 +586,7 @@ export class Service {
     // Derived text goes with the content it came from.
     await this.db.query("DELETE FROM reading_contexts WHERE item_id=$1", [id]);
     await this.db.query("DELETE FROM item_excerpts WHERE item_id=$1", [id]);
+    await this.db.query("DELETE FROM context_failures WHERE item_id=$1", [id]);
   }
   /** Permanently deletes items that have been in Trash longer than `days`. */
   async purgeTrash(days = 30) {
@@ -682,53 +705,72 @@ export class Service {
     return result.rows[0];
   }
   private async savedContext(
-    identity: Identity,
+    owner: Owner,
     item: Item,
   ): Promise<ReadingContext | undefined> {
-    const result = await this.db.query<{
-      content_version: number;
-      history_digest: string;
-      history_count: number;
-      model: string;
-      result: ContextResult;
-      generated_at: Date | string;
-    }>(
-      "SELECT content_version,history_digest,history_count,model,result,generated_at FROM reading_contexts WHERE owner_id=$1 AND item_id=$2",
-      [identity.owner_id, item.id],
+    return (await this.savedContexts(owner, [item])).get(item.id);
+  }
+  /**
+   * Saved notes for these items' current content, in a few queries for a whole sync page.
+   * Each note's stale flag compares its finished-article set with today's, and citations of
+   * articles deleted since are dropped with their titles and AI text.
+   */
+  private async savedContexts(owner: Owner, items: Item[]) {
+    const views = new Map<string, ReadingContext>();
+    const ready = items.filter((i) => !i.deleted);
+    if (!ready.length) return views;
+    const rows = (
+      await this.db.query<SavedContextRow>(
+        "SELECT item_id,content_version,history_digest,history_count,model,result,generated_at FROM reading_contexts WHERE owner_id=$1 AND item_id = ANY($2::uuid[])",
+        [owner.owner_id, ready.map((i) => i.id)],
+      )
+    ).rows.filter(
+      (r) => ready.find((i) => i.id === r.item_id)?.content_version === r.content_version,
     );
-    const row = result.rows[0];
-    if (!row || row.content_version !== item.content_version) return undefined;
-    const history = await this.finishedArticles(identity, item.id);
-    // A cited article that was deleted since leaves the note with its title and AI text.
-    const cited = [...row.result.builds_on, ...row.result.covered].map((n) => n.item_id);
+    if (!rows.length) return views;
+    // One more than the history limit, so excluding the item itself still leaves a full list.
+    const finished = (
+      await this.db.query<{ id: string }>(
+        `SELECT id FROM items WHERE owner_id=$1 AND deleted=false AND trashed_at IS NULL AND status='ready' AND progress>=1 AND archived
+         ORDER BY revision DESC LIMIT ${HISTORY_LIMIT + 1}`,
+        [owner.owner_id],
+      )
+    ).rows.map((r) => r.id);
+    const cited = [
+      ...new Set(rows.flatMap((r) => [...r.result.builds_on, ...r.result.covered].map((n) => n.item_id))),
+    ];
     const live = new Set(
       cited.length
         ? (
             await this.db.query<{ id: string }>(
               "SELECT id FROM items WHERE owner_id=$1 AND deleted=false AND id = ANY($2::uuid[])",
-              [identity.owner_id, cited],
+              [owner.owner_id, cited],
             )
           ).rows.map((r) => r.id)
         : [],
     );
-    return {
-      ...row.result,
-      builds_on: row.result.builds_on.filter((n) => live.has(n.item_id)),
-      covered: row.result.covered.filter((n) => live.has(n.item_id)),
-      item_id: item.id,
-      content_version: row.content_version,
-      generated_at: new Date(row.generated_at).toISOString(),
-      model: row.model,
-      history_count: row.history_count,
-      stale: historyDigest(history) !== row.history_digest,
-    };
+    for (const row of rows) {
+      const history = finished.filter((id) => id !== row.item_id).slice(0, HISTORY_LIMIT);
+      views.set(row.item_id, {
+        ...row.result,
+        builds_on: row.result.builds_on.filter((n) => live.has(n.item_id)),
+        covered: row.result.covered.filter((n) => live.has(n.item_id)),
+        item_id: row.item_id,
+        content_version: row.content_version,
+        generated_at: new Date(row.generated_at).toISOString(),
+        model: row.model,
+        history_count: row.history_count,
+        stale: historyDigest(history.map((id) => ({ id }))) !== row.history_digest,
+      });
+    }
+    return views;
   }
   /**
    * Articles the owner marked Done (read marker and archived together), newest activity first.
    * Scrolling to the end alone also syncs progress 1, so archived is what separates Done.
    * Trash and the item itself are excluded.
    */
-  private async finishedArticles(identity: Identity, exclude: string) {
+  private async finishedArticles(owner: Owner, exclude: string) {
     return (
       await this.db.query<{
         id: string;
@@ -739,7 +781,7 @@ export class Service {
         `SELECT id,title,site_name,content_version FROM items
          WHERE owner_id=$1 AND id<>$2 AND deleted=false AND trashed_at IS NULL AND status='ready' AND progress>=1 AND archived
          ORDER BY revision DESC LIMIT ${HISTORY_LIMIT}`,
-        [identity.owner_id, exclude],
+        [owner.owner_id, exclude],
       )
     ).rows;
   }
@@ -793,9 +835,10 @@ export class Service {
     return cached;
   }
   private async runContext(
-    identity: Identity,
+    identity: Owner,
     item: Item,
     model: ContextModel,
+    budget: "owner" | "background" = "owner",
   ): Promise<ReadingContext> {
     const text = await this.contentText(item.id, ARTICLE_CHARACTERS);
     if (!text) throw new HTTPError(409, "This item has no readable text yet.");
@@ -807,11 +850,17 @@ export class Service {
       site: r.site_name,
       excerpt: excerpts.get(r.id),
     }));
+    // Background generations count apart, so a backfill never uses up the owner's own taps.
+    const column = budget === "background" ? "background" : "count";
+    const limit =
+      budget === "background"
+        ? this.config.contextBackgroundDailyLimit
+        : this.config.contextDailyLimit;
     const reserved = await this.db.query<{ day: string }>(
-      `INSERT INTO context_usage(owner_id,day,count) SELECT $1,(now() AT TIME ZONE 'UTC')::date,1 WHERE $2::int > 0
-       ON CONFLICT(owner_id,day) DO UPDATE SET count=context_usage.count+1 WHERE context_usage.count < $2
+      `INSERT INTO context_usage(owner_id,day,${column}) SELECT $1,(now() AT TIME ZONE 'UTC')::date,1 WHERE $2::int > 0
+       ON CONFLICT(owner_id,day) DO UPDATE SET ${column}=context_usage.${column}+1 WHERE context_usage.${column} < $2
        RETURNING day::text`,
-      [identity.owner_id, this.config.contextDailyLimit],
+      [identity.owner_id, limit],
     );
     const day = reserved.rows[0]?.day;
     if (!day)
@@ -825,28 +874,34 @@ export class Service {
         contextPrompt({ title: item.title, site: item.site_name ?? null, text }, history),
         AbortSignal.timeout(60_000),
       );
-    } catch {
+    } catch (error) {
       // No completion came back, so the reservation is given back.
       await this.db.query(
-        "UPDATE context_usage SET count=count-1 WHERE owner_id=$1 AND day=$2::date AND count>0",
+        `UPDATE context_usage SET ${column}=${column}-1 WHERE owner_id=$1 AND day=$2::date AND ${column}>0`,
         [identity.owner_id, day],
       );
+      logContextFailure(error, budget, "provider_call");
       throw new HTTPError(502, "Reading context could not be generated. Try again.");
     }
     let result: ContextResult;
     try {
       result = parseContext(answer, history);
-    } catch {
+    } catch (error) {
       // The provider answered and billed it, so an unusable answer keeps its reservation.
+      logContextFailure(error, budget, "invalid_answer");
       throw new HTTPError(502, "Reading context could not be generated. Try again.");
     }
     const digest = historyDigest(rows);
+    // Saving bumps the item's revision, so the note reaches the phone with the next sync.
     const saved = await this.db.query<{ generated_at: Date | string }>(
-      `INSERT INTO reading_contexts(owner_id,item_id,content_version,history_digest,history_count,model,result)
-       SELECT $1,$2,$3,$4,$5,$6,$7::jsonb WHERE EXISTS(SELECT 1 FROM items WHERE id=$2 AND owner_id=$1 AND deleted=false)
-       ON CONFLICT(owner_id,item_id) DO UPDATE SET content_version=excluded.content_version,history_digest=excluded.history_digest,
-       history_count=excluded.history_count,model=excluded.model,result=excluded.result,generated_at=now()
-       RETURNING generated_at`,
+      `WITH saved AS (
+         INSERT INTO reading_contexts(owner_id,item_id,content_version,history_digest,history_count,model,result)
+         SELECT $1,$2,$3,$4,$5,$6,$7::jsonb WHERE EXISTS(SELECT 1 FROM items WHERE id=$2 AND owner_id=$1 AND deleted=false AND content_version=$3)
+         ON CONFLICT(owner_id,item_id) DO UPDATE SET content_version=excluded.content_version,history_digest=excluded.history_digest,
+         history_count=excluded.history_count,model=excluded.model,result=excluded.result,generated_at=now()
+         RETURNING generated_at),
+       bumped AS (UPDATE items SET revision=nextval('library_revision') WHERE id=$2 AND owner_id=$1 AND EXISTS(SELECT 1 FROM saved) RETURNING id)
+       SELECT generated_at FROM saved`,
       [
         identity.owner_id,
         item.id,
@@ -867,6 +922,53 @@ export class Service {
       history_count: rows.length,
       stale: false,
     };
+  }
+  /**
+   * Generates one missing note in the background: newly prepared articles and the backfill of
+   * older ones, newest first, for owners with the entitlement. Returns whether it did any work.
+   */
+  async runContextJob(): Promise<boolean> {
+    const model = this.contextModel;
+    if (!model || this.config.contextBackgroundDailyLimit < 1) return false;
+    const owner = this.config.devAuth
+      ? this.config.devEmail.toLowerCase()
+      : this.config.ownerEmail;
+    const next = await this.db.query<Item>(
+      `SELECT i.* FROM items i JOIN accounts a ON a.id=i.owner_id
+       WHERE i.deleted=false AND i.trashed_at IS NULL AND i.status='ready' AND i.kind='article'
+       AND ((a.email<>'' AND lower(a.email)=$1) OR EXISTS(SELECT 1 FROM account_entitlements e WHERE e.owner_id=i.owner_id AND e.feature=$2))
+       AND NOT EXISTS(SELECT 1 FROM reading_contexts c WHERE c.owner_id=i.owner_id AND c.item_id=i.id AND c.content_version=i.content_version)
+       AND NOT EXISTS(SELECT 1 FROM context_failures f WHERE f.item_id=i.id AND f.content_version=i.content_version AND (f.attempts>=$3 OR f.next_at>now()))
+       AND COALESCE((SELECT u.background FROM context_usage u WHERE u.owner_id=i.owner_id AND u.day=(now() AT TIME ZONE 'UTC')::date),0) < $4
+       ORDER BY i.captured_at DESC, i.id DESC LIMIT 1`,
+      [owner, READING_CONTEXT, BACKGROUND_ATTEMPTS, this.config.contextBackgroundDailyLimit],
+    );
+    const item = next.rows[0];
+    if (!item) return false;
+    const key = `${item.owner_id}/${item.id}`;
+    if (this.contextRuns.has(key)) return false;
+    const run = this.runContext({ owner_id: item.owner_id }, item, model, "background").finally(
+      () => this.contextRuns.delete(key),
+    );
+    this.contextRuns.set(key, run);
+    try {
+      await run;
+      await this.db.query("DELETE FROM context_failures WHERE item_id=$1", [item.id]);
+    } catch (error) {
+      // The cap filled up between the pick and the reservation: nothing more to do today.
+      if (error instanceof HTTPError && error.status === 429) return false;
+      // Back off an hour per attempt, then leave it for the owner to ask.
+      await this.db.query(
+        `INSERT INTO context_failures(item_id,content_version,attempts,next_at)
+         SELECT $1,$2,1,now()+interval '1 hour' WHERE EXISTS(SELECT 1 FROM items WHERE id=$1 AND deleted=false)
+         ON CONFLICT(item_id) DO UPDATE SET
+           attempts=CASE WHEN context_failures.content_version=excluded.content_version THEN context_failures.attempts+1 ELSE 1 END,
+           content_version=excluded.content_version,
+           next_at=now()+(CASE WHEN context_failures.content_version=excluded.content_version THEN context_failures.attempts+1 ELSE 1 END)*interval '1 hour'`,
+        [item.id, item.content_version],
+      );
+    }
+    return true;
   }
   async runOne(): Promise<boolean> {
     const lease = randomUUID();
@@ -986,6 +1088,7 @@ export class Service {
         ],
       );
       if (!published.rows.length) await this.files.remove(uploaded);
+      else this.onPrepared?.();
     } catch (error) {
       await this.files.remove(uploaded);
       const message =
@@ -1015,4 +1118,14 @@ export class Service {
 /** Identifies the finished-article set a reading context was built from. */
 function historyDigest(rows: { id: string }[]) {
   return hash(rows.map((r) => r.id).sort().join(","));
+}
+
+/** One line per failure, with a fixed category and the provider's own short reason. Never content. */
+function logContextFailure(error: unknown, budget: string, fallback: string) {
+  const detail =
+    error instanceof ContextProviderError
+      ? { category: error.category, status: error.status, detail: error.detail }
+      : // Other messages can quote the answer, so only the error's kind is logged.
+        { category: fallback, detail: (error as Error)?.name };
+  console.error("Reading context failed", JSON.stringify({ budget, ...detail }));
 }

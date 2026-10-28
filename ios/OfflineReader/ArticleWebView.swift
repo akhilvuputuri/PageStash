@@ -14,6 +14,8 @@ struct ArticleHeader: Equatable {
   var finishLabel: String? = nil
   /// Sources an assistant cited for a brief; shown beside the brief's label.
   var sources: [URL] = []
+  /// Label for the reading-context link under the title, or nil when the account doesn't have it.
+  var contextLabel: String? = nil
   var payload: String {
     var data: [String: Any] = ["title": title, "kind": kind]
     let links = sources.filter { ["http", "https"].contains($0.scheme ?? "") }.prefix(5)
@@ -22,6 +24,7 @@ struct ArticleHeader: Equatable {
     }
     if let status { data["status"] = status }
     if let finishLabel { data["finish"] = finishLabel }
+    if let contextLabel { data["context"] = contextLabel }
     if let author { data["author"] = author }
     if let source, ["http", "https"].contains(source.scheme ?? "") {
       data["source"] = source.absoluteString
@@ -42,9 +45,13 @@ struct ArticleWebView: UIViewRepresentable {
   /// Links with this scheme come from controls the reader injects, never from article content.
   static let actionScheme = "offline-reader-action"
   static let finishAction = URL(string: "\(actionScheme):finish")!
+  static let contextAction = URL(string: "\(actionScheme):context")!
   /// Only the exact injected link counts, and only while the reader is showing it.
   static func isFinishAction(_ url: URL, finishShown: Bool) -> Bool {
     finishShown && url.absoluteString == finishAction.absoluteString
+  }
+  static func isContextAction(_ url: URL, contextShown: Bool) -> Bool {
+    contextShown && url.absoluteString == contextAction.absoluteString
   }
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.colorSchemeContrast) private var contrast
@@ -63,6 +70,8 @@ struct ArticleWebView: UIViewRepresentable {
   /// Page-by-page scrolling: each swipe moves one screen, overlapping by a line.
   var paging = false
   var onFinish: (() -> Void)? = nil
+  /// Opens the reading context from the link under the title.
+  var onContext: (() -> Void)? = nil
   /// Saves a web link from the article to the library; offered when a link is held.
   var onSaveLink: ((URL) -> Void)? = nil
   let onProgress: (Double) -> Void
@@ -137,6 +146,12 @@ struct ArticleWebView: UIViewRepresentable {
       if (metadata.author) { small(add('div',metadata.author),14).style.marginBottom='8px'; }
       if (metadata.source) {
         const source=add('a','View original · '+metadata.host); source.href=metadata.source; source.style.display='block'; source.style.fontSize=(13*\(scale))+'px'; source.style.fontFamily='-apple-system,system-ui,sans-serif'; source.style.marginBottom='8px';
+      }
+      if (metadata.context) {
+        const context=add('a',metadata.context); context.href='\(Self.contextAction.absoluteString)'; context.setAttribute('role','button');
+        context.style.display='inline-block'; context.style.minHeight='44px'; context.style.lineHeight='44px'; context.style.padding='0 16px'; context.style.margin='4px 0 8px';
+        context.style.border='1px solid var(--reader-separator)'; context.style.borderRadius='999px'; context.style.textDecoration='none';
+        context.style.fontFamily='-apple-system,system-ui,sans-serif'; context.style.fontWeight='600'; context.style.fontSize=(15*\(scale))+'px';
       }
       if (metadata.status) { small(add('div',metadata.status),12); }
       if (metadata.error) { small(add('div',metadata.error),12).style.marginTop='8px'; }
@@ -361,6 +376,10 @@ struct ArticleWebView: UIViewRepresentable {
         if target.scheme == ArticleWebView.actionScheme {
           if ArticleWebView.isFinishAction(target, finishShown: parent.header.finishLabel != nil) {
             parent.onFinish?()
+          } else if ArticleWebView.isContextAction(
+            target, contextShown: parent.header.contextLabel != nil)
+          {
+            parent.onContext?()
           }
         } else if ["https", "http"].contains(target.scheme ?? "") {
           UIApplication.shared.open(target)

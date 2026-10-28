@@ -21,37 +21,69 @@ export interface ContextModel {
   complete(messages: ContextMessage[], signal: AbortSignal): Promise<string>;
 }
 
+/** Why a provider call produced no usable completion. Safe to log: never prompt or article text. */
+export class ContextProviderError extends Error {
+  constructor(
+    public category: string,
+    public status?: number,
+    public detail?: string,
+  ) {
+    super(category);
+  }
+}
+
+/**
+ * The OpenRouter request. Gemini Flash and similar models reason before answering, and that
+ * reasoning counts against max_tokens, so effort is kept low and there is room left for the answer.
+ */
+export function requestBody(model: string, messages: ContextMessage[]) {
+  return {
+    model,
+    messages,
+    temperature: 0.2,
+    max_tokens: 4000,
+    reasoning: { effort: "low", exclude: true },
+    response_format: { type: "json_object" },
+    // Only providers that don't retain or train on prompts.
+    provider: { data_collection: "deny" },
+  };
+}
+
 export function openRouterModel(apiKey: string, model: string): ContextModel {
   return {
     model,
     async complete(messages, signal) {
-      const response = await fetch(
-        "https://openrouter.ai/api/v1/chat/completions",
-        {
+      let response: Response;
+      try {
+        response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: {
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
             "X-Title": "PageStash",
           },
-          body: JSON.stringify({
-            model,
-            messages,
-            temperature: 0.2,
-            max_tokens: 1200,
-            response_format: { type: "json_object" },
-            // Only providers that don't retain or train on prompts.
-            provider: { data_collection: "deny" },
-          }),
+          body: JSON.stringify(requestBody(model, messages)),
           signal,
-        },
-      );
-      if (!response.ok) throw new Error(`Provider returned ${response.status}.`);
-      const body = (await response.json()) as {
-        choices?: { message?: { content?: string } }[];
+        });
+      } catch (error) {
+        throw new ContextProviderError(
+          (error as { name?: string }).name === "TimeoutError" ? "timeout" : "network",
+        );
+      }
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: { message?: string; code?: number | string };
+        choices?: { finish_reason?: string; message?: { content?: string } }[];
       };
-      const text = body.choices?.[0]?.message?.content;
-      if (!text) throw new Error("Provider returned no content.");
+      if (!response.ok || body.error)
+        throw new ContextProviderError(
+          "provider_error",
+          response.status,
+          String(body.error?.message ?? "").slice(0, 200),
+        );
+      const choice = body.choices?.[0];
+      const text = choice?.message?.content;
+      if (!text?.trim())
+        throw new ContextProviderError("empty_answer", response.status, choice?.finish_reason);
       return text;
     },
   };

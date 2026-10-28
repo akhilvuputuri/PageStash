@@ -26,7 +26,7 @@ struct ReadingContextSheet: View {
         } else {
           Section {
             Text(
-              "Summarizes this article against the articles you've marked Done, so you can see what it builds on and what you've already read."
+              "Not ready yet. PageStash writes this in the background soon after an article is saved, comparing it with the articles you've marked Done."
             )
           } footer: {
             Text(
@@ -46,7 +46,7 @@ struct ReadingContextSheet: View {
               Task { await generate() }
             } label: {
               HStack {
-                Text(context == nil ? "Generate Summary" : "Regenerate")
+                Text(context == nil ? "Generate Now" : "Regenerate")
                 Spacer()
                 if generating { ProgressView() }
               }

@@ -42,10 +42,19 @@ const worker = new ImportWorker(
   () => console.error("Worker cycle failed; durable jobs will retry."),
 );
 service.onQueued = () => worker.wake();
+// Reading context for newly prepared articles and the backfill, one at a time. It wakes when an
+// import finishes, then paces itself; an idle check every 10 minutes picks up retries.
+const contextWorker = new ImportWorker(
+  { runOne: () => service.runContextJob(), cleanup: async () => {} },
+  { idleMs: 600_000, busyMs: 5_000, retryMs: 60_000, batchSize: 1, cleanupMs: Number.MAX_SAFE_INTEGER },
+  () => console.error("Reading-context cycle failed; it will retry."),
+);
+service.onPrepared = () => contextWorker.wake();
 const app = await buildServer(service);
 let stopping = false;
 await app.listen({ host: config.host, port: config.port });
 worker.start();
+if (config.openRouterKey) contextWorker.start();
 console.log(
   `PageStash backend listening on ${config.host}:${config.port}`,
 );
@@ -56,7 +65,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     await app.close();
     // Platform termination can interrupt an import; its durable lease permits recovery.
     await Promise.race([
-      worker.stop(),
+      Promise.all([worker.stop(), contextWorker.stop()]),
       new Promise((resolve) => setTimeout(resolve, 15_000)),
     ]);
     await db.close();
