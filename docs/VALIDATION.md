@@ -602,6 +602,21 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Upload script.** Archiving rewrote `xcshareddata/xcschemes/OfflineReader.xcscheme` in Xcode's format, leaving the tree dirty, so the next upload would refuse. After its guards pass, the script now restores the committed project on exit, including when the archive or upload fails.
 - **Independent review of `1e787a5` (Opus 5.5): APPROVE.** It confirmed the key builds into the app as false, and that the app's only cryptography is CryptoKit SHA-256 hashing, Keychain calls and URLSession/WebKit HTTPS. Its Low findings are addressed: restore on every exit, the outdated "Not yet tested" line, and step 5's wording.
 
+### Dependency audit fix, 28 October 2026
+
+- **Problem (tested).** CI's `npm audit --omit=dev --audit-level=high` failed on `main` (`0eaae25`) and every PR, after advisories published since main's last green run on 19 October: dompurify (critical), undici, body-parser, zod (high), fastify, fast-uri, ip-address and qs (moderate).
+- **Change.** `npm audit fix` updated the other packages within their existing ranges (all patch or minor). `package.json` raises zod from `^3.25.76` to `^4.6.7`, the only fix for its advisory and a major version that `npm audit fix` can't make, and `@modelcontextprotocol/sdk` from `^1.20.0` to `^1.32.2`, which accepts zod `^3.25 || ^4.0`. No source changes were needed.
+- **Checks (tested).**
+  - `npm audit --omit=dev --audit-level=high`: 0 vulnerabilities.
+  - `npm run check`, `npm test` (29 passed, including OAuth, MCP discovery and execution, and the request-validation cases) and `npm run build` all pass.
+  - A direct check that zod 4 still accepts the inputs the server relies on: Claude, ChatGPT and loopback OAuth redirect URIs, a custom-scheme redirect, random and development UUIDs, owner emails, and offset timestamps with microseconds. Strings that aren't URLs (`not a url`, `https://`, `//x.com`) are still rejected. As before, zod accepts other schemes such as `javascript:`; `normalizedURL` and the OAuth HTTPS rules remain what restricts them.
+- **Behaviour changes from zod 4 (reviewed, accepted).**
+  - `since` no longer accepts compact offsets such as `+0000`; `Z` and `+00:00` still work, as does every value the server emits.
+  - `.uuid()` now requires RFC version and variant bits. Every ID the app creates comes from `randomUUID`, the development constant or Supabase (version 4), so none should be affected. Production IDs weren't checked directly.
+  - MCP tool input schemas no longer advertise `additionalProperties: false`. Unknown arguments are still stripped.
+  - `.url()` trims surrounding whitespace.
+- **Independent review of `13f71be` (Opus 5.5): APPROVE.** Its notes are recorded above: the wording of the change, the URL claim and the behaviour changes.
+- **Not yet done.** A backend deploy, which needs the owner's authorization.
 ### Reading context (owner-only AI), 28 October 2026
 
 - **Request (reported).** The owner asked for a tap-to-show AI summary of an article in relation to what they have already read, gated to them because it calls a paid model, with room for a premium tier later. Owner decisions: OpenRouter; "read" means marked Done (progress 1 and archived); a 30-per-day cap on new generations; generated notes kept on the phone for offline use.
@@ -611,7 +626,7 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - No new cryptography: the provider call is an ordinary HTTPS request from the server.
 - **Checks (tested).**
   - Backend: `npm run check`, `npm test` (38 passed, 9 of them new) and `npm run build`. The new tests cover gating (owner, other account, agent credential, entitlement row, no key), Done-only history that excludes unread, scrolled-to-end, trashed and other accounts' items, dropped invented references, caching, regenerate, stale history, shared concurrent requests, the daily cap with a refund only when no completion came back, notes no longer citing deleted items, deletion cleanup, clipped titles and parser tolerance.
-  - `npm audit --omit=dev --audit-level=high` fails, the same as on `origin/main` before this change (dompurify, undici, zod, body-parser, fastify, fast-uri, qs, ip-address). This change adds no dependency.
+  - After merging the [dependency audit fix](#dependency-audit-fix-28-october-2026) from main: `npm audit --omit=dev --audit-level=high` reports 0 vulnerabilities, and `npm run check`, `npm test` (38 passed) and `npm run build` pass on zod 4. This change adds no dependency.
   - iOS: `swift test` in `ios/ReaderCore` (45 passed, 4 new: wire decoding, offline reopen for the same content version only, removal on delete, remembered feature flag), the unsigned device build, and the preview-identifier simulator build. All were re-run on the final review fixes.
   - Visual (tested on `b730300`; the opened sheet re-checked after the final fixes): the `--preview-library` synthetic store under `com.akhilvuputuri.offlinereader.preview` on the iPhone 17 Pro / iOS 26.3 simulator. The menu item, the Sepia-themed sheet at medium and large detents, every section, the inline error state, and wrapping at the largest accessibility text size were checked. A first install that session used the main simulator bundle identifier before switching to the preview identifier. Preview mode used only a temporary synthetic store, with no Keychain or network access.
 - **Independent review of `b730300` (Opus 5.5): REQUEST CHANGES.** All addressed:
