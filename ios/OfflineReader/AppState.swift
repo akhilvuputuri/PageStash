@@ -268,9 +268,13 @@ import SwiftUI
     store.readingContextEnabled = features.readingContext
     readingContextEnabled = features.readingContext
   }
-  /// A context saved on this device, else one the server already has. Never generates.
-  func savedReadingContext(_ item: ReadingItem) async -> ReadingContext? {
-    if let local = try? store?.readingContext(item) { return local }
+  /// The context saved on this device for the item's current content. Works offline.
+  func localReadingContext(_ item: ReadingItem) -> ReadingContext? {
+    try? store?.readingContext(item)
+  }
+  /// The server's saved context, which also knows whether finished articles changed since. Never
+  /// generates. Nil when offline or when the server has none, so the caller keeps what it shows.
+  func serverReadingContext(_ item: ReadingItem) async -> ReadingContext? {
     guard let api, let context = try? await api.readingContext(item.id),
       context.contentVersion == item.contentVersion
     else { return nil }

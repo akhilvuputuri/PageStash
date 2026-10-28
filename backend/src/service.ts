@@ -657,13 +657,16 @@ export class Service {
   ): Promise<ReadingContext> {
     const model = await this.requireContext(identity);
     const item = await this.contextItem(identity, id);
-    if (!regenerate) {
-      const saved = await this.savedContext(identity, item);
-      if (saved) return saved;
-    }
     const key = `${identity.owner_id}/${id}`;
     const running = this.contextRuns.get(key);
     if (running) return running;
+    if (!regenerate) {
+      const saved = await this.savedContext(identity, item);
+      if (saved) return saved;
+      // Another request may have started while the saved note was read.
+      const started = this.contextRuns.get(key);
+      if (started) return started;
+    }
     const run = this.runContext(identity, item, model).finally(() =>
       this.contextRuns.delete(key),
     );
@@ -696,8 +699,22 @@ export class Service {
     const row = result.rows[0];
     if (!row || row.content_version !== item.content_version) return undefined;
     const history = await this.finishedArticles(identity, item.id);
+    // A cited article that was deleted since leaves the note with its title and AI text.
+    const cited = [...row.result.builds_on, ...row.result.covered].map((n) => n.item_id);
+    const live = new Set(
+      cited.length
+        ? (
+            await this.db.query<{ id: string }>(
+              "SELECT id FROM items WHERE owner_id=$1 AND deleted=false AND id = ANY($2::uuid[])",
+              [identity.owner_id, cited],
+            )
+          ).rows.map((r) => r.id)
+        : [],
+    );
     return {
       ...row.result,
+      builds_on: row.result.builds_on.filter((n) => live.has(n.item_id)),
+      covered: row.result.covered.filter((n) => live.has(n.item_id)),
       item_id: item.id,
       content_version: row.content_version,
       generated_at: new Date(row.generated_at).toISOString(),
@@ -706,7 +723,11 @@ export class Service {
       stale: historyDigest(history) !== row.history_digest,
     };
   }
-  /** Articles the owner marked Done, newest activity first. Trash and the item itself are excluded. */
+  /**
+   * Articles the owner marked Done (read marker and archived together), newest activity first.
+   * Scrolling to the end alone also syncs progress 1, so archived is what separates Done.
+   * Trash and the item itself are excluded.
+   */
   private async finishedArticles(identity: Identity, exclude: string) {
     return (
       await this.db.query<{
@@ -716,7 +737,7 @@ export class Service {
         content_version: number;
       }>(
         `SELECT id,title,site_name,content_version FROM items
-         WHERE owner_id=$1 AND id<>$2 AND deleted=false AND trashed_at IS NULL AND status='ready' AND progress>=1
+         WHERE owner_id=$1 AND id<>$2 AND deleted=false AND trashed_at IS NULL AND status='ready' AND progress>=1 AND archived
          ORDER BY revision DESC LIMIT ${HISTORY_LIMIT}`,
         [identity.owner_id, exclude],
       )
@@ -761,7 +782,7 @@ export class Service {
             if (!excerpt) return;
             cached.set(row.id, excerpt);
             await this.db.query(
-              "INSERT INTO item_excerpts(item_id,content_version,excerpt) VALUES($1,$2,$3) ON CONFLICT(item_id) DO UPDATE SET content_version=excluded.content_version,excerpt=excluded.excerpt",
+              "INSERT INTO item_excerpts(item_id,content_version,excerpt) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM items WHERE id=$1 AND deleted=false) ON CONFLICT(item_id) DO UPDATE SET content_version=excluded.content_version,excerpt=excluded.excerpt",
               [row.id, row.content_version, excerpt],
             );
           } catch {
@@ -798,19 +819,25 @@ export class Service {
         429,
         "Today's reading-context limit is used up. Saved summaries still open.",
       );
-    let result: ContextResult;
+    let answer: string;
     try {
-      const answer = await model.complete(
+      answer = await model.complete(
         contextPrompt({ title: item.title, site: item.site_name ?? null, text }, history),
         AbortSignal.timeout(60_000),
       );
-      result = parseContext(answer, history);
     } catch {
-      // A failed attempt gives its reservation back.
+      // No completion came back, so the reservation is given back.
       await this.db.query(
         "UPDATE context_usage SET count=count-1 WHERE owner_id=$1 AND day=$2::date AND count>0",
         [identity.owner_id, day],
       );
+      throw new HTTPError(502, "Reading context could not be generated. Try again.");
+    }
+    let result: ContextResult;
+    try {
+      result = parseContext(answer, history);
+    } catch {
+      // The provider answered and billed it, so an unusable answer keeps its reservation.
       throw new HTTPError(502, "Reading context could not be generated. Try again.");
     }
     const digest = historyDigest(rows);

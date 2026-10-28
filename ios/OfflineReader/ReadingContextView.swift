@@ -29,7 +29,7 @@ struct ReadingContextSheet: View {
             )
           } footer: {
             Text(
-              "The article's text and the titles of your finished articles are sent to an AI provider."
+              "The article's text, plus the titles, sites and opening lines of your finished articles, are sent to an AI provider through OpenRouter."
             ).foregroundStyle(tokens.secondaryInk.color)
           }.readerRowBackground()
         }
@@ -68,7 +68,10 @@ struct ReadingContextSheet: View {
     .presentationDetents([.medium, .large])
     .presentationDragIndicator(.visible)
     .task {
-      context = await state.savedReadingContext(item)
+      // Show the device copy at once, then let the server say whether it's out of date.
+      context = state.localReadingContext(item)
+      loading = context == nil
+      if let fresh = await state.serverReadingContext(item), !generating { context = fresh }
       loading = false
     }
   }
@@ -93,9 +96,11 @@ struct ReadingContextSheet: View {
   }
 
   @ViewBuilder private func notes(_ title: String, _ notes: [ReadingContext.Note]) -> some View {
-    if !notes.isEmpty {
+    // Articles deleted since the note was made drop out, with their titles and notes.
+    let present = notes.filter { note in state.items.contains { $0.id == note.itemId } }
+    if !present.isEmpty {
       Section(title) {
-        ForEach(notes) { note in
+        ForEach(present) { note in
           VStack(alignment: .leading, spacing: 4) {
             Text(note.title).font(.headline)
             Text(note.note).font(.subheadline).foregroundStyle(tokens.secondaryInk.color)
@@ -138,10 +143,14 @@ struct ReadingContextSheet: View {
       context = try await state.generateReadingContext(item, regenerate: regenerate)
       UINotificationFeedbackGenerator().notificationOccurred(.success)
     } catch {
-      failure =
-        (error as? URLError) != nil
-        ? "Generating needs an internet connection."
-        : error.localizedDescription
+      switch (error as? URLError)?.code {
+      case .timedOut?:
+        failure = "This is taking longer than expected. Open Reading Context again in a moment."
+      case .some:
+        failure = "Generating needs an internet connection."
+      case nil:
+        failure = error.localizedDescription
+      }
     }
   }
 }

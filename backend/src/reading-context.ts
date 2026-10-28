@@ -101,7 +101,7 @@ export function contextPrompt(
     ? history
         .map(
           (h, i) =>
-            `R${i + 1} | ${oneLine(h.title)}${h.site ? ` | ${oneLine(h.site)}` : ""}${h.excerpt ? `\n    ${oneLine(h.excerpt)}` : ""}`,
+            `R${i + 1} | ${clipLine(h.title, 200)}${h.site ? ` | ${clipLine(h.site, 80)}` : ""}${h.excerpt ? `\n    ${oneLine(h.excerpt)}` : ""}`,
         )
         .join("\n")
     : "(The reader has not finished any articles yet.)";
@@ -109,11 +109,13 @@ export function contextPrompt(
     { role: "system", content: SYSTEM },
     {
       role: "user",
-      content: `FINISHED ARTICLES, newest first:\n${list}\n\nNEW ARTICLE\nTitle: ${oneLine(article.title)}${article.site ? `\nSite: ${oneLine(article.site)}` : ""}\nText:\n${article.text}`,
+      content: `FINISHED ARTICLES, newest first:\n${list}\n\nNEW ARTICLE\nTitle: ${clipLine(article.title, 300)}${article.site ? `\nSite: ${clipLine(article.site, 80)}` : ""}\nText:\n${article.text}`,
     },
   ];
 }
 const oneLine = (value: string) => value.replace(/\s+/g, " ").trim();
+/** Titles are not length-limited at import, so each line sent to the model is. */
+const clipLine = (value: string, limit: number) => oneLine(value).slice(0, limit);
 
 const clip = (limit: number) =>
   z
