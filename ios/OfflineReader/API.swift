@@ -48,6 +48,7 @@ struct Connection: Decodable, Identifiable {
   let interests: Bool?
 }
 struct Connections: Decodable { let connections: [Connection] }
+struct Features: Decodable { let readingContext: Bool }
 struct NewConnection: Decodable {
   let token: String
   let id: String
@@ -99,6 +100,17 @@ struct API: Sendable {
   func patch(_ id: String, _ patch: ItemPatch) async throws {
     let _: OK = try await request(
       "/v1/items/\(id)", method: "PATCH", body: Wire.encoder().encode(patch))
+  }
+  func features() async throws -> Features { try await request("/v1/features") }
+  /// The server's saved reading context, without generating one. A 404 means there is none yet.
+  func readingContext(_ id: String) async throws -> ReadingContext {
+    try await request("/v1/items/\(id)/context")
+  }
+  /// Generating compares the article with finished ones, so it can take a while.
+  func generateReadingContext(_ id: String, regenerate: Bool) async throws -> ReadingContext {
+    try await request(
+      "/v1/items/\(id)/context", method: "POST",
+      body: JSONSerialization.data(withJSONObject: ["regenerate": regenerate]), timeout: 90)
   }
   func save(url: String, key: String, timeout: TimeInterval = 20) async throws -> SaveResponse {
     try await request(

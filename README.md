@@ -99,8 +99,14 @@ Build 4 records bounded local scheduling, wake, sync and verified-download diagn
 
 ## Scope
 
-This is a personal beta with one allowed production email, designed with account ownership throughout. No LLM runs on the backend. There are no public feeds, PDF/EPUB imports, paywall bypassing, or built-in AI. The initial Markdown renderer supports headings, paragraphs, bold, fenced code, and links; advanced Markdown formatting and embedded images are deliberately deferred. The app does not promise a freshness deadline.
+This is a personal beta with one allowed production email, designed with account ownership throughout. The only AI is the owner-gated [reading context](#reading-context-owner-only); nothing else on the backend calls a model, and imports never do. There are no public feeds, PDF/EPUB imports or paywall bypassing. The initial Markdown renderer supports headings, paragraphs, bold, fenced code, and links; advanced Markdown formatting and embedded images are deliberately deferred. The app does not promise a freshness deadline.
 
 ## Library UI (issue 1)
 
 The Library UI replaces Inbox/Offline/Archived tabs with one Library and a secondary Archive destination. Done reading marks read and archives with Undo, while preserving installed files and the device reading position. It trims reader actions and moves connection/account management into secondary settings screens. See [implementation validation](docs/VALIDATION.md#issue-1-library-and-completion-8-october-2026); this UI ships in the installed 0.2.0 personal release.
+
+## Reading context (owner only)
+
+In the reader's options menu, **Reading Context** shows an AI-written note on how the open article relates to the articles you've marked Done: a short summary, what it builds on, what you've already read, and what's new. Nothing is generated until you tap **Generate Summary**. That sends the article's text and the titles (plus short openings) of your finished articles to OpenRouter, restricted to providers that don't retain or train on prompts. A generated note is saved on the server and on the phone, so it opens offline later. It says when you've finished more articles since, and **Regenerate** refreshes it.
+
+The server decides who sees it: the owner account, plus any account granted `reading_context` in `account_entitlements`, which is where a future paid tier would plug in. It is off for everyone until `OPENROUTER_API_KEY` is set, and new generations are capped per account per day (`READING_CONTEXT_DAILY_LIMIT`, default 30). See [architecture](docs/ARCHITECTURE.md#reading-context) and [deployment](docs/DEPLOYMENT.md).

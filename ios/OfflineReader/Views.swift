@@ -635,6 +635,7 @@ struct ReaderScreen: View {
   @State private var chromeInsets = EdgeInsets()
   @State private var collection = ""
   @State private var showCollection = false
+  @State private var showContext = false
   /// The result of saving a held link: successes fade, problems stay until tapped.
   @State private var linkNotice: LinkSaveResult?
   @State private var linkNoticeDismissal: Task<Void, Never>?
@@ -795,6 +796,13 @@ struct ReaderScreen: View {
               } label: {
                 Label("Add to Collection", systemImage: "folder.badge.plus")
               }
+              if state.readingContextEnabled, item.status == "ready" {
+                Button {
+                  showContext = true
+                } label: {
+                  Label("Reading Context", systemImage: "sparkles")
+                }
+              }
               if item.status == "bookmark" {
                 Button {
                   Task { await state.retryImport(item) }
@@ -842,6 +850,8 @@ struct ReaderScreen: View {
           }
         }.sheet(isPresented: $showDisplay) {
           ReaderDisplaySheet(fontSize: $fontSize)
+        }.sheet(isPresented: $showContext) {
+          ReadingContextSheet(item: item)
         }.alert("Add to Collection", isPresented: $showCollection) {
           TextField("Collection name", text: $collection)
           Button("Add") {

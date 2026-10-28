@@ -172,6 +172,30 @@ export async function buildServer(service: Service) {
       throw new HTTPError(404, "Retryable import not found.");
     return { ok: true };
   });
+  app.get("/v1/features", async (request) =>
+    service.features(await auth(request)),
+  );
+  app.get("/v1/items/:id/context", async (request) =>
+    service.readingContext(
+      await auth(request),
+      id.parse((request.params as { id: string }).id),
+    ),
+  );
+  app.post(
+    "/v1/items/:id/context",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request) => {
+      const input = z
+        .object({ regenerate: z.boolean().default(false) })
+        .strict()
+        .parse(request.body ?? {});
+      return service.generateContext(
+        await auth(request),
+        id.parse((request.params as { id: string }).id),
+        input.regenerate,
+      );
+    },
+  );
   app.get("/v1/downloads/:token", async (request, reply) => {
     const { asset, bytes } = await service.download(
       z

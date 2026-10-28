@@ -70,6 +70,15 @@ Fetches accept HTTP(S) without URL credentials or nonstandard ports. Every DNS r
 
 Readability output passes through DOMPurify; the DOM parser runs neither scripts nor resource loading. Markdown escapes raw HTML. The reader disables content JavaScript, isolates website data, uses CSP, and allows file access only to that article version's directory. Reader-controlled typography/scroll restoration is separate from source content scripts. Links open only after an explicit user tap.
 
+## Reading context
+
+The one model call in the system, gated to the owner (or an account with a `reading_context` row in `account_entitlements`) and off unless `OPENROUTER_API_KEY` is set. `GET /v1/features` tells the app whether to show it. `GET /v1/items/:id/context` returns a saved note. `POST /v1/items/:id/context` generates one only when there is none for the current content version, or when `regenerate` is set. All three need an app session; agent credentials are refused.
+
+- **Input.** Up to 24,000 characters of the item's stored reader HTML, as text, plus the owner's finished items (`progress >= 1`, not deleted or in Trash, most recent 200 by revision). The 40 most recent also get a 400-character opening, cached in `item_excerpts` per content version so a request reads few stored files. Another account's items are never included.
+- **Call.** One OpenRouter chat completion (`READING_CONTEXT_MODEL`, default `google/gemini-3.8-flash`) with JSON output and `provider.data_collection = deny`. The prompt marks the article and titles as untrusted data. Finished items are listed as `R1…Rn`. The answer is validated, references outside that list are dropped, and text fields are clipped.
+- **Cost guard.** A generation reserves one unit in `context_usage` (per account, per UTC day) atomically before calling the provider. A failed call gives it back. Saved notes don't count. Concurrent requests for one item share a single call.
+- **Storage.** `reading_contexts` keeps the latest note per item with its content version, model, and a digest of the finished-item set. A changed set marks the note `stale` without regenerating it. Deleting an item removes its note and excerpt. The phone keeps notes in its local SQLite store for the matching content version, and logout clears them with the rest of the cache.
+
 ## Boundaries and later work
 
-The stack intentionally has no backend LLM, Redis, separate extraction service or full offline replication framework. Before public signup: introduce schema migration version enforcement, recovery-email flows, abuse quotas with concurrency-safe reservations, a storage/orphan audit, independently reviewed OAuth/security tests, provider logging review, and cross-device conflict policy. The personal beta uses one account and one phone.
+Apart from the reading-context call above, the stack intentionally has no backend LLM, Redis, separate extraction service or full offline replication framework. Before public signup: introduce schema migration version enforcement, recovery-email flows, abuse quotas with concurrency-safe reservations, a storage/orphan audit, independently reviewed OAuth/security tests, provider logging review, and cross-device conflict policy. The personal beta uses one account and one phone.

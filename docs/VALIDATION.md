@@ -602,8 +602,23 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Upload script.** Archiving rewrote `xcshareddata/xcschemes/OfflineReader.xcscheme` in Xcode's format, leaving the tree dirty, so the next upload would refuse. After its guards pass, the script now restores the committed project on exit, including when the archive or upload fails.
 - **Independent review of `1e787a5` (Opus 5.5): APPROVE.** It confirmed the key builds into the app as false, and that the app's only cryptography is CryptoKit SHA-256 hashing, Keychain calls and URLSession/WebKit HTTPS. Its Low findings are addressed: restore on every exit, the outdated "Not yet tested" line, and step 5's wording.
 
+### Reading context (owner-only AI), 28 October 2026
+
+- **Request (reported).** The owner asked for a tap-to-show AI summary of an article in relation to what they have already read, gated to them because it calls a paid model, with room for a premium tier later. Owner decisions: OpenRouter; "read" means marked Done; a 30-per-day cap on new generations; generated notes kept on the phone for offline use.
+- **Change.**
+  - Backend: `GET /v1/features`, plus `GET` and `POST /v1/items/:id/context`. Additive schema version 3 adds `account_entitlements`, `reading_contexts`, `item_excerpts` and `context_usage`, all with RLS on. Gating: the owner email, or an entitlement row. The feature is off without `OPENROUTER_API_KEY`. See [architecture](ARCHITECTURE.md#reading-context).
+  - App: a **Reading Context** item in the reader's options menu, shown only when the server offers it, opening a themed sheet. Opening shows a saved note (device first, then server) and never generates; **Generate Summary** and **Regenerate** are explicit. Notes are stored in the local SQLite store per content version and removed with the item or at logout.
+  - No new cryptography: the provider call is an ordinary HTTPS request from the server.
+- **Checks (tested).**
+  - Backend: `npm run check`, `npm test` (37 passed, 8 of them new) and `npm run build`. The new tests cover gating (owner, other account, agent credential, entitlement row, no key), finished-only history that excludes unread, trashed and other accounts' items, dropped invented references, caching, regenerate, stale history, shared concurrent requests, the daily cap with refund on failure, deletion cleanup, and parser tolerance.
+  - `npm audit --omit=dev --audit-level=high` fails, the same as on `origin/main` before this change (dompurify, undici, zod, body-parser, fastify, fast-uri, qs, ip-address). This change adds no dependency.
+  - iOS: `swift test` in `ios/ReaderCore` (45 passed, 4 new: wire decoding, offline reopen for the same content version only, removal on delete, remembered feature flag), and the unsigned device and simulator builds.
+  - Visual (tested): the `--preview-library` synthetic store under `com.akhilvuputuri.offlinereader.preview` on the iPhone 17 Pro / iOS 26.3 simulator. The menu item, the Sepia-themed sheet at medium and large detents, every section, the inline error state, and wrapping at the largest accessibility text size were checked. A first install that session used the main simulator bundle identifier before switching to the preview identifier. Preview mode used only a temporary synthetic store, with no Keychain or network access.
+- **Not yet done.** Owner setup of `OPENROUTER_API_KEY` on Northflank, a backend deploy, an authorized app build, and a real generation checked for quality and cost. Dark theme and VoiceOver order in the sheet weren't checked.
+
 ## Not yet tested
 
+- Reading context against a real provider: answer quality, latency and cost per note, and the sheet in Dark and with VoiceOver.
 - Installation from TestFlight on the iPhone (build 0.4.4 (12) is uploaded and Testing for the owner). Signed physical-device installation and launch have passed.
 - Complete SwiftUI accessibility/layout coverage and physical-device rendering. Main simulator flows have passed interactive checks.
 - Further physical-device coverage beyond the owner's successful article/image offline restart check.
