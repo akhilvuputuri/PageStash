@@ -14,8 +14,10 @@ export interface Config {
   /** OpenRouter key for AI reading context. Without it the feature is off for everyone. */
   openRouterKey?: string;
   contextModel: string;
-  /** New reading-context generations per account per UTC day. Cached results don't count. */
+  /** Generations an owner asks for per UTC day (Generate or Regenerate). Cached results don't count. */
   contextDailyLimit: number;
+  /** Generations made in the background, after saves and for the backfill, per account per UTC day. */
+  contextBackgroundDailyLimit: number;
 }
 export function supabaseHeaders(key: string): Record<string, string> {
   // Modern sb_secret keys are API keys, not JWT bearer tokens.
@@ -79,14 +81,19 @@ export function configuration(env = process.env): Config {
     dataDirectory: env.DATA_DIRECTORY ?? ".local",
     openRouterKey: env.OPENROUTER_API_KEY || undefined,
     contextModel: env.READING_CONTEXT_MODEL || "google/gemini-3.8-flash",
-    contextDailyLimit: dailyLimit(env.READING_CONTEXT_DAILY_LIMIT),
+    contextDailyLimit: dailyLimit(env.READING_CONTEXT_DAILY_LIMIT, 30, "READING_CONTEXT_DAILY_LIMIT"),
+    contextBackgroundDailyLimit: dailyLimit(
+      env.READING_CONTEXT_BACKGROUND_DAILY_LIMIT,
+      300,
+      "READING_CONTEXT_BACKGROUND_DAILY_LIMIT",
+    ),
   };
 }
 
-function dailyLimit(value: string | undefined): number {
-  if (value === undefined || value === "") return 30;
+function dailyLimit(value: string | undefined, fallback: number, name: string): number {
+  if (value === undefined || value === "") return fallback;
   const limit = Number(value);
   if (!Number.isInteger(limit) || limit < 0 || limit > 1000)
-    throw new Error("READING_CONTEXT_DAILY_LIMIT must be a whole number from 0 to 1000.");
+    throw new Error(`${name} must be a whole number from 0 to 1000.`);
   return limit;
 }

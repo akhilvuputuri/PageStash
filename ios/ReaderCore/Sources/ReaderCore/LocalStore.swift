@@ -104,6 +104,10 @@ public final class LocalStore: @unchecked Sendable {
           if let edit = try rows("SELECT json FROM edits WHERE id=?", [item.id]).first?.first {
             item = try decoder.decode(ItemPatch.self, from: Data(edit.utf8)).applying(to: item)
           }
+          if let context = item.syncedContext {
+            try storeSyncedContext(context, for: item)
+            item.syncedContext = nil
+          }
           if let undo = try storedReadingUndo(), undo.itemId == item.id,
             item.deleted || !item.archived || item.progress != 1
           {
@@ -174,6 +178,20 @@ public final class LocalStore: @unchecked Sendable {
       let context = try decoder.decode(ReadingContext.self, from: Data(json.utf8))
       return context.contentVersion == item.contentVersion ? context : nil
     }
+  }
+  /// Keeps a synced note for the item's current content, unless this device has a newer one.
+  private func storeSyncedContext(_ context: ReadingContext, for item: ReadingItem) throws {
+    guard context.itemId == item.id, context.contentVersion == item.contentVersion, !item.deleted
+    else { return }
+    if let json = try rows("SELECT json FROM contexts WHERE item=?", [item.id]).first?.first,
+      let local = try? decoder.decode(ReadingContext.self, from: Data(json.utf8)),
+      local.contentVersion == context.contentVersion, local.generatedAt > context.generatedAt
+    {
+      return
+    }
+    try execute(
+      "INSERT INTO contexts(item,json) VALUES(?,?) ON CONFLICT(item) DO UPDATE SET json=excluded.json",
+      [item.id, String(decoding: try encoder.encode(context), as: UTF8.self)])
   }
   public func saveReadingContext(_ context: ReadingContext) throws {
     try synchronized {

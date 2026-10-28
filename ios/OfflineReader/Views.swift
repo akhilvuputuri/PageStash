@@ -702,13 +702,16 @@ struct ReaderScreen: View {
                 source: URL(string: item.sourceUrl ?? ""),
                 status: offline == .ready ? nil : offline.rawValue,
                 error: item.error, finishLabel: canFinish(item) ? "Done Reading" : nil,
-                sources: item.sources.compactMap(URL.init(string:))),
+                sources: item.sources.compactMap(URL.init(string:)),
+                contextLabel: state.readingContextEnabled && item.status == "ready"
+                  ? "Reading Context" : nil),
               scrollState: scrollState,
               progress: (try? state.store?.readingPosition(item.id)) ?? item.progress,
               fontSize: fontSize,
               chromeInsets: chromeInsets,
               paging: paging,
               onFinish: { finish(item) },
+              onContext: { showContext = true },
               onSaveLink: { saveLink($0) }
             ) { progress in
               if !finished { try? state.store?.recordReadingPosition(item.id, progress) }

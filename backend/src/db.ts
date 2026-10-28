@@ -129,6 +129,18 @@ CREATE TABLE IF NOT EXISTS context_usage (
  PRIMARY KEY(owner_id, day)
 );
 INSERT INTO schema_version(version) VALUES(3) ON CONFLICT DO NOTHING;
+-- Additive: background reading-context generations, counted apart from ones the owner asks for.
+ALTER TABLE context_usage ADD COLUMN IF NOT EXISTS background integer NOT NULL DEFAULT 0;
+-- Additive: failed background attempts per content version, so a failing item backs off and stops.
+CREATE TABLE IF NOT EXISTS context_failures (
+ item_id uuid PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+ content_version integer NOT NULL, attempts integer NOT NULL DEFAULT 0, next_at timestamptz NOT NULL
+);
+-- Additive: the revision of an item's last reading activity. Saving a reading-context note bumps
+-- the sync revision but keeps this, so "newest finished first" doesn't change. Null means it
+-- equals the revision.
+ALTER TABLE items ADD COLUMN IF NOT EXISTS activity_revision bigint;
+INSERT INTO schema_version(version) VALUES(4) ON CONFLICT DO NOTHING;
 `;
 
 export async function migrate(db: Database) {
@@ -151,6 +163,7 @@ export async function migrate(db: Database) {
     "reading_contexts",
     "item_excerpts",
     "context_usage",
+    "context_failures",
     "schema_version",
   ])
     await db.query(`ALTER TABLE ${name} ENABLE ROW LEVEL SECURITY`);

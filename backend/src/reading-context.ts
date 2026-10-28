@@ -21,37 +21,93 @@ export interface ContextModel {
   complete(messages: ContextMessage[], signal: AbortSignal): Promise<string>;
 }
 
+/**
+ * Why a provider call produced no usable completion. Safe to log: never prompt or article text.
+ * `billed` means the provider may have charged for it, so its reservation is kept.
+ * `providerWide` means the failure isn't about this article (key, credit, rate limit, outage).
+ */
+export class ContextProviderError extends Error {
+  constructor(
+    public category: string,
+    public billed: boolean,
+    public providerWide: boolean,
+    public status?: number,
+    public detail?: string,
+  ) {
+    super(category);
+  }
+}
+
+/**
+ * The OpenRouter request. Gemini Flash and similar models reason before answering, and that
+ * reasoning counts against max_tokens, so effort is kept low and there is room left for the answer.
+ */
+export function requestBody(model: string, messages: ContextMessage[]) {
+  return {
+    model,
+    messages,
+    temperature: 0.2,
+    max_tokens: 4000,
+    reasoning: { effort: "low", exclude: true },
+    response_format: { type: "json_object" },
+    // Only providers that don't retain or train on prompts.
+    provider: { data_collection: "deny" },
+  };
+}
+
 export function openRouterModel(apiKey: string, model: string): ContextModel {
   return {
     model,
     async complete(messages, signal) {
-      const response = await fetch(
-        "https://openrouter.ai/api/v1/chat/completions",
-        {
+      let response: Response;
+      try {
+        response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: {
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
             "X-Title": "PageStash",
           },
-          body: JSON.stringify({
-            model,
-            messages,
-            temperature: 0.2,
-            max_tokens: 1200,
-            response_format: { type: "json_object" },
-            // Only providers that don't retain or train on prompts.
-            provider: { data_collection: "deny" },
-          }),
+          body: JSON.stringify(requestBody(model, messages)),
           signal,
-        },
-      );
-      if (!response.ok) throw new Error(`Provider returned ${response.status}.`);
-      const body = (await response.json()) as {
-        choices?: { message?: { content?: string } }[];
+        });
+      } catch (error) {
+        // A timeout may have reached the provider and been billed; a refused connection wasn't.
+        const timeout = (error as { name?: string }).name === "TimeoutError";
+        throw new ContextProviderError(timeout ? "timeout" : "network", timeout, true);
+      }
+      let body: {
+        error?: { code?: number | string; metadata?: { error_type?: string } };
+        choices?: { finish_reason?: string; error?: unknown; message?: { content?: string } }[];
       };
-      const text = body.choices?.[0]?.message?.content;
-      if (!text) throw new Error("Provider returned no content.");
+      try {
+        body = await response.json();
+      } catch {
+        throw new ContextProviderError("bad_body", response.ok, true, response.status);
+      }
+      if (!response.ok) {
+        // Requests refused before generation aren't billed. Key, credit, rate-limit and server
+        // failures affect every article, not this one. Messages can repeat provider text, so
+        // only codes are logged.
+        // A 403 is usually moderation or a guardrail about this request, so it counts per item.
+        const wide = [401, 402, 408, 429].includes(response.status) || response.status >= 500;
+        throw new ContextProviderError(
+          "provider_error",
+          false,
+          wide,
+          response.status,
+          String(body.error?.metadata?.error_type ?? body.error?.code ?? ""),
+        );
+      }
+      const choice = body.choices?.[0];
+      // A 200 with an error, an empty answer or a cut-off one has already been billed.
+      if (body.error || choice?.error)
+        throw new ContextProviderError("provider_error", true, false, response.status, "in_response");
+      const text = choice?.message?.content;
+      if (!text?.trim())
+        throw new ContextProviderError("empty_answer", true, false, response.status, choice?.finish_reason);
+      if (choice?.finish_reason === "length")
+        throw new ContextProviderError("truncated", true, false, response.status, "length");
       return text;
     },
   };
