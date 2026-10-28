@@ -657,12 +657,22 @@ Requested by the owner after using 0.4.0 on the iPhone.
 
 - **Change.** Ships owner-only Reading Context (#62) to the owner's iPhone through internal TestFlight, authorized by the owner. It bumps the version to 0.5.0 (build 13) in `scripts/generate-project.py`, with `project.pbxproj` regenerated.
   - The backend it needs is already deployed: `99d4a1f` (Northflank `festive-grip-2837`), with `OPENROUTER_API_KEY` set. See the deploy entry above.
-- **Checks (tested, on the release branch).** ReaderCore 45 tests pass, and the unsigned device and simulator builds succeed. Native presentation tests run in CI.
+- **Checks (tested, on the release branch):** ReaderCore 45 tests pass, and the unsigned device and simulator builds succeed. In CI on `e25a61f`, the native presentation tests pass 18/18 and every job succeeds.
+- **Independent review of `e25a61f` (Opus 5.5): APPROVE.** It confirmed that the project changes only the version and build, and that no cryptography was added under `ios/`.
+- **Release (tested).**
+  - #65 merged as `3312fbb`.
+  - `scripts/upload-testflight.sh`, run from a clean worktree at `3312fbb` (`origin/main`), archived and exported successfully: "Uploaded PageStash 0.5.0 (13) from 3312fbb for internal TestFlight testing."
+  - The tag `v0.5.0` and the [GitHub Release](https://github.com/akhilvuputuri/PageStash/releases/tag/v0.5.0) point at `3312fbb`.
+  - Build 13 is the first upload carrying #61's `ITSAppUsesNonExemptEncryption = NO`, so it should skip Missing Compliance.
+- **Not yet verified:**
+  - App Store Connect processing. The agent's browser wasn't signed in to App Store Connect.
+  - Installation from TestFlight on the iPhone.
+  - A real Reading Context note.
 
 ## Not yet tested
 
 - Reading context against a real provider: answer quality, latency and cost per note, and the sheet in Dark and with VoiceOver.
-- Installation from TestFlight on the iPhone (build 0.4.4 (12) is uploaded and Testing for the owner). Signed physical-device installation and launch have passed.
+- Installation from TestFlight on the iPhone (build 0.5.0 (13) is uploaded; build 0.4.4 (12) was Testing for the owner). Signed physical-device installation and launch have passed.
 - Complete SwiftUI accessibility/layout coverage and physical-device rendering. Main simulator flows have passed interactive checks.
 - Further physical-device coverage beyond the owner's successful article/image offline restart check.
 - Naturally scheduled background refresh over multiple days, low-power restrictions, reboot/force-quit behavior and background transfer relaunch callbacks.
