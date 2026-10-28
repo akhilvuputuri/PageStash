@@ -11,6 +11,11 @@ export interface Config {
   serviceKey?: string;
   bucket: string;
   dataDirectory: string;
+  /** OpenRouter key for AI reading context. Without it the feature is off for everyone. */
+  openRouterKey?: string;
+  contextModel: string;
+  /** New reading-context generations per account per UTC day. Cached results don't count. */
+  contextDailyLimit: number;
 }
 export function supabaseHeaders(key: string): Record<string, string> {
   // Modern sb_secret keys are API keys, not JWT bearer tokens.
@@ -72,5 +77,16 @@ export function configuration(env = process.env): Config {
     serviceKey: env.SUPABASE_SERVICE_KEY,
     bucket: env.STORAGE_BUCKET ?? "articles",
     dataDirectory: env.DATA_DIRECTORY ?? ".local",
+    openRouterKey: env.OPENROUTER_API_KEY || undefined,
+    contextModel: env.READING_CONTEXT_MODEL || "google/gemini-3.8-flash",
+    contextDailyLimit: dailyLimit(env.READING_CONTEXT_DAILY_LIMIT),
   };
+}
+
+function dailyLimit(value: string | undefined): number {
+  if (value === undefined || value === "") return 30;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 0 || limit > 1000)
+    throw new Error("READING_CONTEXT_DAILY_LIMIT must be a whole number from 0 to 1000.");
+  return limit;
 }

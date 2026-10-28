@@ -6,6 +6,7 @@ import { storage } from "./storage.js";
 import { Service } from "./service.js";
 import { buildServer } from "./server.js";
 import { ImportWorker } from "./worker.js";
+import { openRouterModel } from "./reading-context.js";
 
 const config = configuration();
 await mkdir(config.dataDirectory, { recursive: true });
@@ -14,7 +15,15 @@ const db = await openDatabase(
   join(config.dataDirectory, "database"),
 );
 await migrate(db);
-const service = new Service(db, config, storage(config));
+const service = new Service(
+  db,
+  config,
+  storage(config),
+  undefined,
+  config.openRouterKey
+    ? openRouterModel(config.openRouterKey, config.contextModel)
+    : undefined,
+);
 const worker = new ImportWorker(
   {
     runOne: () => service.runOne(),

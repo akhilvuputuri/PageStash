@@ -38,6 +38,8 @@ import SwiftUI
   /// Word counts of downloaded articles, for reading-time estimates in the Library.
   @Published var wordCounts: [String: Int] = [:]
   @Published var sharedSaves: [SharedSave] = []
+  /// Owner-only AI reading context. The server decides; the last answer is kept for offline use.
+  @Published var readingContextEnabled = false
   @Published var sharingMessage: String?
   private var shareStore: SharedSaveStore?
   @Published var lastSync: String =
@@ -120,6 +122,7 @@ import SwiftUI
     } catch { message = error.localizedDescription }
   }
   func reload() {
+    readingContextEnabled = store?.readingContextEnabled ?? false
     do {
       items = try store?.items() ?? []
       readingUndo = try store?.readingUndo()
@@ -258,6 +261,37 @@ import SwiftUI
       }
       throw error
     }
+  }
+  /// Asks the server which gated features this account has. Failures keep the last known answer.
+  func refreshFeatures() async {
+    guard let api, let store, let features = try? await api.features() else { return }
+    store.readingContextEnabled = features.readingContext
+    readingContextEnabled = features.readingContext
+  }
+  /// The context saved on this device for the item's current content. Works offline.
+  func localReadingContext(_ item: ReadingItem) -> ReadingContext? {
+    try? store?.readingContext(item)
+  }
+  /// The server's saved context, which also knows whether finished articles changed since. Never
+  /// generates. Nil when offline or when the server has none, so the caller keeps what it shows.
+  func serverReadingContext(_ item: ReadingItem) async -> ReadingContext? {
+    guard let api, let context = try? await api.readingContext(item.id),
+      context.contentVersion == item.contentVersion
+    else { return nil }
+    // Never let an older server copy replace a newer note on this device.
+    if let local = localReadingContext(item), local.generatedAt > context.generatedAt {
+      return local
+    }
+    try? store?.saveReadingContext(context)
+    return context
+  }
+  func generateReadingContext(_ item: ReadingItem, regenerate: Bool) async throws
+    -> ReadingContext
+  {
+    guard let api else { throw APIError(message: "Sign in to generate reading context.") }
+    let context = try await api.generateReadingContext(item.id, regenerate: regenerate)
+    try? store?.saveReadingContext(context)
+    return context
   }
   func save(_ url: String, key: String) async throws {
     try await submit(url, key: key, syncAfter: false)
@@ -411,6 +445,7 @@ import SwiftUI
     shareStore = nil
     sharedSaves = []
     sharingMessage = nil
+    readingContextEnabled = false
     Vault.clear()
     let root = store?.root
     store = nil
@@ -535,6 +570,27 @@ import SwiftUI
           try store.accept(temporary, itemID: item.id, version: item.contentVersion, asset: asset)
           try FileManager.default.removeItem(at: temporary)
         }
+        // A synthetic reading context so the owner-only sheet can be checked without a provider.
+        store.readingContextEnabled = true
+        try store.saveReadingContext(
+          ReadingContext(
+            itemId: ready.id, contentVersion: ready.contentVersion,
+            generatedAt: "2026-10-08T12:30:00Z", model: "preview/synthetic", historyCount: 12,
+            stale: ProcessInfo.processInfo.arguments.contains("--preview-stale-context"),
+            summary:
+              "Synthetic summary: this article argues for a calmer library and extends what you read earlier about reading without notifications.",
+            buildsOn: [
+              .init(
+                itemId: archived.id, title: archived.title,
+                note: "Takes its argument about fewer status indicators further.")
+            ],
+            covered: [
+              .init(
+                itemId: archived.id, title: "A synthetic earlier article",
+                note: "Already explained why offline copies need verification.")
+            ],
+            newIdeas: ["Done Reading as the only completion signal", "Undo instead of confirmation"]
+          ))
         self.store = store
         self.session = Session(token: "synthetic-preview-session", ownerId: UUID().uuidString)
         reload()
@@ -595,6 +651,8 @@ struct ReaderRoute: Identifiable, Equatable {
             || !state.sharedSaves.isEmpty)
       ) {
         guard phase == .active else { return }
+        // Once per foreground visit; the library loop below runs much more often.
+        if state.session != nil { await state.refreshFeatures() }
         while !Task.isCancelled {
           if state.session != nil { try? await state.sync() }
           let pending =

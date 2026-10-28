@@ -103,6 +103,32 @@ CREATE TABLE IF NOT EXISTS connection_grants (
 CREATE INDEX IF NOT EXISTS saved_articles_owner ON items(owner_id, captured_at DESC, id DESC)
  WHERE kind='article' AND deleted=false;
 INSERT INTO schema_version(version) VALUES(2) ON CONFLICT DO NOTHING;
+-- Additive: paid features granted beyond the owner, for example a future premium tier.
+CREATE TABLE IF NOT EXISTS account_entitlements (
+ owner_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+ feature text NOT NULL, granted_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(owner_id, feature)
+);
+-- Additive: the latest AI reading context per item, and the finished-article set it was built from.
+CREATE TABLE IF NOT EXISTS reading_contexts (
+ owner_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+ item_id uuid NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+ content_version integer NOT NULL, history_digest text NOT NULL, history_count integer NOT NULL,
+ model text NOT NULL, result jsonb NOT NULL, generated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(owner_id, item_id)
+);
+-- Additive: short opening text of finished articles, cached so a request reads few stored files.
+CREATE TABLE IF NOT EXISTS item_excerpts (
+ item_id uuid PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+ content_version integer NOT NULL, excerpt text NOT NULL
+);
+-- Additive: new reading-context generations per account and UTC day.
+CREATE TABLE IF NOT EXISTS context_usage (
+ owner_id uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+ day date NOT NULL, count integer NOT NULL DEFAULT 0,
+ PRIMARY KEY(owner_id, day)
+);
+INSERT INTO schema_version(version) VALUES(3) ON CONFLICT DO NOTHING;
 `;
 
 export async function migrate(db: Database) {
@@ -121,6 +147,10 @@ export async function migrate(db: Database) {
     "oauth_clients",
     "oauth_codes",
     "connection_grants",
+    "account_entitlements",
+    "reading_contexts",
+    "item_excerpts",
+    "context_usage",
     "schema_version",
   ])
     await db.query(`ALTER TABLE ${name} ENABLE ROW LEVEL SECURITY`);

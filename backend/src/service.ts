@@ -16,6 +16,19 @@ import {
   escapeHTML,
   type Prepared,
 } from "./content.js";
+import {
+  ARTICLE_CHARACTERS,
+  EXCERPT_CHARACTERS,
+  EXCERPT_LIMIT,
+  HISTORY_LIMIT,
+  READING_CONTEXT,
+  contextPrompt,
+  documentText,
+  parseContext,
+  type ContextModel,
+  type ContextResult,
+  type HistoryEntry,
+} from "./reading-context.js";
 
 /** Import attempts before an article is kept as a bookmark that can be retried from Imports. */
 const MAX_ATTEMPTS = 3;
@@ -68,13 +81,26 @@ export interface Item {
   revision: string | number;
 }
 
+export interface ReadingContext extends ContextResult {
+  item_id: string;
+  content_version: number;
+  generated_at: string;
+  model: string;
+  history_count: number;
+  /** The finished-article set changed since this was generated. */
+  stale: boolean;
+}
+
 export class Service {
   onQueued?: () => void;
+  /** Generations in progress, so a repeated tap waits for the same answer instead of paying twice. */
+  private contextRuns = new Map<string, Promise<ReadingContext>>();
   constructor(
     public db: Database,
     public config: Config,
     public files: Storage,
     private prepareArticle: (url: string) => Promise<Prepared> = extract,
+    private contextModel?: ContextModel,
   ) {}
   async credential(
     owner: string,
@@ -535,6 +561,9 @@ export class Service {
     await this.files.remove(keys.rows.map((r) => r.storage_key));
     await this.db.query("DELETE FROM assets WHERE item_id=$1", [id]);
     await this.db.query("DELETE FROM jobs WHERE id=$1", [id]);
+    // Derived text goes with the content it came from.
+    await this.db.query("DELETE FROM reading_contexts WHERE item_id=$1", [id]);
+    await this.db.query("DELETE FROM item_excerpts WHERE item_id=$1", [id]);
   }
   /** Permanently deletes items that have been in Trash longer than `days`. */
   async purgeTrash(days = 30) {
@@ -582,6 +611,262 @@ export class Service {
     await this.db.query("DELETE FROM accounts WHERE id=$1", [
       identity.owner_id,
     ]);
+  }
+  /** Owner-only and entitled features this app session may use. */
+  async features(identity: Identity) {
+    this.app(identity);
+    return {
+      reading_context:
+        Boolean(this.contextModel) &&
+        (await this.entitled(identity, READING_CONTEXT)),
+    };
+  }
+  private async entitled(identity: Identity, feature: string) {
+    const result = await this.db.query<{ email: string; granted: boolean }>(
+      "SELECT a.email, EXISTS(SELECT 1 FROM account_entitlements e WHERE e.owner_id=a.id AND e.feature=$2) AS granted FROM accounts a WHERE a.id=$1",
+      [identity.owner_id, feature],
+    );
+    const row = result.rows[0];
+    if (!row) return false;
+    const owner = this.config.devAuth
+      ? this.config.devEmail.toLowerCase()
+      : this.config.ownerEmail;
+    return row.granted || (owner !== "" && row.email.toLowerCase() === owner);
+  }
+  private async requireContext(identity: Identity) {
+    this.app(identity);
+    if (!(await this.entitled(identity, READING_CONTEXT)))
+      throw new HTTPError(403, "Reading context isn't available on this account.");
+    if (!this.contextModel)
+      throw new HTTPError(503, "Reading context isn't configured on this server.");
+    return this.contextModel;
+  }
+  /** The saved reading context for an item, without generating one. */
+  async readingContext(identity: Identity, id: string): Promise<ReadingContext> {
+    await this.requireContext(identity);
+    const item = await this.contextItem(identity, id);
+    const saved = await this.savedContext(identity, item);
+    if (!saved) throw new HTTPError(404, "No reading context yet.");
+    return saved;
+  }
+  /** Returns the saved context, or generates one when there is none, the content changed, or `regenerate` is set. */
+  async generateContext(
+    identity: Identity,
+    id: string,
+    regenerate = false,
+  ): Promise<ReadingContext> {
+    const model = await this.requireContext(identity);
+    const item = await this.contextItem(identity, id);
+    const key = `${identity.owner_id}/${id}`;
+    const running = this.contextRuns.get(key);
+    if (running) return running;
+    if (!regenerate) {
+      const saved = await this.savedContext(identity, item);
+      if (saved) return saved;
+      // Another request may have started while the saved note was read.
+      const started = this.contextRuns.get(key);
+      if (started) return started;
+    }
+    const run = this.runContext(identity, item, model).finally(() =>
+      this.contextRuns.delete(key),
+    );
+    this.contextRuns.set(key, run);
+    return run;
+  }
+  private async contextItem(identity: Identity, id: string) {
+    const result = await this.db.query<Item>(
+      "SELECT * FROM items WHERE id=$1 AND owner_id=$2 AND deleted=false AND status='ready'",
+      [id, identity.owner_id],
+    );
+    if (!result.rows[0]) throw new HTTPError(404, "Item not found.");
+    return result.rows[0];
+  }
+  private async savedContext(
+    identity: Identity,
+    item: Item,
+  ): Promise<ReadingContext | undefined> {
+    const result = await this.db.query<{
+      content_version: number;
+      history_digest: string;
+      history_count: number;
+      model: string;
+      result: ContextResult;
+      generated_at: Date | string;
+    }>(
+      "SELECT content_version,history_digest,history_count,model,result,generated_at FROM reading_contexts WHERE owner_id=$1 AND item_id=$2",
+      [identity.owner_id, item.id],
+    );
+    const row = result.rows[0];
+    if (!row || row.content_version !== item.content_version) return undefined;
+    const history = await this.finishedArticles(identity, item.id);
+    // A cited article that was deleted since leaves the note with its title and AI text.
+    const cited = [...row.result.builds_on, ...row.result.covered].map((n) => n.item_id);
+    const live = new Set(
+      cited.length
+        ? (
+            await this.db.query<{ id: string }>(
+              "SELECT id FROM items WHERE owner_id=$1 AND deleted=false AND id = ANY($2::uuid[])",
+              [identity.owner_id, cited],
+            )
+          ).rows.map((r) => r.id)
+        : [],
+    );
+    return {
+      ...row.result,
+      builds_on: row.result.builds_on.filter((n) => live.has(n.item_id)),
+      covered: row.result.covered.filter((n) => live.has(n.item_id)),
+      item_id: item.id,
+      content_version: row.content_version,
+      generated_at: new Date(row.generated_at).toISOString(),
+      model: row.model,
+      history_count: row.history_count,
+      stale: historyDigest(history) !== row.history_digest,
+    };
+  }
+  /**
+   * Articles the owner marked Done (read marker and archived together), newest activity first.
+   * Scrolling to the end alone also syncs progress 1, so archived is what separates Done.
+   * Trash and the item itself are excluded.
+   */
+  private async finishedArticles(identity: Identity, exclude: string) {
+    return (
+      await this.db.query<{
+        id: string;
+        title: string;
+        site_name: string | null;
+        content_version: number;
+      }>(
+        `SELECT id,title,site_name,content_version FROM items
+         WHERE owner_id=$1 AND id<>$2 AND deleted=false AND trashed_at IS NULL AND status='ready' AND progress>=1 AND archived
+         ORDER BY revision DESC LIMIT ${HISTORY_LIMIT}`,
+        [identity.owner_id, exclude],
+      )
+    ).rows;
+  }
+  private async contentText(itemID: string, limit: number) {
+    const asset = await this.db.query<{ storage_key: string }>(
+      "SELECT storage_key FROM assets WHERE item_id=$1 AND role='content' LIMIT 1",
+      [itemID],
+    );
+    if (!asset.rows[0]) return undefined;
+    return documentText(
+      (await this.files.get(asset.rows[0].storage_key)).toString("utf8"),
+      limit,
+    );
+  }
+  private async excerpts(
+    rows: { id: string; content_version: number }[],
+  ): Promise<Map<string, string>> {
+    const cached = new Map<string, string>();
+    if (!rows.length) return cached;
+    const saved = await this.db.query<{
+      item_id: string;
+      content_version: number;
+      excerpt: string;
+    }>(
+      "SELECT item_id,content_version,excerpt FROM item_excerpts WHERE item_id = ANY($1::uuid[])",
+      [rows.map((r) => r.id)],
+    );
+    for (const row of saved.rows) {
+      const item = rows.find((r) => r.id === row.item_id);
+      if (item && item.content_version === row.content_version)
+        cached.set(row.item_id, row.excerpt);
+    }
+    const missing = rows.filter((r) => !cached.has(r.id));
+    // A few stored files at a time. A file that can't be read just goes without an excerpt.
+    for (let i = 0; i < missing.length; i += 4)
+      await Promise.all(
+        missing.slice(i, i + 4).map(async (row) => {
+          try {
+            const excerpt = await this.contentText(row.id, EXCERPT_CHARACTERS);
+            if (!excerpt) return;
+            cached.set(row.id, excerpt);
+            await this.db.query(
+              "INSERT INTO item_excerpts(item_id,content_version,excerpt) SELECT $1,$2,$3 WHERE EXISTS(SELECT 1 FROM items WHERE id=$1 AND deleted=false) ON CONFLICT(item_id) DO UPDATE SET content_version=excluded.content_version,excerpt=excluded.excerpt",
+              [row.id, row.content_version, excerpt],
+            );
+          } catch {
+            // Titles alone still give the model something to compare.
+          }
+        }),
+      );
+    return cached;
+  }
+  private async runContext(
+    identity: Identity,
+    item: Item,
+    model: ContextModel,
+  ): Promise<ReadingContext> {
+    const text = await this.contentText(item.id, ARTICLE_CHARACTERS);
+    if (!text) throw new HTTPError(409, "This item has no readable text yet.");
+    const rows = await this.finishedArticles(identity, item.id);
+    const excerpts = await this.excerpts(rows.slice(0, EXCERPT_LIMIT));
+    const history: HistoryEntry[] = rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      site: r.site_name,
+      excerpt: excerpts.get(r.id),
+    }));
+    const reserved = await this.db.query<{ day: string }>(
+      `INSERT INTO context_usage(owner_id,day,count) SELECT $1,(now() AT TIME ZONE 'UTC')::date,1 WHERE $2::int > 0
+       ON CONFLICT(owner_id,day) DO UPDATE SET count=context_usage.count+1 WHERE context_usage.count < $2
+       RETURNING day::text`,
+      [identity.owner_id, this.config.contextDailyLimit],
+    );
+    const day = reserved.rows[0]?.day;
+    if (!day)
+      throw new HTTPError(
+        429,
+        "Today's reading-context limit is used up. Saved summaries still open.",
+      );
+    let answer: string;
+    try {
+      answer = await model.complete(
+        contextPrompt({ title: item.title, site: item.site_name ?? null, text }, history),
+        AbortSignal.timeout(60_000),
+      );
+    } catch {
+      // No completion came back, so the reservation is given back.
+      await this.db.query(
+        "UPDATE context_usage SET count=count-1 WHERE owner_id=$1 AND day=$2::date AND count>0",
+        [identity.owner_id, day],
+      );
+      throw new HTTPError(502, "Reading context could not be generated. Try again.");
+    }
+    let result: ContextResult;
+    try {
+      result = parseContext(answer, history);
+    } catch {
+      // The provider answered and billed it, so an unusable answer keeps its reservation.
+      throw new HTTPError(502, "Reading context could not be generated. Try again.");
+    }
+    const digest = historyDigest(rows);
+    const saved = await this.db.query<{ generated_at: Date | string }>(
+      `INSERT INTO reading_contexts(owner_id,item_id,content_version,history_digest,history_count,model,result)
+       SELECT $1,$2,$3,$4,$5,$6,$7::jsonb WHERE EXISTS(SELECT 1 FROM items WHERE id=$2 AND owner_id=$1 AND deleted=false)
+       ON CONFLICT(owner_id,item_id) DO UPDATE SET content_version=excluded.content_version,history_digest=excluded.history_digest,
+       history_count=excluded.history_count,model=excluded.model,result=excluded.result,generated_at=now()
+       RETURNING generated_at`,
+      [
+        identity.owner_id,
+        item.id,
+        item.content_version,
+        digest,
+        rows.length,
+        model.model,
+        JSON.stringify(result),
+      ],
+    );
+    if (!saved.rows[0]) throw new HTTPError(404, "Item not found.");
+    return {
+      ...result,
+      item_id: item.id,
+      content_version: item.content_version,
+      generated_at: new Date(saved.rows[0].generated_at).toISOString(),
+      model: model.model,
+      history_count: rows.length,
+      stale: false,
+    };
   }
   async runOne(): Promise<boolean> {
     const lease = randomUUID();
@@ -725,4 +1010,9 @@ export class Service {
     }
     return true;
   }
+}
+
+/** Identifies the finished-article set a reading context was built from. */
+function historyDigest(rows: { id: string }[]) {
+  return hash(rows.map((r) => r.id).sort().join(","));
 }

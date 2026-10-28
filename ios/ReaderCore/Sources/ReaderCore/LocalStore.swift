@@ -27,6 +27,7 @@ public final class LocalStore: @unchecked Sendable {
     try execute(
       "CREATE TABLE IF NOT EXISTS verified(item TEXT,version INTEGER,asset TEXT,sha256 TEXT,size INTEGER,PRIMARY KEY(item,version,asset))"
     )
+    try execute("CREATE TABLE IF NOT EXISTS contexts(item TEXT PRIMARY KEY,json TEXT NOT NULL)")
   }
   deinit { sqlite3_close(db) }
   private func synchronized<T>(_ action: () throws -> T) rethrows -> T {
@@ -128,6 +129,7 @@ public final class LocalStore: @unchecked Sendable {
       for item in page.items where item.deleted {
         try? FileManager.default.removeItem(at: root.appendingPathComponent(item.id))
         try? execute("DELETE FROM lengths WHERE id=?", [item.id])
+        try? execute("DELETE FROM contexts WHERE item=?", [item.id])
       }
     }
   }
@@ -160,6 +162,41 @@ public final class LocalStore: @unchecked Sendable {
         try? FileManager.default.removeItem(at: root.appendingPathComponent(id))
         try execute("DELETE FROM search WHERE id=?", [id])
         try execute("DELETE FROM lengths WHERE id=?", [id])
+        try execute("DELETE FROM contexts WHERE item=?", [id])
+      }
+    }
+  }
+  /// The saved reading context for an item's current content, so it opens offline.
+  public func readingContext(_ item: ReadingItem) throws -> ReadingContext? {
+    try synchronized {
+      guard let json = try rows("SELECT json FROM contexts WHERE item=?", [item.id]).first?.first
+      else { return nil }
+      let context = try decoder.decode(ReadingContext.self, from: Data(json.utf8))
+      return context.contentVersion == item.contentVersion ? context : nil
+    }
+  }
+  public func saveReadingContext(_ context: ReadingContext) throws {
+    try synchronized {
+      guard let current = try item(context.itemId), !current.deleted else {
+        throw ReaderError.missingItem
+      }
+      try execute(
+        "INSERT INTO contexts(item,json) VALUES(?,?) ON CONFLICT(item) DO UPDATE SET json=excluded.json",
+        [context.itemId, String(decoding: try encoder.encode(context), as: UTF8.self)])
+    }
+  }
+  /// Whether the server offers reading context to this account, remembered for offline use.
+  public var readingContextEnabled: Bool {
+    get {
+      (try? synchronized {
+        try rows("SELECT value FROM meta WHERE key='readingContext'").first?.first == "1"
+      }) ?? false
+    }
+    set {
+      try? synchronized {
+        try execute(
+          "INSERT INTO meta(key,value) VALUES('readingContext',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+          [newValue ? "1" : "0"])
       }
     }
   }
