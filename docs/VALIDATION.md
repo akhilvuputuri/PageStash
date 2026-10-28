@@ -602,6 +602,16 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Upload script.** Archiving rewrote `xcshareddata/xcschemes/OfflineReader.xcscheme` in Xcode's format, leaving the tree dirty, so the next upload would refuse. After its guards pass, the script now restores the committed project on exit, including when the archive or upload fails.
 - **Independent review of `1e787a5` (Opus 5.5): APPROVE.** It confirmed the key builds into the app as false, and that the app's only cryptography is CryptoKit SHA-256 hashing, Keychain calls and URLSession/WebKit HTTPS. Its Low findings are addressed: restore on every exit, the outdated "Not yet tested" line, and step 5's wording.
 
+### Dependency audit fix, 28 October 2026
+
+- **Problem (tested).** CI's `npm audit --omit=dev --audit-level=high` failed on `main` (`0eaae25`) and every PR, after advisories published since main's last green run on 19 October: dompurify (critical), undici, body-parser, zod (high), fastify, fast-uri, ip-address and qs (moderate).
+- **Change.** `npm audit fix` updated the lockfile within the existing ranges. zod moved from 3.25.76 to 4.6.7 (the only fix for its advisory), and `@modelcontextprotocol/sdk` from 1.32.1 to 1.32.2, which accepts zod `^3.25 || ^4.0`. No source changes were needed.
+- **Checks (tested).**
+  - `npm audit --omit=dev --audit-level=high`: 0 vulnerabilities.
+  - `npm run check`, `npm test` (29 passed, including OAuth, MCP discovery and execution, and the request-validation cases) and `npm run build` all pass.
+  - A direct check that zod 4 still accepts the inputs the server relies on: Claude, ChatGPT and loopback OAuth redirect URIs, a custom-scheme redirect, random and development UUIDs, owner emails, and offset timestamps with microseconds. Malformed URLs are still rejected.
+- **Not yet done.** A backend deploy, which needs the owner's authorization.
+
 ## Not yet tested
 
 - Installation from TestFlight on the iPhone (build 0.4.4 (12) is uploaded and Testing for the owner). Signed physical-device installation and launch have passed.
