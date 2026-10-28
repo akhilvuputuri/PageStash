@@ -605,11 +605,17 @@ Requested by the owner after using 0.4.0 on the iPhone.
 ### Dependency audit fix, 28 October 2026
 
 - **Problem (tested).** CI's `npm audit --omit=dev --audit-level=high` failed on `main` (`0eaae25`) and every PR, after advisories published since main's last green run on 19 October: dompurify (critical), undici, body-parser, zod (high), fastify, fast-uri, ip-address and qs (moderate).
-- **Change.** `npm audit fix` updated the lockfile within the existing ranges. zod moved from 3.25.76 to 4.6.7 (the only fix for its advisory), and `@modelcontextprotocol/sdk` from 1.32.1 to 1.32.2, which accepts zod `^3.25 || ^4.0`. No source changes were needed.
+- **Change.** `npm audit fix` updated the other packages within their existing ranges (all patch or minor). `package.json` raises zod from `^3.25.76` to `^4.6.7`, the only fix for its advisory and a major version that `npm audit fix` can't make, and `@modelcontextprotocol/sdk` from `^1.20.0` to `^1.32.2`, which accepts zod `^3.25 || ^4.0`. No source changes were needed.
 - **Checks (tested).**
   - `npm audit --omit=dev --audit-level=high`: 0 vulnerabilities.
   - `npm run check`, `npm test` (29 passed, including OAuth, MCP discovery and execution, and the request-validation cases) and `npm run build` all pass.
-  - A direct check that zod 4 still accepts the inputs the server relies on: Claude, ChatGPT and loopback OAuth redirect URIs, a custom-scheme redirect, random and development UUIDs, owner emails, and offset timestamps with microseconds. Malformed URLs are still rejected.
+  - A direct check that zod 4 still accepts the inputs the server relies on: Claude, ChatGPT and loopback OAuth redirect URIs, a custom-scheme redirect, random and development UUIDs, owner emails, and offset timestamps with microseconds. Strings that aren't URLs (`not a url`, `https://`, `//x.com`) are still rejected. As before, zod accepts other schemes such as `javascript:`; `normalizedURL` and the OAuth HTTPS rules remain what restricts them.
+- **Behaviour changes from zod 4 (reviewed, accepted).**
+  - `since` no longer accepts compact offsets such as `+0000`; `Z` and `+00:00` still work, as does every value the server emits.
+  - `.uuid()` now requires RFC version and variant bits. Every ID the app creates comes from `randomUUID`, the development constant or Supabase (version 4), so none should be affected. Production IDs weren't checked directly.
+  - MCP tool input schemas no longer advertise `additionalProperties: false`. Unknown arguments are still stripped.
+  - `.url()` trims surrounding whitespace.
+- **Independent review of `13f71be` (Opus 5.5): APPROVE.** Its notes are recorded above: the wording of the change, the URL claim and the behaviour changes.
 - **Not yet done.** A backend deploy, which needs the owner's authorization.
 
 ## Not yet tested
