@@ -116,6 +116,8 @@ export class Service {
   private contextRuns = new Map<string, Promise<ReadingContext>>();
   private contextPausedUntil = 0;
   private contextPauseMs = 0;
+  /** The item whose provider-wide failure started the current pause, until a success. */
+  private contextWideFailure?: string;
   constructor(
     public db: Database,
     public config: Config,
@@ -361,7 +363,7 @@ export class Service {
     // idempotency key) is a replay and changes nothing.
     if (visible && !row.matched_key && url !== null && url === row.normalized_url)
       await this.db.query(
-        "UPDATE items SET trashed_at=NULL,revision=nextval('library_revision') WHERE id=$1 AND owner_id=$2 AND trashed_at IS NOT NULL AND deleted=false",
+        "UPDATE items SET trashed_at=NULL,activity_revision=NULL,revision=nextval('library_revision') WHERE id=$1 AND owner_id=$2 AND trashed_at IS NOT NULL AND deleted=false",
         [row.id, identity.owner_id],
       );
     // A limited connection never gains access to another connection's receipt.
@@ -528,7 +530,9 @@ export class Service {
           url: `${this.config.publicURL}/v1/downloads/${token}`,
         });
       }
-      const { owner_id, connection_id, ...safe } = row;
+      const { owner_id, connection_id, activity_revision, ...safe } = row as Item & {
+        activity_revision?: unknown;
+      };
       items.push({
         ...safe,
         revision: Number(row.revision),
@@ -695,8 +699,10 @@ export class Service {
     // budget still applies.
     const join = (run: Promise<ReadingContext>) =>
       run.catch((error) => {
-        if (error instanceof HTTPError && error.status === 429) return own();
-        throw error;
+        if (!(error instanceof HTTPError && error.status === 429)) throw error;
+        // Another joiner may have started the owner's run already.
+        const current = this.contextRuns.get(key);
+        return current && current !== run ? current : own();
       });
     const running = this.contextRuns.get(key);
     if (running) return join(running);
@@ -977,16 +983,21 @@ export class Service {
     try {
       await run;
       this.contextPauseMs = 0;
+      this.contextWideFailure = undefined;
       await this.db.query("DELETE FROM context_failures WHERE item_id=$1", [item.id]);
     } catch (error) {
       // The cap filled up between the pick and the reservation: nothing more to do today.
       if (error instanceof HTTPError && error.status === 429) return false;
-      // Not this article's fault: pause everything (15 minutes, doubling to an hour) and leave
-      // its attempts untouched, so an outage can't use up the backfill.
+      // Probably not this article's fault: pause everything (15 minutes, doubling to an hour)
+      // and leave its attempts untouched, so an outage can't use up the backfill. If the same
+      // article fails that way again after a pause with no success in between, it counts as
+      // one of its own attempts too, so a stuck article can't hold the backfill forever.
       if (error instanceof ContextGenerationError && error.providerWide) {
         this.contextPauseMs = Math.min(Math.max(this.contextPauseMs * 2, 15 * 60_000), 60 * 60_000);
         this.contextPausedUntil = Date.now() + this.contextPauseMs;
-        return false;
+        const repeated = this.contextWideFailure === item.id;
+        this.contextWideFailure = item.id;
+        if (!repeated) return false;
       }
       // Back off an hour per attempt, then leave it for the owner to ask.
       await this.db.query(

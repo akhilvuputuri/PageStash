@@ -89,7 +89,8 @@ export function openRouterModel(apiKey: string, model: string): ContextModel {
         // Requests refused before generation aren't billed. Key, credit, rate-limit and server
         // failures affect every article, not this one. Messages can repeat provider text, so
         // only codes are logged.
-        const wide = [401, 402, 403, 408, 429].includes(response.status) || response.status >= 500;
+        // A 403 is usually moderation or a guardrail about this request, so it counts per item.
+        const wide = [401, 402, 408, 429].includes(response.status) || response.status >= 500;
         throw new ContextProviderError(
           "provider_error",
           false,

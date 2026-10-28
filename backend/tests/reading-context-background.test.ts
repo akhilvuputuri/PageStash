@@ -73,6 +73,7 @@ beforeEach(async () => {
   failure = undefined;
   (service as any).contextPausedUntil = 0;
   (service as any).contextPauseMs = 0;
+  (service as any).contextWideFailure = undefined;
   await db.query("DELETE FROM context_usage");
   await db.query("DELETE FROM context_failures");
   await db.query("DELETE FROM reading_contexts");
@@ -193,4 +194,35 @@ test("saving a note doesn't reorder the finished-article history", async () => {
   assert.deepEqual(await order(), ["Finished just now", "Finished long ago"]);
   const note = await service.readingContext(owner, current);
   assert.equal(note.stale, false, "unchanged history isn't reported as stale");
+});
+
+test("an article that keeps failing provider-wide stops blocking older articles", async () => {
+  const roomy = new Service(db, config("20"), storage, undefined, model);
+  const unpause = () => ((roomy as any).contextPausedUntil = 0);
+  await item(owner, "Older article", { capturedAt: "2026-01-01T00:00:00Z" });
+  const stuck = await item(owner, "Stuck article", { capturedAt: "2026-10-01T00:00:00Z" });
+  const real = model.complete;
+  (model as any).complete = async (messages: ContextMessage[]) => {
+    calls.push(messages);
+    if (/Title: Stuck article/.test(messages[1].content))
+      throw new ContextProviderError("timeout", true, true);
+    return JSON.stringify({ summary: "Fine.", builds_on: [], covered: [], new_ideas: [] });
+  };
+  try {
+    for (let round = 0; round < 12; round++) {
+      await roomy.runContextJob();
+      unpause();
+      await db.query("UPDATE context_failures SET next_at=now()-interval '1 second'");
+    }
+    const notes = await db.query<{ title: string }>(
+      "SELECT i.title FROM reading_contexts c JOIN items i ON i.id=c.item_id",
+    );
+    assert.deepEqual(notes.rows.map((r) => r.title), ["Older article"]);
+    const failures = await db.query<{ attempts: number }>("SELECT attempts FROM context_failures WHERE item_id=$1", [stuck]);
+    assert.equal(failures.rows[0].attempts, 3, "the stuck article stops after three of its own attempts");
+    const stuckCalls = calls.filter((m) => /Title: Stuck article/.test(m[1].content)).length;
+    assert.ok(stuckCalls <= 6, `bounded retries (${stuckCalls})`);
+  } finally {
+    (model as any).complete = real;
+  }
 });

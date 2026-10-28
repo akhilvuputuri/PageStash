@@ -676,10 +676,10 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Gemini 3.8 Flash reasons before answering, and its reasoning counts against `max_tokens`. With 1,200 tokens it can return an empty or cut-off answer that fails validation.
   - Less likely: `data_collection: deny` leaves only Vertex endpoints, and some showed degraded on 29 October.
 - **Change.**
-  - The request sets low reasoning effort, excludes reasoning from the reply, and allows 4,000 output tokens. Each failure now logs one line with a fixed category and OpenRouter's short reason, never content.
+  - The request sets low reasoning effort, excludes reasoning from the reply, and allows 4,000 output tokens. Each failure now logs one line with a fixed category, the status and OpenRouter's error code or the finish reason, never a provider message or content.
   - A background worker writes missing notes for the owner's articles, newest first, one at a time. It wakes when an import publishes content and backfills older articles. Failures back off an hour per attempt and stop after three. It has its own daily cap (`READING_CONTEXT_BACKGROUND_DAILY_LIMIT`, default 300), apart from the owner's 30.
   - Saving a note bumps the item's revision. `GET /v1/library` carries `reading_context`, and the phone stores it for offline use, keeping a newer one made on the device.
-  - In the app, a **Reading context** button sits under the title. The sheet's empty state says a note is on its way, with **Generate Now**. The menu item stays.
+  - In the app, a **Reading Context** button sits under the title. The sheet's empty state says a note is on its way, with **Generate Now**. The menu item stays.
   - Additive schema version 4: `context_usage.background`, `context_failures` and `items.activity_revision`.
 - **Independent review of `d5bcb51` (Opus 5.5): REQUEST CHANGES.** All of the following are addressed:
   - Blocking: saving a note bumped the sync revision, which reordered the "newest finished first" history and marked notes stale. History now orders by `activity_revision`, which a note save keeps.
@@ -691,8 +691,14 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Briefs get honest empty-state copy.
   - A note the app can't decode no longer fails the library page.
   - Background work is limited to the owner.
+- **Delta review of `95a3035` (Opus 5.5): REQUEST CHANGES.** All addressed:
+  - Blocking: an article failing provider-wide again and again was retried hourly and held back every older one. A repeat after a pause now counts as its own attempt.
+  - A 403 counts per item.
+  - Two owner requests joining one capped background run no longer start two runs.
+  - `activity_revision` is left out of the sync payload, and re-saving a trashed link clears it.
+  - The docs wording is updated.
 - **Checks (tested).**
-  - Backend: `npm run check`, `npm test` (45 passed, 7 new for the request body, background order and eligibility, caps, billed and unbilled failures, the outage pause, history order and sync), `npm run build`, and `npm audit` with 0 vulnerabilities.
+  - Backend: `npm run check`, `npm test` (46 passed, 8 new for the request body, background order and eligibility, caps, billed and unbilled failures, the outage pause, a stuck article, history order and sync), `npm run build`, and `npm audit` with 0 vulnerabilities.
   - iOS: `swift test` (47 passed, 2 new for synced notes and a malformed note), and the unsigned device and preview simulator builds.
   - Simulator, with the preview identifier and synthetic store: the header button shows under the title, one tap opens the saved note, and it wraps cleanly at the largest accessibility text size. An unsupported "✦" glyph was removed after the first check.
 - **Not yet verified.**
