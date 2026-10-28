@@ -278,6 +278,10 @@ import SwiftUI
     guard let api, let context = try? await api.readingContext(item.id),
       context.contentVersion == item.contentVersion
     else { return nil }
+    // Never let an older server copy replace a newer note on this device.
+    if let local = localReadingContext(item), local.generatedAt > context.generatedAt {
+      return local
+    }
     try? store?.saveReadingContext(context)
     return context
   }

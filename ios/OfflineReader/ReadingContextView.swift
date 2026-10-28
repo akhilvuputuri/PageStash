@@ -12,6 +12,7 @@ struct ReadingContextSheet: View {
   @State private var loading = true
   @State private var generating = false
   @State private var failure: String?
+  @State private var generatedHere = false
 
   var body: some View {
     NavigationStack {
@@ -71,7 +72,10 @@ struct ReadingContextSheet: View {
       // Show the device copy at once, then let the server say whether it's out of date.
       context = state.localReadingContext(item)
       loading = context == nil
-      if let fresh = await state.serverReadingContext(item), !generating { context = fresh }
+      // A slow refresh must not replace a note generated in this sheet meanwhile.
+      if let fresh = await state.serverReadingContext(item), !generating, !generatedHere {
+        context = fresh
+      }
       loading = false
     }
   }
@@ -141,6 +145,7 @@ struct ReadingContextSheet: View {
     do {
       let regenerate = context != nil
       context = try await state.generateReadingContext(item, regenerate: regenerate)
+      generatedHere = true
       UINotificationFeedbackGenerator().notificationOccurred(.success)
     } catch {
       switch (error as? URLError)?.code {

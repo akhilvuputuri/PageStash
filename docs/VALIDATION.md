@@ -612,8 +612,8 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Checks (tested).**
   - Backend: `npm run check`, `npm test` (38 passed, 9 of them new) and `npm run build`. The new tests cover gating (owner, other account, agent credential, entitlement row, no key), Done-only history that excludes unread, scrolled-to-end, trashed and other accounts' items, dropped invented references, caching, regenerate, stale history, shared concurrent requests, the daily cap with a refund only when no completion came back, notes no longer citing deleted items, deletion cleanup, clipped titles and parser tolerance.
   - `npm audit --omit=dev --audit-level=high` fails, the same as on `origin/main` before this change (dompurify, undici, zod, body-parser, fastify, fast-uri, qs, ip-address). This change adds no dependency.
-  - iOS: `swift test` in `ios/ReaderCore` (45 passed, 4 new: wire decoding, offline reopen for the same content version only, removal on delete, remembered feature flag), and the unsigned device and simulator builds.
-  - Visual (tested): the `--preview-library` synthetic store under `com.akhilvuputuri.offlinereader.preview` on the iPhone 17 Pro / iOS 26.3 simulator. The menu item, the Sepia-themed sheet at medium and large detents, every section, the inline error state, and wrapping at the largest accessibility text size were checked. A first install that session used the main simulator bundle identifier before switching to the preview identifier. Preview mode used only a temporary synthetic store, with no Keychain or network access.
+  - iOS: `swift test` in `ios/ReaderCore` (45 passed, 4 new: wire decoding, offline reopen for the same content version only, removal on delete, remembered feature flag), the unsigned device build, and the preview-identifier simulator build. All were re-run on the final review fixes.
+  - Visual (tested on `b730300`; the opened sheet re-checked after the final fixes): the `--preview-library` synthetic store under `com.akhilvuputuri.offlinereader.preview` on the iPhone 17 Pro / iOS 26.3 simulator. The menu item, the Sepia-themed sheet at medium and large detents, every section, the inline error state, and wrapping at the largest accessibility text size were checked. A first install that session used the main simulator bundle identifier before switching to the preview identifier. Preview mode used only a temporary synthetic store, with no Keychain or network access.
 - **Independent review of `b730300` (Opus 5.5): REQUEST CHANGES.** All addressed:
   - Blocking: a note saved on the phone never showed as stale, because the device copy was preferred and never refreshed. The sheet now shows it, then refreshes it from the server.
   - Blocking: the in-app disclosure left out the sites and opening lines that are sent.
@@ -621,6 +621,7 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Scrolling to the end synced progress 1, so unfinished articles counted as finished. History now also requires archived.
   - Saved notes kept citing deleted articles. Also fixed: an excerpt write racing deletion, a dedupe gap, unclipped titles, and the timeout message.
   - Accepted and documented: staleness with more than 200 finished items.
+- **Delta review of `4c64532` (Opus 5.5): APPROVE.** Two follow-ups were applied: a slow refresh can no longer replace a note generated in the open sheet or a newer device copy, and this record now says which commit each check covered.
 - **Not yet done.** Owner setup of `OPENROUTER_API_KEY` on Northflank, a backend deploy, an authorized app build, and a real generation checked for quality and cost. Dark theme and VoiceOver order in the sheet weren't checked.
 
 ## Not yet tested
