@@ -2,7 +2,8 @@ import ReaderCore
 import SwiftUI
 
 /// How the open article relates to articles already finished. AI-written, owner-gated by the server.
-/// Opening it shows a saved context only; generating is always an explicit tap because it costs money.
+/// The server writes notes for articles in the background and they arrive with sync. Opening this
+/// never generates; Generate Now and Regenerate are explicit.
 struct ReadingContextSheet: View {
   @EnvironmentObject var state: AppState
   @Environment(\.dismiss) private var dismiss
@@ -26,7 +27,9 @@ struct ReadingContextSheet: View {
         } else {
           Section {
             Text(
-              "Not ready yet. PageStash writes this in the background soon after an article is saved, comparing it with the articles you've marked Done."
+              item.kind == "brief"
+                ? "Briefs aren't summarized automatically. Generate one to compare this brief with the articles you've marked Done."
+                : "Not ready yet. PageStash usually writes this in the background soon after an article is saved, comparing it with the articles you've marked Done."
             )
           } footer: {
             Text(

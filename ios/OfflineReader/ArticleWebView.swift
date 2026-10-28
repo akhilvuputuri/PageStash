@@ -149,7 +149,7 @@ struct ArticleWebView: UIViewRepresentable {
       }
       if (metadata.context) {
         const context=add('a',metadata.context); context.href='\(Self.contextAction.absoluteString)'; context.setAttribute('role','button');
-        context.style.display='inline-block'; context.style.minHeight='44px'; context.style.lineHeight='44px'; context.style.padding='0 16px'; context.style.margin='4px 0 8px';
+        context.style.display='inline-block'; context.style.minHeight='44px'; context.style.boxSizing='border-box'; context.style.lineHeight='1.2'; context.style.padding='10px 16px'; context.style.margin='4px 0 8px';
         context.style.border='1px solid var(--reader-separator)'; context.style.borderRadius='999px'; context.style.textDecoration='none';
         context.style.fontFamily='-apple-system,system-ui,sans-serif'; context.style.fontWeight='600'; context.style.fontSize=(15*\(scale))+'px';
       }

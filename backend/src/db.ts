@@ -136,6 +136,10 @@ CREATE TABLE IF NOT EXISTS context_failures (
  item_id uuid PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
  content_version integer NOT NULL, attempts integer NOT NULL DEFAULT 0, next_at timestamptz NOT NULL
 );
+-- Additive: the revision of an item's last reading activity. Saving a reading-context note bumps
+-- the sync revision but keeps this, so "newest finished first" doesn't change. Null means it
+-- equals the revision.
+ALTER TABLE items ADD COLUMN IF NOT EXISTS activity_revision bigint;
 INSERT INTO schema_version(version) VALUES(4) ON CONFLICT DO NOTHING;
 `;
 

@@ -704,7 +704,7 @@ struct ReaderScreen: View {
                 error: item.error, finishLabel: canFinish(item) ? "Done Reading" : nil,
                 sources: item.sources.compactMap(URL.init(string:)),
                 contextLabel: state.readingContextEnabled && item.status == "ready"
-                  ? "Reading context" : nil),
+                  ? "Reading Context" : nil),
               scrollState: scrollState,
               progress: (try? state.store?.readingPosition(item.id)) ?? item.progress,
               fontSize: fontSize,

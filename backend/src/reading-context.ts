@@ -21,10 +21,16 @@ export interface ContextModel {
   complete(messages: ContextMessage[], signal: AbortSignal): Promise<string>;
 }
 
-/** Why a provider call produced no usable completion. Safe to log: never prompt or article text. */
+/**
+ * Why a provider call produced no usable completion. Safe to log: never prompt or article text.
+ * `billed` means the provider may have charged for it, so its reservation is kept.
+ * `providerWide` means the failure isn't about this article (key, credit, rate limit, outage).
+ */
 export class ContextProviderError extends Error {
   constructor(
     public category: string,
+    public billed: boolean,
+    public providerWide: boolean,
     public status?: number,
     public detail?: string,
   ) {
@@ -66,24 +72,41 @@ export function openRouterModel(apiKey: string, model: string): ContextModel {
           signal,
         });
       } catch (error) {
-        throw new ContextProviderError(
-          (error as { name?: string }).name === "TimeoutError" ? "timeout" : "network",
-        );
+        // A timeout may have reached the provider and been billed; a refused connection wasn't.
+        const timeout = (error as { name?: string }).name === "TimeoutError";
+        throw new ContextProviderError(timeout ? "timeout" : "network", timeout, true);
       }
-      const body = (await response.json().catch(() => ({}))) as {
-        error?: { message?: string; code?: number | string };
-        choices?: { finish_reason?: string; message?: { content?: string } }[];
+      let body: {
+        error?: { code?: number | string; metadata?: { error_type?: string } };
+        choices?: { finish_reason?: string; error?: unknown; message?: { content?: string } }[];
       };
-      if (!response.ok || body.error)
+      try {
+        body = await response.json();
+      } catch {
+        throw new ContextProviderError("bad_body", response.ok, true, response.status);
+      }
+      if (!response.ok) {
+        // Requests refused before generation aren't billed. Key, credit, rate-limit and server
+        // failures affect every article, not this one. Messages can repeat provider text, so
+        // only codes are logged.
+        const wide = [401, 402, 403, 408, 429].includes(response.status) || response.status >= 500;
         throw new ContextProviderError(
           "provider_error",
+          false,
+          wide,
           response.status,
-          String(body.error?.message ?? "").slice(0, 200),
+          String(body.error?.metadata?.error_type ?? body.error?.code ?? ""),
         );
+      }
       const choice = body.choices?.[0];
+      // A 200 with an error, an empty answer or a cut-off one has already been billed.
+      if (body.error || choice?.error)
+        throw new ContextProviderError("provider_error", true, false, response.status, "in_response");
       const text = choice?.message?.content;
       if (!text?.trim())
-        throw new ContextProviderError("empty_answer", response.status, choice?.finish_reason);
+        throw new ContextProviderError("empty_answer", true, false, response.status, choice?.finish_reason);
+      if (choice?.finish_reason === "length")
+        throw new ContextProviderError("truncated", true, false, response.status, "length");
       return text;
     },
   };

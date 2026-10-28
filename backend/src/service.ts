@@ -109,8 +109,13 @@ export class Service {
   onQueued?: () => void;
   /** Called when an import publishes readable content, so background reading context can start. */
   onPrepared?: () => void;
-  /** Generations in progress, so a repeated tap waits for the same answer instead of paying twice. */
+  /**
+   * Generations in progress, so a repeated tap waits for the same answer instead of paying twice.
+   * In memory, like the background pause below: the service runs as a single replica.
+   */
   private contextRuns = new Map<string, Promise<ReadingContext>>();
+  private contextPausedUntil = 0;
+  private contextPauseMs = 0;
   constructor(
     public db: Database,
     public config: Config,
@@ -554,7 +559,7 @@ export class Service {
     this.app(identity);
     // Moving to Trash keeps the first time it was trashed; restoring clears it.
     const result = await this.db.query(
-      `UPDATE items SET progress=COALESCE($3,progress),archived=COALESCE($4,archived),collections=COALESCE($5::jsonb,collections),deleted=COALESCE($6,deleted),trashed_at=CASE WHEN $7::boolean IS NULL THEN trashed_at WHEN $7 THEN COALESCE(trashed_at,now()) ELSE NULL END,revision=nextval('library_revision') WHERE id=$1 AND owner_id=$2 AND deleted=false RETURNING id`,
+      `UPDATE items SET activity_revision=NULL,progress=COALESCE($3,progress),archived=COALESCE($4,archived),collections=COALESCE($5::jsonb,collections),deleted=COALESCE($6,deleted),trashed_at=CASE WHEN $7::boolean IS NULL THEN trashed_at WHEN $7 THEN COALESCE(trashed_at,now()) ELSE NULL END,revision=nextval('library_revision') WHERE id=$1 AND owner_id=$2 AND deleted=false RETURNING id`,
       [
         id,
         identity.owner_id,
@@ -681,20 +686,28 @@ export class Service {
     const model = await this.requireContext(identity);
     const item = await this.contextItem(identity, id);
     const key = `${identity.owner_id}/${id}`;
+    const own = () => {
+      const run = this.runContext(identity, item, model).finally(() => this.contextRuns.delete(key));
+      this.contextRuns.set(key, run);
+      return run;
+    };
+    // Joining a background run: if it only stopped at the background cap, the owner's own
+    // budget still applies.
+    const join = (run: Promise<ReadingContext>) =>
+      run.catch((error) => {
+        if (error instanceof HTTPError && error.status === 429) return own();
+        throw error;
+      });
     const running = this.contextRuns.get(key);
-    if (running) return running;
+    if (running) return join(running);
     if (!regenerate) {
       const saved = await this.savedContext(identity, item);
       if (saved) return saved;
       // Another request may have started while the saved note was read.
       const started = this.contextRuns.get(key);
-      if (started) return started;
+      if (started) return join(started);
     }
-    const run = this.runContext(identity, item, model).finally(() =>
-      this.contextRuns.delete(key),
-    );
-    this.contextRuns.set(key, run);
-    return run;
+    return own();
   }
   private async contextItem(identity: Identity, id: string) {
     const result = await this.db.query<Item>(
@@ -732,7 +745,7 @@ export class Service {
     const finished = (
       await this.db.query<{ id: string }>(
         `SELECT id FROM items WHERE owner_id=$1 AND deleted=false AND trashed_at IS NULL AND status='ready' AND progress>=1 AND archived
-         ORDER BY revision DESC LIMIT ${HISTORY_LIMIT + 1}`,
+         ORDER BY COALESCE(activity_revision,revision) DESC LIMIT ${HISTORY_LIMIT + 1}`,
         [owner.owner_id],
       )
     ).rows.map((r) => r.id);
@@ -780,7 +793,7 @@ export class Service {
       }>(
         `SELECT id,title,site_name,content_version FROM items
          WHERE owner_id=$1 AND id<>$2 AND deleted=false AND trashed_at IS NULL AND status='ready' AND progress>=1 AND archived
-         ORDER BY revision DESC LIMIT ${HISTORY_LIMIT}`,
+         ORDER BY COALESCE(activity_revision,revision) DESC LIMIT ${HISTORY_LIMIT}`,
         [owner.owner_id, exclude],
       )
     ).rows;
@@ -875,13 +888,16 @@ export class Service {
         AbortSignal.timeout(60_000),
       );
     } catch (error) {
-      // No completion came back, so the reservation is given back.
-      await this.db.query(
-        `UPDATE context_usage SET ${column}=${column}-1 WHERE owner_id=$1 AND day=$2::date AND ${column}>0`,
-        [identity.owner_id, day],
-      );
+      const provider = error instanceof ContextProviderError ? error : undefined;
+      // Only a call the provider can't have billed gives its reservation back. An empty or
+      // cut-off answer, a 200 with an error, or a timeout keeps it, so the cap bounds spending.
+      if (!provider?.billed)
+        await this.db.query(
+          `UPDATE context_usage SET ${column}=${column}-1 WHERE owner_id=$1 AND day=$2::date AND ${column}>0`,
+          [identity.owner_id, day],
+        );
       logContextFailure(error, budget, "provider_call");
-      throw new HTTPError(502, "Reading context could not be generated. Try again.");
+      throw new ContextGenerationError(provider ? provider.providerWide : true);
     }
     let result: ContextResult;
     try {
@@ -889,7 +905,7 @@ export class Service {
     } catch (error) {
       // The provider answered and billed it, so an unusable answer keeps its reservation.
       logContextFailure(error, budget, "invalid_answer");
-      throw new HTTPError(502, "Reading context could not be generated. Try again.");
+      throw new ContextGenerationError(false);
     }
     const digest = historyDigest(rows);
     // Saving bumps the item's revision, so the note reaches the phone with the next sync.
@@ -900,7 +916,8 @@ export class Service {
          ON CONFLICT(owner_id,item_id) DO UPDATE SET content_version=excluded.content_version,history_digest=excluded.history_digest,
          history_count=excluded.history_count,model=excluded.model,result=excluded.result,generated_at=now()
          RETURNING generated_at),
-       bumped AS (UPDATE items SET revision=nextval('library_revision') WHERE id=$2 AND owner_id=$1 AND EXISTS(SELECT 1 FROM saved) RETURNING id)
+       bumped AS (UPDATE items SET activity_revision=COALESCE(activity_revision,revision),revision=nextval('library_revision')
+         WHERE id=$2 AND owner_id=$1 AND EXISTS(SELECT 1 FROM saved) RETURNING id)
        SELECT generated_at FROM saved`,
       [
         identity.owner_id,
@@ -930,33 +947,47 @@ export class Service {
   async runContextJob(): Promise<boolean> {
     const model = this.contextModel;
     if (!model || this.config.contextBackgroundDailyLimit < 1) return false;
+    // A provider-wide failure (key, credit, rate limit, outage) pauses all background work.
+    if (Date.now() < this.contextPausedUntil) return false;
     const owner = this.config.devAuth
       ? this.config.devEmail.toLowerCase()
       : this.config.ownerEmail;
+    if (!owner) return false;
+    // Only the owner's library is sent in the background. Accounts with only an entitlement row
+    // get notes when they ask, until there is an explicit opt-in for automatic sending.
     const next = await this.db.query<Item>(
       `SELECT i.* FROM items i JOIN accounts a ON a.id=i.owner_id
        WHERE i.deleted=false AND i.trashed_at IS NULL AND i.status='ready' AND i.kind='article'
-       AND ((a.email<>'' AND lower(a.email)=$1) OR EXISTS(SELECT 1 FROM account_entitlements e WHERE e.owner_id=i.owner_id AND e.feature=$2))
+       AND lower(a.email)=$1
        AND NOT EXISTS(SELECT 1 FROM reading_contexts c WHERE c.owner_id=i.owner_id AND c.item_id=i.id AND c.content_version=i.content_version)
-       AND NOT EXISTS(SELECT 1 FROM context_failures f WHERE f.item_id=i.id AND f.content_version=i.content_version AND (f.attempts>=$3 OR f.next_at>now()))
-       AND COALESCE((SELECT u.background FROM context_usage u WHERE u.owner_id=i.owner_id AND u.day=(now() AT TIME ZONE 'UTC')::date),0) < $4
+       AND NOT EXISTS(SELECT 1 FROM context_failures f WHERE f.item_id=i.id AND f.content_version=i.content_version AND (f.attempts>=$2 OR f.next_at>now()))
+       AND COALESCE((SELECT u.background FROM context_usage u WHERE u.owner_id=i.owner_id AND u.day=(now() AT TIME ZONE 'UTC')::date),0) < $3
        ORDER BY i.captured_at DESC, i.id DESC LIMIT 1`,
-      [owner, READING_CONTEXT, BACKGROUND_ATTEMPTS, this.config.contextBackgroundDailyLimit],
+      [owner, BACKGROUND_ATTEMPTS, this.config.contextBackgroundDailyLimit],
     );
     const item = next.rows[0];
     if (!item) return false;
     const key = `${item.owner_id}/${item.id}`;
-    if (this.contextRuns.has(key)) return false;
+    // The owner's own request for this item is running; check again shortly.
+    if (this.contextRuns.has(key)) return true;
     const run = this.runContext({ owner_id: item.owner_id }, item, model, "background").finally(
       () => this.contextRuns.delete(key),
     );
     this.contextRuns.set(key, run);
     try {
       await run;
+      this.contextPauseMs = 0;
       await this.db.query("DELETE FROM context_failures WHERE item_id=$1", [item.id]);
     } catch (error) {
       // The cap filled up between the pick and the reservation: nothing more to do today.
       if (error instanceof HTTPError && error.status === 429) return false;
+      // Not this article's fault: pause everything (15 minutes, doubling to an hour) and leave
+      // its attempts untouched, so an outage can't use up the backfill.
+      if (error instanceof ContextGenerationError && error.providerWide) {
+        this.contextPauseMs = Math.min(Math.max(this.contextPauseMs * 2, 15 * 60_000), 60 * 60_000);
+        this.contextPausedUntil = Date.now() + this.contextPauseMs;
+        return false;
+      }
       // Back off an hour per attempt, then leave it for the owner to ask.
       await this.db.query(
         `INSERT INTO context_failures(item_id,content_version,attempts,next_at)
@@ -1074,7 +1105,7 @@ export class Service {
       const published = await this.db.query(
         `WITH claimed AS (DELETE FROM jobs j WHERE j.id=$1 AND lease_token=$2 AND EXISTS(SELECT 1 FROM items WHERE id=j.id AND deleted=false) RETURNING id), inserted AS (
     INSERT INTO assets(id,item_id,role,mime,size,sha256,filename,storage_key) SELECT a.id,c.id,a.role,a.mime,a.size,a.sha256,a.filename,a.storage_key FROM jsonb_to_recordset($3::jsonb) AS a(id uuid,role text,mime text,size integer,sha256 text,filename text,storage_key text) CROSS JOIN claimed c RETURNING id)
-    UPDATE items SET status='ready',title=$4,author=$5,error=$6,site_name=$7,content_version=content_version+1,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) RETURNING id`,
+    UPDATE items SET status='ready',title=$4,author=$5,error=$6,site_name=$7,content_version=content_version+1,activity_revision=NULL,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) RETURNING id`,
         [
           row.id,
           lease,
@@ -1120,11 +1151,18 @@ function historyDigest(rows: { id: string }[]) {
   return hash(rows.map((r) => r.id).sort().join(","));
 }
 
-/** One line per failure, with a fixed category and the provider's own short reason. Never content. */
+/** A failed generation. `providerWide` failures pause background work instead of counting against the item. */
+class ContextGenerationError extends HTTPError {
+  constructor(public providerWide: boolean) {
+    super(502, "Reading context could not be generated. Try again.");
+  }
+}
+
+/** One line per failure, with a fixed category and the provider's status and code. Never content. */
 function logContextFailure(error: unknown, budget: string, fallback: string) {
   const detail =
     error instanceof ContextProviderError
-      ? { category: error.category, status: error.status, detail: error.detail }
+      ? { category: error.category, status: error.status, detail: error.detail, billed: error.billed }
       : // Other messages can quote the answer, so only the error's kind is logged.
         { category: fallback, detail: (error as Error)?.name };
   console.error("Reading context failed", JSON.stringify({ budget, ...detail }));

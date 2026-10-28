@@ -104,9 +104,9 @@ public final class LocalStore: @unchecked Sendable {
           if let edit = try rows("SELECT json FROM edits WHERE id=?", [item.id]).first?.first {
             item = try decoder.decode(ItemPatch.self, from: Data(edit.utf8)).applying(to: item)
           }
-          if let context = item.readingContext {
+          if let context = item.syncedContext {
             try storeSyncedContext(context, for: item)
-            item.readingContext = nil
+            item.syncedContext = nil
           }
           if let undo = try storedReadingUndo(), undo.itemId == item.id,
             item.deleted || !item.archived || item.progress != 1

@@ -5,17 +5,22 @@ import { openDatabase, migrate, type Database } from "../src/db.js";
 import { configuration } from "../src/config.js";
 import { Service, type Identity } from "../src/service.js";
 import { readerHTML } from "../src/content.js";
-import { requestBody, type ContextMessage, type ContextModel } from "../src/reading-context.js";
+import {
+  ContextProviderError,
+  requestBody,
+  type ContextMessage,
+  type ContextModel,
+} from "../src/reading-context.js";
 
 let db: Database, service: Service, owner: Identity, other: Identity;
 const files = new Map<string, Buffer>();
 const calls: ContextMessage[][] = [];
-let fail = false;
+let failure: Error | undefined;
 const model: ContextModel = {
   model: "test/model",
   async complete(messages) {
     calls.push(messages);
-    if (fail) throw new Error("provider down");
+    if (failure) throw failure;
     return JSON.stringify({ summary: "Background note.", builds_on: [], covered: [], new_ideas: [] });
   },
 };
@@ -65,7 +70,9 @@ before(async () => {
 after(async () => db.close());
 beforeEach(async () => {
   calls.length = 0;
-  fail = false;
+  failure = undefined;
+  (service as any).contextPausedUntil = 0;
+  (service as any).contextPauseMs = 0;
   await db.query("DELETE FROM context_usage");
   await db.query("DELETE FROM context_failures");
   await db.query("DELETE FROM reading_contexts");
@@ -79,7 +86,7 @@ test("the request keeps reasoning low and leaves room for the answer", () => {
   assert.deepEqual(body.provider, { data_collection: "deny" });
 });
 
-test("generates missing notes newest first, for entitled owners' articles only, and syncs them", async () => {
+test("generates missing notes newest first, for the owner's articles only, and syncs them", async () => {
   const older = await item(owner, "Older article", { capturedAt: "2026-10-01T00:00:00Z" });
   const newer = await item(owner, "Newer article", { capturedAt: "2026-10-20T00:00:00Z" });
   await item(owner, "A brief", { kind: "brief" });
@@ -118,24 +125,26 @@ test("stops at the background daily limit", async () => {
   assert.equal(await off.runContextJob(), false);
 });
 
-test("a failing item backs off, then stops after three attempts", async () => {
+test("an item whose answers fail backs off, then stops after three attempts, and keeps billed reservations", async () => {
   const id = await item(owner, "Failing article");
-  fail = true;
-  assert.equal(await service.runContextJob(), true);
+  // Room for three billed attempts under the background cap.
+  const roomy = new Service(db, config("10"), storage, undefined, model);
+  failure = new ContextProviderError("empty_answer", true, false, 200, "length");
+  assert.equal(await roomy.runContextJob(), true);
   const first = await db.query<{ attempts: number }>("SELECT attempts FROM context_failures WHERE item_id=$1", [id]);
   assert.equal(first.rows[0].attempts, 1);
-  assert.equal(await service.runContextJob(), false, "it waits out the backoff");
+  assert.equal(await roomy.runContextJob(), false, "it waits out the backoff");
   await db.query("UPDATE context_failures SET next_at=now()-interval '1 second'");
-  assert.equal(await service.runContextJob(), true);
+  assert.equal(await roomy.runContextJob(), true);
   await db.query("UPDATE context_failures SET next_at=now()-interval '1 second'");
-  assert.equal(await service.runContextJob(), true);
+  assert.equal(await roomy.runContextJob(), true);
   await db.query("UPDATE context_failures SET next_at=now()-interval '1 second'");
-  assert.equal(await service.runContextJob(), false, "three attempts, then the owner can still ask");
+  assert.equal(await roomy.runContextJob(), false, "three attempts, then the owner can still ask");
   const usage = await db.query<{ background: number }>("SELECT background FROM context_usage");
-  assert.equal(usage.rows[0]?.background ?? 0, 0, "calls with no completion are refunded");
-  fail = false;
-  assert.equal((await service.generateContext(owner, id)).summary, "Background note.");
-  await service.runContextJob();
+  assert.equal(usage.rows[0]?.background, 3, "billed empty answers keep their reservation");
+  failure = undefined;
+  assert.equal((await roomy.generateContext(owner, id)).summary, "Background note.");
+  await roomy.runContextJob();
   assert.equal((await db.query("SELECT 1 FROM context_failures WHERE item_id=$1", [id])).rows.length, 1);
 });
 
@@ -145,4 +154,43 @@ test("does nothing without a model", async () => {
   assert.equal(await unconfigured.runContextJob(), false);
   const page = await unconfigured.library(owner, 0);
   assert.ok(page.items.every((i: any) => !("reading_context" in i)));
+});
+
+test("a provider-wide failure pauses all background work without using up any item's attempts", async () => {
+  const id = await item(owner, "Outage article");
+  await item(owner, "Another article");
+  failure = new ContextProviderError("provider_error", false, true, 401, "");
+  assert.equal(await service.runContextJob(), false);
+  assert.equal(calls.length, 1);
+  assert.equal(await service.runContextJob(), false, "paused");
+  assert.equal(calls.length, 1, "no requests while paused");
+  assert.equal((await db.query("SELECT 1 FROM context_failures")).rows.length, 0);
+  const usage = await db.query<{ background: number }>("SELECT background FROM context_usage");
+  assert.equal(usage.rows[0]?.background ?? 0, 0, "an unbilled refusal is refunded");
+  assert.ok((service as any).contextPauseMs >= 15 * 60_000);
+  failure = undefined;
+  (service as any).contextPausedUntil = 0;
+  assert.equal(await service.runContextJob(), true);
+  assert.equal((service as any).contextPauseMs, 0, "a success resets the pause");
+  assert.ok(id);
+});
+
+test("saving a note doesn't reorder the finished-article history", async () => {
+  const older = await item(owner, "Finished long ago", { capturedAt: "2026-01-01T00:00:00Z" });
+  const recent = await item(owner, "Finished just now", { capturedAt: "2026-10-01T00:00:00Z" });
+  await service.update(owner, older, { progress: 1, archived: true });
+  await service.update(owner, recent, { progress: 1, archived: true });
+  const current = await item(owner, "New save");
+  const order = async () => {
+    calls.length = 0;
+    await service.generateContext(owner, current, true);
+    return [...calls[0][1].content.matchAll(/^R\d+ \| ([^|\n]+)/gm)].map((m) => m[1].trim());
+  };
+  assert.deepEqual(await order(), ["Finished just now", "Finished long ago"]);
+  // Background notes for both finished articles bump their sync revisions, oldest capture last.
+  await db.query("DELETE FROM context_usage");
+  while (await service.runContextJob()) {}
+  assert.deepEqual(await order(), ["Finished just now", "Finished long ago"]);
+  const note = await service.readingContext(owner, current);
+  assert.equal(note.stale, false, "unchanged history isn't reported as stale");
 });
