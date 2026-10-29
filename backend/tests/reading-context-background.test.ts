@@ -7,6 +7,7 @@ import { Service, type Identity } from "../src/service.js";
 import { readerHTML } from "../src/content.js";
 import {
   ContextProviderError,
+  readUsage,
   requestBody,
   type ContextMessage,
   type ContextModel,
@@ -80,11 +81,55 @@ beforeEach(async () => {
   await db.query("DELETE FROM items");
 });
 
-test("the request keeps reasoning low and leaves room for the answer", () => {
-  const body = requestBody("google/gemini-3.8-flash", []);
+test("the request keeps reasoning low, uses the configured cap and asks for usage", () => {
+  const body = requestBody("google/gemini-3.8-flash", [], 16_000);
   assert.deepEqual(body.reasoning, { effort: "low", exclude: true });
-  assert.ok(body.max_tokens >= 4000);
+  assert.equal(body.max_tokens, 16_000);
+  assert.deepEqual(body.usage, { include: true });
   assert.deepEqual(body.provider, { data_collection: "deny" });
+  assert.equal(config().contextMaxTokens, 16_000);
+  assert.equal(
+    configuration({ DEV_AUTH: "true", DEV_PASSWORD: "x", READING_CONTEXT_MAX_TOKENS: "6000" }).contextMaxTokens,
+    6000,
+  );
+  assert.throws(() => configuration({ DEV_AUTH: "true", DEV_PASSWORD: "x", READING_CONTEXT_MAX_TOKENS: "50" }));
+});
+
+test("usage is read as plain numbers, saved with the note, and anything malformed is dropped", async () => {
+  assert.deepEqual(
+    readUsage(
+      { prompt_tokens: 9000, completion_tokens: 900, cost: 0.0042, completion_tokens_details: { reasoning_tokens: 600 } },
+      "stop",
+    ),
+    { prompt_tokens: 9000, completion_tokens: 900, reasoning_tokens: 600, cost: 0.0042, finish_reason: "stop" },
+  );
+  assert.deepEqual(readUsage({ prompt_tokens: "lots", cost: -1 }), {
+    prompt_tokens: undefined,
+    completion_tokens: undefined,
+    reasoning_tokens: undefined,
+    cost: undefined,
+    finish_reason: undefined,
+  });
+  const id = await item(owner, "Measured article");
+  const measured: ContextModel = {
+    model: "test/measured",
+    async complete() {
+      return {
+        text: JSON.stringify({ summary: "Measured.", builds_on: [], covered: [], new_ideas: [] }),
+        usage: { prompt_tokens: 8000, completion_tokens: 700, reasoning_tokens: 400, cost: 0.003, finish_reason: "stop" },
+      };
+    },
+  };
+  const svc = new Service(db, config(), storage, undefined, measured);
+  await svc.generateContext(owner, id);
+  const saved = await db.query<{ usage: Record<string, unknown> }>("SELECT usage FROM reading_contexts WHERE item_id=$1", [id]);
+  assert.deepEqual(saved.rows[0].usage, {
+    prompt_tokens: 8000,
+    completion_tokens: 700,
+    reasoning_tokens: 400,
+    cost: 0.003,
+    finish_reason: "stop",
+  });
 });
 
 test("generates missing notes newest first, for the owner's articles only, and syncs them", async () => {

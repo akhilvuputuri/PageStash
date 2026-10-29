@@ -21,7 +21,7 @@ const service = new Service(
   storage(config),
   undefined,
   config.openRouterKey
-    ? openRouterModel(config.openRouterKey, config.contextModel)
+    ? openRouterModel(config.openRouterKey, config.contextModel, config.contextMaxTokens)
     : undefined,
 );
 const worker = new ImportWorker(

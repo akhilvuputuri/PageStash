@@ -18,6 +18,8 @@ export interface Config {
   contextDailyLimit: number;
   /** Generations made in the background, after saves and for the backfill, per account per UTC day. */
   contextBackgroundDailyLimit: number;
+  /** Output-token ceiling per call, reasoning included. Only generated tokens are billed. */
+  contextMaxTokens: number;
 }
 export function supabaseHeaders(key: string): Record<string, string> {
   // Modern sb_secret keys are API keys, not JWT bearer tokens.
@@ -87,6 +89,7 @@ export function configuration(env = process.env): Config {
       300,
       "READING_CONTEXT_BACKGROUND_DAILY_LIMIT",
     ),
+    contextMaxTokens: maxTokens(env.READING_CONTEXT_MAX_TOKENS),
   };
 }
 
@@ -96,4 +99,12 @@ function dailyLimit(value: string | undefined, fallback: number, name: string): 
   if (!Number.isInteger(limit) || limit < 0 || limit > 1000)
     throw new Error(`${name} must be a whole number from 0 to 1000.`);
   return limit;
+}
+
+function maxTokens(value: string | undefined): number {
+  if (value === undefined || value === "") return 16_000;
+  const tokens = Number(value);
+  if (!Number.isInteger(tokens) || tokens < 1_000 || tokens > 64_000)
+    throw new Error("READING_CONTEXT_MAX_TOKENS must be a whole number from 1000 to 64000.");
+  return tokens;
 }
