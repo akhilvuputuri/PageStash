@@ -15,10 +15,23 @@ export interface ContextMessage {
   role: "system" | "user";
   content: string;
 }
+/** What a call consumed, as OpenRouter reports it. Numbers only; safe to log and store. */
+export interface ContextUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  reasoning_tokens?: number;
+  /** OpenRouter's reported charge in credits (one credit is one US dollar), when it includes one. */
+  cost?: number;
+  finish_reason?: string;
+}
+export interface ContextAnswer {
+  text: string;
+  usage?: ContextUsage;
+}
 /** A model that answers with one JSON object. Injected so tests never call a provider. */
 export interface ContextModel {
   readonly model: string;
-  complete(messages: ContextMessage[], signal: AbortSignal): Promise<string>;
+  complete(messages: ContextMessage[], signal: AbortSignal): Promise<string | ContextAnswer>;
 }
 
 /**
@@ -33,6 +46,7 @@ export class ContextProviderError extends Error {
     public providerWide: boolean,
     public status?: number,
     public detail?: string,
+    public usage?: ContextUsage,
   ) {
     super(category);
   }
@@ -40,14 +54,17 @@ export class ContextProviderError extends Error {
 
 /**
  * The OpenRouter request. Gemini Flash and similar models reason before answering, and that
- * reasoning counts against max_tokens, so effort is kept low and there is room left for the answer.
+ * reasoning counts against max_tokens. The cap is generous because only generated tokens are
+ * billed; recorded usage shows what notes really need, so it can be brought down later.
  */
-export function requestBody(model: string, messages: ContextMessage[]) {
+export function requestBody(model: string, messages: ContextMessage[], maxTokens: number) {
   return {
     model,
     messages,
     temperature: 0.2,
-    max_tokens: 4000,
+    max_tokens: maxTokens,
+    // OpenRouter returns usage on every response now; this older flag is harmless and explicit.
+    usage: { include: true },
     reasoning: { effort: "low", exclude: true },
     response_format: { type: "json_object" },
     // Only providers that don't retain or train on prompts.
@@ -55,7 +72,32 @@ export function requestBody(model: string, messages: ContextMessage[]) {
   };
 }
 
-export function openRouterModel(apiKey: string, model: string): ContextModel {
+/** Reads OpenRouter's usage block into plain numbers, ignoring anything malformed. */
+export function readUsage(
+  usage: unknown,
+  finishReason?: unknown,
+): ContextUsage | undefined {
+  const finish = clipReason(finishReason);
+  if (!usage || typeof usage !== "object") return finish ? { finish_reason: finish } : undefined;
+  const value = usage as {
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+    cost?: unknown;
+    completion_tokens_details?: { reasoning_tokens?: unknown };
+  };
+  const number = (n: unknown) => (typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : undefined);
+  return {
+    prompt_tokens: number(value.prompt_tokens),
+    completion_tokens: number(value.completion_tokens),
+    reasoning_tokens: number(value.completion_tokens_details?.reasoning_tokens),
+    cost: number(value.cost),
+    finish_reason: finish,
+  };
+}
+/** A finish reason is a short provider word; anything else is dropped. */
+const clipReason = (value: unknown) => (typeof value === "string" ? value.slice(0, 40) : undefined);
+
+export function openRouterModel(apiKey: string, model: string, maxTokens: number): ContextModel {
   return {
     model,
     async complete(messages, signal) {
@@ -68,7 +110,7 @@ export function openRouterModel(apiKey: string, model: string): ContextModel {
             "Content-Type": "application/json",
             "X-Title": "PageStash",
           },
-          body: JSON.stringify(requestBody(model, messages)),
+          body: JSON.stringify(requestBody(model, messages, maxTokens)),
           signal,
         });
       } catch (error) {
@@ -79,6 +121,7 @@ export function openRouterModel(apiKey: string, model: string): ContextModel {
       let body: {
         error?: { code?: number | string; metadata?: { error_type?: string } };
         choices?: { finish_reason?: string; error?: unknown; message?: { content?: string } }[];
+        usage?: unknown;
       };
       try {
         body = await response.json();
@@ -100,15 +143,16 @@ export function openRouterModel(apiKey: string, model: string): ContextModel {
         );
       }
       const choice = body.choices?.[0];
+      const usage = readUsage(body.usage, choice?.finish_reason);
       // A 200 with an error, an empty answer or a cut-off one has already been billed.
       if (body.error || choice?.error)
-        throw new ContextProviderError("provider_error", true, false, response.status, "in_response");
+        throw new ContextProviderError("provider_error", true, false, response.status, "in_response", usage);
       const text = choice?.message?.content;
       if (!text?.trim())
-        throw new ContextProviderError("empty_answer", true, false, response.status, choice?.finish_reason);
+        throw new ContextProviderError("empty_answer", true, false, response.status, clipReason(choice?.finish_reason), usage);
       if (choice?.finish_reason === "length")
-        throw new ContextProviderError("truncated", true, false, response.status, "length");
-      return text;
+        throw new ContextProviderError("truncated", true, false, response.status, "length", usage);
+      return { text, usage };
     },
   };
 }

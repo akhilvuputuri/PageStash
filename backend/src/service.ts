@@ -27,6 +27,7 @@ import {
   parseContext,
   ContextProviderError,
   type ContextModel,
+  type ContextUsage,
   type ContextResult,
   type HistoryEntry,
 } from "./reading-context.js";
@@ -888,11 +889,14 @@ export class Service {
         "Today's reading-context limit is used up. Saved summaries still open.",
       );
     let answer: string;
+    let usage: ContextUsage | undefined;
     try {
-      answer = await model.complete(
+      const reply = await model.complete(
         contextPrompt({ title: item.title, site: item.site_name ?? null, text }, history),
         AbortSignal.timeout(60_000),
       );
+      answer = typeof reply === "string" ? reply : reply.text;
+      usage = typeof reply === "string" ? undefined : reply.usage;
     } catch (error) {
       const provider = error instanceof ContextProviderError ? error : undefined;
       // Only a call the provider can't have billed gives its reservation back. An empty or
@@ -910,17 +914,17 @@ export class Service {
       result = parseContext(answer, history);
     } catch (error) {
       // The provider answered and billed it, so an unusable answer keeps its reservation.
-      logContextFailure(error, budget, "invalid_answer");
+      logContextFailure(error, budget, "invalid_answer", usage);
       throw new ContextGenerationError(false);
     }
     const digest = historyDigest(rows);
     // Saving bumps the item's revision, so the note reaches the phone with the next sync.
     const saved = await this.db.query<{ generated_at: Date | string }>(
       `WITH saved AS (
-         INSERT INTO reading_contexts(owner_id,item_id,content_version,history_digest,history_count,model,result)
-         SELECT $1,$2,$3,$4,$5,$6,$7::jsonb WHERE EXISTS(SELECT 1 FROM items WHERE id=$2 AND owner_id=$1 AND deleted=false AND content_version=$3)
+         INSERT INTO reading_contexts(owner_id,item_id,content_version,history_digest,history_count,model,result,usage)
+         SELECT $1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb WHERE EXISTS(SELECT 1 FROM items WHERE id=$2 AND owner_id=$1 AND deleted=false AND content_version=$3)
          ON CONFLICT(owner_id,item_id) DO UPDATE SET content_version=excluded.content_version,history_digest=excluded.history_digest,
-         history_count=excluded.history_count,model=excluded.model,result=excluded.result,generated_at=now()
+         history_count=excluded.history_count,model=excluded.model,result=excluded.result,usage=excluded.usage,generated_at=now()
          RETURNING generated_at),
        bumped AS (UPDATE items SET activity_revision=COALESCE(activity_revision,revision),revision=nextval('library_revision')
          WHERE id=$2 AND owner_id=$1 AND EXISTS(SELECT 1 FROM saved) RETURNING id)
@@ -933,9 +937,12 @@ export class Service {
         rows.length,
         model.model,
         JSON.stringify(result),
+        usage ? JSON.stringify(usage) : null,
       ],
     );
     if (!saved.rows[0]) throw new HTTPError(404, "Item not found.");
+    // Numbers only, so the output cap can be sized from real notes.
+    console.log("Reading context generated", JSON.stringify({ budget, model: model.model, ...usage }));
     return {
       ...result,
       item_id: item.id,
@@ -1170,11 +1177,17 @@ class ContextGenerationError extends HTTPError {
 }
 
 /** One line per failure, with a fixed category and the provider's status and code. Never content. */
-function logContextFailure(error: unknown, budget: string, fallback: string) {
+function logContextFailure(
+  error: unknown,
+  budget: string,
+  fallback: string,
+  usage?: ContextUsage,
+) {
   const detail =
     error instanceof ContextProviderError
       ? { category: error.category, status: error.status, detail: error.detail, billed: error.billed }
       : // Other messages can quote the answer, so only the error's kind is logged.
         { category: fallback, detail: (error as Error)?.name };
-  console.error("Reading context failed", JSON.stringify({ budget, ...detail }));
+  const spent = error instanceof ContextProviderError ? error.usage : usage;
+  console.error("Reading context failed", JSON.stringify({ budget, ...spent, ...detail }));
 }

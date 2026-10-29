@@ -706,6 +706,22 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Backfill cost and pace against the owner's library.
   - A backend deploy and an app release, which need the owner's authorization.
 
+### Reading context: a generous output cap and recorded usage, 29 October 2026
+
+- **Request (reported).** The owner asked to start the output cap much higher, measure what notes really use, and lower it afterwards.
+- **Change.**
+  - `READING_CONTEXT_MAX_TOKENS` (default 16,000, allowed from 1,000 to 64,000) replaces the fixed 4,000. Only generated tokens are billed, so the cap is a runaway guard. At Gemini 3.8 Flash's standard output price ($3.75 per million tokens), a call that used all 16,000 tokens would cost about $0.06, plus roughly 10,000 to 15,000 input tokens.
+  - OpenRouter returns usage on every response. Each saved note stores prompt, completion and reasoning tokens, the reported cost and the finish reason in `reading_contexts.usage` (additive schema version 5). Timed-out calls are billed but return no usage, so they show only in the failure log.
+  - Each generation logs a "Reading context generated" line with those numbers only. Failures log them too when the provider returned them.
+  - ARCHITECTURE gives a query for sizing the cap.
+- **Independent review of `462ee1f` (Opus 5.5): REQUEST CHANGES.** All addressed:
+  - Blocking: a finish reason without a usage block skipped the type check and the 40-character clip, and the empty-answer detail wasn't clipped. Both are clipped now, with tests.
+  - The worst-case cost was given at the flex price; it's corrected to standard.
+  - The docs say usage is returned on every response, and that timeouts are missing from the recorded usage.
+  - Also fixed: the doc bullets' placement, a duplicate comment and a redundant log merge.
+- **Checks (tested).** `npm run check`, `npm test` (47 passed: the request and cap test was updated, and one new test covers usage parsing, clipping and storage), `npm run build`, and `npm audit` with 0 vulnerabilities.
+- **Not yet verified.** Real usage figures, which will come from the first deployed notes.
+
 ## Not yet tested
 
 - Reading context against a real provider: answer quality, latency and cost per note, and the sheet in Dark and with VoiceOver.

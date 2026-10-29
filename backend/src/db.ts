@@ -141,6 +141,9 @@ CREATE TABLE IF NOT EXISTS context_failures (
 -- equals the revision.
 ALTER TABLE items ADD COLUMN IF NOT EXISTS activity_revision bigint;
 INSERT INTO schema_version(version) VALUES(4) ON CONFLICT DO NOTHING;
+-- Additive: what each note's call consumed (tokens, reported cost, finish reason), to size the cap.
+ALTER TABLE reading_contexts ADD COLUMN IF NOT EXISTS usage jsonb;
+INSERT INTO schema_version(version) VALUES(5) ON CONFLICT DO NOTHING;
 `;
 
 export async function migrate(db: Database) {
