@@ -722,6 +722,27 @@ Requested by the owner after using 0.4.0 on the iPhone.
 - **Checks (tested).** `npm run check`, `npm test` (47 passed: the request and cap test was updated, and one new test covers usage parsing, clipping and storage), `npm run build`, and `npm audit` with 0 vulnerabilities.
 - **Not yet verified.** Real usage figures, which will come from the first deployed notes.
 
+### Background reading context deployed, and generation confirmed, 29 October 2026
+
+- **Deploy (reported, from Northflank).** With the owner's authorization, build `married-grass-6826` of `1489841` (#67 and #68) was started manually from the Commits page and deployed by the existing deploy-on-build setting. Deployment `reader-api-55d57d78f6` shows Running 1/1, 1/1 health checks passing, 0 restarts.
+- **Live checks (tested, 02:52 UTC).** `/health` 200, anonymous `/v1/library` 401, anonymous `/v1/features` 401, and OAuth discovery 200.
+- **Generation works (measured, from the Northflank logs).**
+  - The background worker started on deploy. In its first two minutes it logged 11 "Reading context generated" lines and no failures, about one every 11 seconds.
+  - Every call finished with `stop`.
+  - Input was 1,329–6,257 tokens and output 104–372 tokens. OpenRouter reported 0 reasoning tokens.
+  - Reported cost was $0.0014–$0.0057 a note, about $0.0035 on average. At that rate the 300-a-day background cap is about $1 a day at most.
+  - The 0.5.0 failure had been put down to reasoning using up the old 1,200-token cap. With low effort it now reports 0 reasoning tokens. That is consistent with the hypothesis but doesn't prove it.
+- **Cap sizing (hypothesis).** The largest output so far is about 2% of the 16,000 cap, so it can come down once a few days of usage are in.
+
+### PageStash 0.5.1 release, 29 October 2026
+
+- **Change.** Ships the reworked Reading Context (#67) to the owner's iPhone through internal TestFlight, authorized by the owner. Its backend is already deployed: `1489841`, Northflank `married-grass-6826` (see above).
+  - A **Reading Context** button under the title opens the note in one tap.
+  - Notes synced with the library open offline.
+  - The empty state offers **Generate Now**.
+  - The version goes to 0.5.1 (build 14) in `scripts/generate-project.py`, with `project.pbxproj` regenerated.
+- **Checks (tested, on the release branch):** ReaderCore 47 tests pass, and the unsigned device and simulator builds succeed. Native presentation tests run in CI.
+
 ## Not yet tested
 
 - Reading context against a real provider: answer quality, latency and cost per note, and the sheet in Dark and with VoiceOver.
