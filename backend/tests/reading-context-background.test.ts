@@ -110,6 +110,8 @@ test("usage is read as plain numbers, saved with the note, and anything malforme
     cost: undefined,
     finish_reason: undefined,
   });
+  assert.deepEqual(readUsage(undefined, "x".repeat(100)), { finish_reason: "x".repeat(40) });
+  assert.equal(readUsage(null, { a: 1 }), undefined, "a non-string finish reason is dropped");
   const id = await item(owner, "Measured article");
   const measured: ContextModel = {
     model: "test/measured",

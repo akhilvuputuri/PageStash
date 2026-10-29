@@ -15,13 +15,12 @@ export interface ContextMessage {
   role: "system" | "user";
   content: string;
 }
-/** A model that answers with one JSON object. Injected so tests never call a provider. */
 /** What a call consumed, as OpenRouter reports it. Numbers only; safe to log and store. */
 export interface ContextUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   reasoning_tokens?: number;
-  /** OpenRouter's reported charge in US dollars, when it includes one. */
+  /** OpenRouter's reported charge in credits (one credit is one US dollar), when it includes one. */
   cost?: number;
   finish_reason?: string;
 }
@@ -64,6 +63,7 @@ export function requestBody(model: string, messages: ContextMessage[], maxTokens
     messages,
     temperature: 0.2,
     max_tokens: maxTokens,
+    // OpenRouter returns usage on every response now; this older flag is harmless and explicit.
     usage: { include: true },
     reasoning: { effort: "low", exclude: true },
     response_format: { type: "json_object" },
@@ -75,9 +75,10 @@ export function requestBody(model: string, messages: ContextMessage[], maxTokens
 /** Reads OpenRouter's usage block into plain numbers, ignoring anything malformed. */
 export function readUsage(
   usage: unknown,
-  finishReason?: string,
+  finishReason?: unknown,
 ): ContextUsage | undefined {
-  if (!usage || typeof usage !== "object") return finishReason ? { finish_reason: finishReason } : undefined;
+  const finish = clipReason(finishReason);
+  if (!usage || typeof usage !== "object") return finish ? { finish_reason: finish } : undefined;
   const value = usage as {
     prompt_tokens?: unknown;
     completion_tokens?: unknown;
@@ -90,9 +91,11 @@ export function readUsage(
     completion_tokens: number(value.completion_tokens),
     reasoning_tokens: number(value.completion_tokens_details?.reasoning_tokens),
     cost: number(value.cost),
-    finish_reason: typeof finishReason === "string" ? finishReason.slice(0, 40) : undefined,
+    finish_reason: finish,
   };
 }
+/** A finish reason is a short provider word; anything else is dropped. */
+const clipReason = (value: unknown) => (typeof value === "string" ? value.slice(0, 40) : undefined);
 
 export function openRouterModel(apiKey: string, model: string, maxTokens: number): ContextModel {
   return {
@@ -146,7 +149,7 @@ export function openRouterModel(apiKey: string, model: string, maxTokens: number
         throw new ContextProviderError("provider_error", true, false, response.status, "in_response", usage);
       const text = choice?.message?.content;
       if (!text?.trim())
-        throw new ContextProviderError("empty_answer", true, false, response.status, choice?.finish_reason, usage);
+        throw new ContextProviderError("empty_answer", true, false, response.status, clipReason(choice?.finish_reason), usage);
       if (choice?.finish_reason === "length")
         throw new ContextProviderError("truncated", true, false, response.status, "length", usage);
       return { text, usage };

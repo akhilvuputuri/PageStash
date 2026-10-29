@@ -1185,8 +1185,9 @@ function logContextFailure(
 ) {
   const detail =
     error instanceof ContextProviderError
-      ? { category: error.category, status: error.status, detail: error.detail, billed: error.billed, ...error.usage }
+      ? { category: error.category, status: error.status, detail: error.detail, billed: error.billed }
       : // Other messages can quote the answer, so only the error's kind is logged.
         { category: fallback, detail: (error as Error)?.name };
-  console.error("Reading context failed", JSON.stringify({ budget, ...usage, ...detail }));
+  const spent = error instanceof ContextProviderError ? error.usage : usage;
+  console.error("Reading context failed", JSON.stringify({ budget, ...spent, ...detail }));
 }
