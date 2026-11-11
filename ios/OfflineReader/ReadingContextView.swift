@@ -99,8 +99,9 @@ struct ReadingContextSheet: View {
       context = state.localReadingContext(current)
       failure = ai.failure(for: current)
       loading = context == nil && !onDevice && state.readingContextEnabled
-      // On the device, writing is free and private, so a missing note is written now.
-      if context == nil, onDevice, job == nil, failure == nil, readable {
+      // On the device, writing is free and private, so a missing note is written now. Never in
+      // preview mode: the synthetic library is for checking layout, not running the model.
+      if context == nil, onDevice, job == nil, failure == nil, readable, !state.previewMode {
         Task { await generate() }
       }
       // Entitled accounts: let the server say whether its note is out of date. A slow refresh must
@@ -133,9 +134,16 @@ struct ReadingContextSheet: View {
       return
         "The article's text, plus the titles, sites and opening lines of your finished articles, are sent to an AI provider through OpenRouter."
     }
-    return ai.allowsPrivateCloud
+    var text =
+      ai.allowsPrivateCloud
       ? "Apple Intelligence writes this from the article's text and the titles and openings of articles you've marked Done: on your iPhone, or for a long article, with Apple's Private Cloud Compute, as you allowed in Settings."
-      : "Apple Intelligence writes this on your iPhone from the article's text and the titles and openings of articles you've marked Done. Nothing is sent anywhere."
+      : "Apple Intelligence writes this on your iPhone from the article's text and the titles and openings of articles you've marked Done, without sending them anywhere."
+    // This account also has server-written notes, whose background worker may send articles.
+    if state.readingContextEnabled {
+      text +=
+        " Your account also has server-written notes: for those, articles and your finished articles' titles and openings are sent to an AI provider through OpenRouter."
+    }
+    return text
   }
 
   @ViewBuilder private func progress(_ job: LocalAI.Job) -> some View {
@@ -286,7 +294,7 @@ struct ReadingContextSheet: View {
         "Written by Apple's Private Cloud Compute, which received the article's text and the titles and openings of your finished articles."
       )
     } else if context.isLocal {
-      if let notice = ai.cloudNotice(for: current) {
+      if let notice = context.cloudFallbackNotice {
         // The private cloud was tried first, so "nothing was sent" may not hold.
         parts.append("Written on this iPhone by Apple Intelligence.")
         parts.append(notice)

@@ -170,6 +170,18 @@ public final class LocalStore: @unchecked Sendable {
       }
     }
   }
+  /// Whether a reading context is saved for the item's current content. Cheap: decodes only the
+  /// content version, for checks made while views render.
+  public func hasReadingContext(_ item: ReadingItem) -> Bool {
+    struct Version: Decodable { let contentVersion: Int }
+    return
+      (try? synchronized { () -> Bool in
+        guard let json = try rows("SELECT json FROM contexts WHERE item=?", [item.id]).first?.first,
+          let version = try? decoder.decode(Version.self, from: Data(json.utf8))
+        else { return false }
+        return version.contentVersion == item.contentVersion
+      }) ?? false
+  }
   /// The saved reading context for an item's current content, so it opens offline.
   public func readingContext(_ item: ReadingItem) throws -> ReadingContext? {
     try synchronized {

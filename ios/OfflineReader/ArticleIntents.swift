@@ -173,8 +173,9 @@ struct GetReadingContextIntent: AppIntent {
       throw $article.needsValueError("Which article?")
     }
     let item = try ArticleLibrary.item(id)
-    // The server decides who has Reading Context; a saved note is not shown once it says no.
-    guard AppState.shared.readingContextEnabled else {
+    // The same rule as the reader's Reading Context button: devices that can run Apple's model,
+    // accounts the server entitles, or a note already saved.
+    guard AppState.shared.showsReadingContext(item) else {
       throw ArticleIntentError.contextUnavailable
     }
     // Only the saved note. Generating one costs a model call, so it stays an explicit tap in the app.
@@ -299,7 +300,7 @@ enum ArticleIntentError: Error, CustomLocalizedStringResourceConvertible {
     switch self {
     case .notFound: return "That article isn't in your library on this iPhone."
     case .nothingToRead: return "There's nothing unread in your Library."
-    case .contextUnavailable: return "Reading Context isn't available for this account."
+    case .contextUnavailable: return "Reading Context isn't available on this iPhone."
     case .noContext(let title):
       return
         "No Reading Context is saved for “\(title)” yet. Open the article and choose Reading Context."

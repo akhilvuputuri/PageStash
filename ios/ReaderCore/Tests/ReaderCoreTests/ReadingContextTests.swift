@@ -34,10 +34,12 @@ final class ReadingContextTests: XCTestCase {
     store = nil
     let reopened = try LocalStore(root: root)
     XCTAssertEqual(try reopened.readingContext(item), context)
+    XCTAssertTrue(reopened.hasReadingContext(item))
     let updated = ReadingItem(
       id: item.id, title: "Article", contentVersion: 2, revision: 2, assets: [])
     try reopened.apply(LibraryPage(items: [updated], cursor: 2))
     XCTAssertNil(try reopened.readingContext(updated), "New content needs a new context")
+    XCTAssertFalse(reopened.hasReadingContext(updated))
   }
 
   func testDeletingAnItemRemovesItsContext() throws {

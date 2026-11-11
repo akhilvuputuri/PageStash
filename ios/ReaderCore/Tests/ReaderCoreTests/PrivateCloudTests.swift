@@ -72,6 +72,47 @@ final class PrivateCloudTests: XCTestCase {
     }
   }
 
+  func testFallbackIsSavedWithTheNoteAndOldNotesStillDecode() async throws {
+    let outcome = try await LocalReadingContext.write(
+      article: article(long), history: [], finishedTotal: 0, onDevice: device(),
+      privateCloud: cloud { _, _ in throw LocalModelError.limitReached })
+    XCTAssertEqual(outcome.context.cloudFallback, "limitReached")
+    XCTAssertTrue(outcome.context.cloudFallbackNotice!.contains("limit"))
+    // Survives a relaunch: encoded and decoded like the store does.
+    let data = try Wire.encoder().encode(outcome.context)
+    let decoded = try Wire.decoder().decode(ReadingContext.self, from: data)
+    XCTAssertEqual(decoded.cloudFallback, "limitReached")
+    XCTAssertEqual(decoded.with(stale: true).cloudFallback, "limitReached")
+    // A note written on the device without a cloud attempt has none.
+    let plain = try await LocalReadingContext.write(
+      article: article(long), history: [], finishedTotal: 0, onDevice: device(), privateCloud: nil)
+    XCTAssertNil(plain.context.cloudFallback)
+    XCTAssertNil(plain.context.cloudFallbackNotice)
+    let old = """
+      {"item_id":"a","content_version":1,"generated_at":"2026-11-01T00:00:00.000Z",
+       "model":"apple-on-device","history_count":0,"stale":false,"summary":"S",
+       "builds_on":[],"covered":[],"new_ideas":[]}
+      """
+    XCTAssertNil(try Wire.decoder().decode(ReadingContext.self, from: Data(old.utf8)).cloudFallback)
+  }
+
+  func testLongCJKArticleNotesAllFitTheCombiningCall() async throws {
+    // About a token per character: notes as long as the 700-character clip would overflow.
+    let text = (1...60).map { "第\($0)段。" + String(repeating: "火山の噴火と溶岩の流れについて説明する。", count: 12) }
+      .joined(separator: "\n\n")
+    let onDevice = FakeModel { instructions, prompt in
+      if instructions.contains("one part") { return String(repeating: "溶岩", count: 400) }
+      return self.sectioned
+    }
+    _ = try await LocalReadingContext.generate(
+      article: article(text), history: [], finishedTotal: 0, model: onDevice)
+    let parts = onDevice.calls.filter { $0.instructions.contains("one part") }
+    let reduce = onDevice.calls.last!
+    XCTAssertGreaterThan(parts.count, 1)
+    XCTAssertTrue(reduce.prompt.contains("(\(parts.count))"), "The last part's note isn't cut off")
+    XCTAssertEqual(onDevice.calls.count, parts.count + 1, "No overflow retry was needed")
+  }
+
   func testCancellationIsNotAFallback() async {
     let onDevice = device()
     let remote = cloud { _, _ in throw CancellationError() }
@@ -212,6 +253,31 @@ final class PrivateCloudTests: XCTestCase {
     var truncated = machO(entitlements: plist)
     truncated.removeLast(40)
     XCTAssertFalse(CodeSignature.hasEntitlement(key, machO: truncated))
+  }
+
+  func testMalformedUniversalHeadersAreSkippedWithoutTrapping() {
+    func be(_ v: UInt32) -> [UInt8] { withUnsafeBytes(of: v.bigEndian, Array.init) }
+    func be64(_ v: UInt64) -> [UInt8] { withUnsafeBytes(of: v.bigEndian, Array.init) }
+    let key = CodeSignature.privateCloudComputeEntitlement
+    let slice = machO(entitlements: plist)
+    // fat_arch_64 entries: an offset of 2^63 or more, then one whose offset + size overflows,
+    // then a valid slice, which is still found.
+    var header = be(0xCAFE_BABF) + be(3)
+    header += be(0x0100_000C) + be(0) + be64(UInt64(1) << 63) + be64(16) + be(14) + be(0)
+    header += be(0x0100_000C) + be(0) + be64(UInt64(Int.max) - 4) + be64(64) + be(14) + be(0)
+    header += be(0x0100_000C) + be(0) + be64(256) + be64(UInt64(slice.count)) + be(14) + be(0)
+    let data = Data(header + [UInt8](repeating: 0, count: 256 - header.count)) + slice
+    XCTAssertTrue(CodeSignature.hasEntitlement(key, machO: data))
+    // Only malformed entries: nothing, no trap.
+    let bad = Data(Array(header.prefix(8 + 64)) + [UInt8](repeating: 0, count: 64))
+    var badHeader = bad
+    badHeader[7] = 2
+    XCTAssertFalse(CodeSignature.hasEntitlement(key, machO: badHeader))
+    // 32-bit entries past the end of the file.
+    let short =
+      be(0xCAFE_BABE) + be(1) + be(0x0100_000C) + be(0) + be(0xFFFF_FFF0) + be(0xFFFF)
+      + be(14)
+    XCTAssertFalse(CodeSignature.hasEntitlement(key, machO: Data(short)))
   }
 
   func testReadsEntitlementsFromAUniversalBinary() {

@@ -818,7 +818,7 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - PCC needs the `com.apple.developer.private-cloud-compute` entitlement, which the app doesn't have. The app reads its own code signature and offers the switch only when the entitlement is present. No entitlement, capability or signing change is in this work.
 - **Compatibility.** The deployment target stays iOS 17. All FoundationModels code is in `AppleModel.swift` inside `#if canImport(FoundationModels)`. iOS 27 symbols are also inside `#if compiler(>=6.4)`.
 - **Checks (tested, Xcode 27.2, after merging main at `3f1511e`).**
-  - ReaderCore: `swift test` passes 94 tests.
+  - ReaderCore: `swift test` passes 98 tests after the review fixes below (94 before).
   - The unsigned device build and the preview simulator build both succeed.
   - The preview build launches on the iPhone 17 / iOS 27.2 simulator and shows the Library.
 - **Measured on this Mac (macOS 27.2.1).** `PrivateCloudComputeLanguageModel().contextSize` reads 32,768 from an unentitled tool, which reports unavailable and throws on use.
@@ -827,9 +827,25 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Private Cloud Compute, entirely.
   - The sheet on a simulator or device after these changes.
 - **Owner steps for PCC.** Enrol in the App Store Small Business Program. Request the managed entitlement with Apple's form. Then authorize adding the capability.
+- **Independent review of `0068dde` (Opus 5.5): APPROVE**, with non-blocking findings, all fixed in the follow-up commit:
+  - **One job at a time.** Quiet work could start a second model run before the first recorded its job. The job and task are now recorded synchronously when work starts, and `canRunQuietly` checks both.
+  - **Joining a quiet job.** When an explicit request joins a quiet job that left a long article for the private cloud, it now writes the note itself instead of showing an error.
+  - **Cancellation.** A cancelled job is a pause, even if FoundationModels throws its own error, and pipeline steps check for cancellation.
+  - **Thermal state.** A change to serious or critical stops a running quiet job.
+  - **Universal-binary parsing.** Overflowing or huge `fat_arch_64` offsets are skipped instead of trapping (test added).
+  - **Fallback recorded on the note.** It is now saved in an optional `cloudFallback` field, so after a relaunch a note written after a cloud attempt doesn't claim nothing was sent. Older notes and server notes still decode (test added).
+  - **Owner copy.** For accounts that also have server notes, the empty-state copy says server notes send articles to OpenRouter.
+  - **Get Reading Context.** It uses the same rule as the reader's button, so Siri reads on-device notes for any account. It still never generates.
+  - **Docs on gating.** They now say `contextSize` and `tokenCount` are probably in the Xcode 26.4 SDK. They stay behind `compiler(>=6.4)`, so an Xcode 26.x build uses 4,096 and the estimate.
+  - **Preview mode.** The sheet doesn't write a note on opening.
+  - **Cheaper button check.** `showsReadingContext` uses a cheap saved-note check.
+  - **Part notes.** They are budgeted to always fit the combining call, including CJK text (test added).
+  - **Chunking.** It runs in one linear pass (test added on a 1.3 MB unpunctuated paragraph).
 
 ## Not yet tested
 
+- On-device Reading Context against Apple's real on-device model: prompt fit, part sizes, parse success, output quality, guardrail refusals, injection resistance, latency per note and question answers. The development Mac reported `modelNotReady` throughout 12 November 2026.
+- Apple's Private Cloud Compute for long articles: any successful call, output quality, latency, reasoning-token use, daily-limit and rate-limit fallback, and iOS behaviour without the entitlement. It needs the owner's entitlement and a physical iOS 27 device.
 - Reading context against a real provider: answer quality, latency and cost per note, and the sheet in Dark and with VoiceOver.
 - Installation from TestFlight on the iPhone (build 0.5.0 (13) is uploaded; build 0.4.4 (12) was Testing for the owner). Signed physical-device installation and launch have passed.
 - Complete SwiftUI accessibility/layout coverage and physical-device rendering. Main simulator flows have passed interactive checks.

@@ -31,8 +31,6 @@ import ReaderCore
   /// Why quiet pre-generation failed, per item and content version, so the sheet explains rather
   /// than retrying an article the model declined.
   @Published private(set) var failures: [String: String] = [:]
-  /// Why a note meant for the private cloud was written on the device, per item and version.
-  @Published private(set) var cloudNotices: [String: String] = [:]
   /// Whether Apple's Private Cloud Compute can be used, for Settings.
   @Published private(set) var privateCloudStatus = LocalModelAvailability.requiresNewerSystem
   weak var state: AppState?
@@ -47,6 +45,7 @@ import ReaderCore
   private var holds = 0
   private var foreground = false
   private var powerObserver: NSObjectProtocol?
+  private var thermalObserver: NSObjectProtocol?
   private var cloud: (any LocalLanguageModel)?
   private var cloudResolved = false
 
@@ -61,6 +60,18 @@ import ReaderCore
         if ProcessInfo.processInfo.isLowPowerModeEnabled { self.cancelQuiet() } else { self.pump() }
       }
     }
+    // A device getting hot stops quiet work at once, not only before the next article.
+    thermalObserver = NotificationCenter.default.addObserver(
+      forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor in
+        guard let self else { return }
+        if Self.tooHot { self.cancelQuiet() } else { self.pump() }
+      }
+    }
+  }
+  nonisolated static var tooHot: Bool {
+    ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
   }
 
   var isAvailable: Bool { availability == .available }
@@ -70,7 +81,6 @@ import ReaderCore
   }
   static func key(_ item: ReadingItem) -> String { "\(item.id):\(item.contentVersion)" }
   func failure(for item: ReadingItem) -> String? { failures[Self.key(item)] }
-  func cloudNotice(for item: ReadingItem) -> String? { cloudNotices[Self.key(item)] }
 
   // MARK: Private Cloud Compute
 
@@ -90,19 +100,6 @@ import ReaderCore
     let status = await LocalModels.privateCloudStatus()
     if status != privateCloudStatus { privateCloudStatus = status }
   }
-  static func notice(_ fallback: LocalModelError) -> String {
-    switch fallback {
-    case .limitReached:
-      return
-        "Today's Apple Private Cloud Compute limit is used up, so this was written on your iPhone, in parts."
-    case .offline:
-      return
-        "Apple's Private Cloud Compute couldn't be reached, so this was written on your iPhone, in parts."
-    default:
-      return
-        "Apple's Private Cloud Compute couldn't write this, so it was written on your iPhone, in parts."
-    }
-  }
 
   // MARK: Explicit
 
@@ -111,16 +108,24 @@ import ReaderCore
     refreshAvailability()
     guard isAvailable else { throw LocalModelError.unavailable(availability) }
     failures[Self.key(item)] = nil
-    cloudNotices[Self.key(item)] = nil
     if let job, let task {
       if job.itemID == item.id {
         self.job?.quiet = false
-        return try await task.value
+        do {
+          return try await task.value
+        } catch is LeftForPrivateCloud {
+          // Quiet work left this long article for the private cloud: write it now, as asked.
+          finish(task)
+        }
+      } else {
+        task.cancel()
+        _ = await task.result
+        finish(task)
       }
-      task.cancel()
-      _ = await task.result
     }
-    return try await run(item, quiet: false, cloud: await privateCloudIfAllowed())
+    let task = start(item, quiet: false)
+    defer { finish(task) }
+    return try await task.value
   }
   func cancel(_ itemID: String) {
     guard job?.itemID == itemID else { return }
@@ -208,7 +213,6 @@ import ReaderCore
     queue.removeAll()
     attempted.removeAll()
     failures.removeAll()
-    cloudNotices.removeAll()
     task?.cancel()
   }
 
@@ -220,10 +224,11 @@ import ReaderCore
     guard orStale else { return false }
     return !note.isLocal || note.stale(finishedCount: state.finishedCount(excluding: item.id))
   }
+  /// `job` and `task` are set synchronously when work starts (`start`), so a second `pump`
+  /// before the first task runs can't start another model call.
   private var canRunQuietly: Bool {
-    allowsBackground && foreground && holds == 0 && job == nil && isAvailable
-      && !ProcessInfo.processInfo.isLowPowerModeEnabled
-      && ProcessInfo.processInfo.thermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue
+    allowsBackground && foreground && holds == 0 && job == nil && task == nil && isAvailable
+      && !ProcessInfo.processInfo.isLowPowerModeEnabled && !Self.tooHot
   }
   private func pump() {
     refreshAvailability()
@@ -234,11 +239,10 @@ import ReaderCore
       else { continue }
       attempted.insert(Self.key(item))
       foregroundStarted += 1
+      let task = start(item, quiet: true)
       Task {
         do {
-          // A long article the private cloud would write waits for the reader to open it.
-          let leaveLong = await privateCloudIfAllowed()?.availability == .available
-          _ = try await run(item, quiet: true, cloud: nil, leaveLongArticles: leaveLong)
+          _ = try await task.value
         } catch is CancellationError {
           // Paused; it may be tried again on a later visit.
           attempted.remove(Self.key(item))
@@ -246,6 +250,7 @@ import ReaderCore
         } catch {
           failures[Self.key(item)] = error.localizedDescription
         }
+        finish(task)
         // A short gap keeps the device cool and leaves room for the reader.
         try? await Task.sleep(for: .seconds(2))
         pump()
@@ -257,52 +262,55 @@ import ReaderCore
     if let job, job.quiet { task?.cancel() }
   }
 
-  private func run(
-    _ item: ReadingItem, quiet: Bool, cloud: (any LocalLanguageModel)?,
-    leaveLongArticles: Bool = false
-  ) async throws -> ReadingContext {
-    guard let state, let store = state.store else { throw LocalModelError.failed }
+  /// Starts a note's model work and marks the job at once, before any await, so only one runs.
+  /// Explicit work may use the private cloud (per `PrivateCloudPolicy`); quiet work never does,
+  /// and leaves long articles for it when the reader allowed it and it's available.
+  private func start(_ item: ReadingItem, quiet: Bool) -> Task<ReadingContext, Error> {
     let model = self.model
-    let items = state.items
+    let store = state?.store
+    let items = state?.items ?? []
     let id = item.id
-    let key = Self.key(item)
     job = Job(itemID: id, quiet: quiet)
+    // LocalAI lives as long as the app, so strong references to it are fine.
     let task = Task(priority: quiet ? .utility : .userInitiated) { () throws -> ReadingContext in
-      let inputs = try await Task.detached { try Self.inputs(item, items: items, store: store) }
-        .value
-      try Task.checkCancellation()
-      if leaveLongArticles {
-        let ratio = await TokenEstimate.ratio(inputs.article.text, model: model)
-        if PrivateCloudPolicy.isLong(inputs.article.text, onDevice: model, tokenRatio: ratio) {
-          throw LeftForPrivateCloud()
-        }
-      }
-      let outcome = try await LocalReadingContext.write(
-        article: inputs.article, history: inputs.history, finishedTotal: inputs.finishedTotal,
-        onDevice: model, privateCloud: cloud,
-        progress: { progress in
-          // LocalAI lives as long as the app, so a strong reference is fine.
-          Task { @MainActor in
-            if self.job?.itemID == id { self.job?.progress = progress }
+      do {
+        guard let store else { throw LocalModelError.failed }
+        let cloud = await self.privateCloudIfAllowed()
+        let leaveLong = quiet && cloud?.availability == .available
+        let inputs = try await Task.detached { try Self.inputs(item, items: items, store: store) }
+          .value
+        try Task.checkCancellation()
+        if leaveLong {
+          let ratio = await TokenEstimate.ratio(inputs.article.text, model: model)
+          if PrivateCloudPolicy.isLong(inputs.article.text, onDevice: model, tokenRatio: ratio) {
+            throw LeftForPrivateCloud()
           }
-        })
-      try Task.checkCancellation()
-      try store.saveReadingContext(outcome.context)
-      if let fallback = outcome.cloudFallback {
-        await MainActor.run { self.cloudNotices[key] = LocalAI.notice(fallback) }
+        }
+        let outcome = try await LocalReadingContext.write(
+          article: inputs.article, history: inputs.history, finishedTotal: inputs.finishedTotal,
+          onDevice: model, privateCloud: quiet ? nil : cloud,
+          progress: { progress in
+            Task { @MainActor in
+              if self.job?.itemID == id { self.job?.progress = progress }
+            }
+          })
+        try Task.checkCancellation()
+        try store.saveReadingContext(outcome.context)
+        self.saved += 1
+        return outcome.context
+      } catch {
+        // FoundationModels may throw its own error when cancelled; a pause isn't a failure.
+        if Task.isCancelled { throw CancellationError() }
+        throw error
       }
-      return outcome.context
     }
     self.task = task
-    defer {
-      if self.task == task {
-        self.task = nil
-        job = nil
-      }
-    }
-    let context = try await task.value
-    saved += 1
-    return context
+    return task
+  }
+  private func finish(_ task: Task<ReadingContext, Error>) {
+    guard self.task == task else { return }
+    self.task = nil
+    job = nil
   }
 
   nonisolated static func inputs(_ item: ReadingItem, items: [ReadingItem], store: LocalStore)

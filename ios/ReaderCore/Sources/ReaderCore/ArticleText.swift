@@ -68,46 +68,118 @@ public enum ArticleText {
     return result + rest
   }
 
+  /// Estimated-token tally that adds up exactly: `TokenEstimate.tokens` of a concatenation is the
+  /// tokens of the summed tallies, so chunking never re-measures text it has already counted.
+  struct Tally {
+    var ascii = 0
+    var other = 0
+    var tokens: Int { (ascii + 2) / 3 + other }
+    init() {}
+    init<S: StringProtocol>(_ text: S) {
+      for scalar in text.unicodeScalars {
+        if scalar.isASCII { ascii += 1 } else { other += 1 }
+      }
+    }
+    static func + (a: Tally, b: Tally) -> Tally {
+      var sum = a
+      sum.ascii += b.ascii
+      sum.other += b.other
+      return sum
+    }
+  }
+
   /// Splits text into pieces of at most `maxTokens` (estimated), packing whole paragraphs, then
-  /// sentences, then words, so pieces end at natural boundaries.
+  /// sentences, then words, so pieces end at natural boundaries. Linear in the text's length.
   public static func chunks(_ text: String, maxTokens: Int) -> [String] {
     let limit = max(16, maxTokens)
     var pieces: [String] = []
     var current = ""
+    var tally = Tally()
     func flush() {
       if !current.isEmpty { pieces.append(current) }
       current = ""
+      tally = Tally()
     }
-    func add(_ unit: String, separator: String) {
-      let candidate = current.isEmpty ? unit : current + separator + unit
-      if TokenEstimate.tokens(candidate) <= limit {
-        current = candidate
+    func add<S: StringProtocol>(_ unit: S, _ unitTally: Tally, separator: String) {
+      if current.isEmpty {
+        current = String(unit)
+        tally = unitTally
+        return
+      }
+      let combined = tally + Tally(separator) + unitTally
+      if combined.tokens <= limit {
+        current += separator
+        current += unit
+        tally = combined
       } else {
         flush()
-        current = unit
+        current = String(unit)
+        tally = unitTally
       }
     }
     for paragraph in text.components(separatedBy: "\n\n") where !paragraph.isEmpty {
-      if TokenEstimate.tokens(paragraph) <= limit {
-        add(paragraph, separator: "\n\n")
+      let paragraphTally = Tally(paragraph)
+      if paragraphTally.tokens <= limit {
+        add(paragraph, paragraphTally, separator: "\n\n")
         continue
       }
       for sentence in sentences(paragraph) {
-        if TokenEstimate.tokens(sentence) <= limit {
-          add(sentence, separator: " ")
+        let sentenceTally = Tally(sentence)
+        if sentenceTally.tokens <= limit {
+          add(sentence, sentenceTally, separator: " ")
           continue
         }
-        var remaining = sentence
-        while !remaining.isEmpty {
-          let head = TokenEstimate.prefix(remaining, tokens: limit)
-          let piece = head.isEmpty ? String(remaining.prefix(limit)) : head
-          add(piece, separator: " ")
-          remaining = String(remaining.dropFirst(piece.count))
-            .trimmingCharacters(in: .whitespaces)
+        for piece in wordPieces(sentence, limit: limit) {
+          add(piece, Tally(piece), separator: " ")
         }
       }
     }
     flush()
+    return pieces
+  }
+
+  /// A sentence too long for one piece, cut into pieces of at most `limit` estimated tokens, at a
+  /// space when one is within the last 40 characters. One pass, so a huge unpunctuated paragraph
+  /// costs linear time.
+  static func wordPieces(_ sentence: String, limit: Int) -> [Substring] {
+    let scalars = sentence.unicodeScalars
+    var pieces: [Substring] = []
+    var start = scalars.startIndex
+    var index = start
+    var tally = Tally()
+    var lastSpace: String.UnicodeScalarView.Index?
+    var sinceSpace = 0
+    func emit(_ end: String.UnicodeScalarView.Index) {
+      let piece = Substring(scalars[start..<end]).trimmingCharacters(in: .whitespaces)
+      if !piece.isEmpty { pieces.append(Substring(piece)) }
+    }
+    while index < scalars.endIndex {
+      let scalar = scalars[index]
+      var next = tally
+      if scalar.isASCII { next.ascii += 1 } else { next.other += 1 }
+      if next.tokens > limit, index > start {
+        // Cut at the last nearby space, else here; the rest starts the next piece.
+        let cut = lastSpace.flatMap { sinceSpace < 40 ? $0 : nil } ?? index
+        emit(cut)
+        start = cut
+        while start < scalars.endIndex, scalars[start].properties.isWhitespace {
+          start = scalars.index(after: start)
+        }
+        tally = Tally(Substring(scalars[start..<index]))
+        lastSpace = nil
+        sinceSpace = 0
+        continue
+      }
+      tally = next
+      if scalar.properties.isWhitespace {
+        lastSpace = index
+        sinceSpace = 0
+      } else {
+        sinceSpace += 1
+      }
+      index = scalars.index(after: index)
+    }
+    emit(scalars.endIndex)
     return pieces
   }
 

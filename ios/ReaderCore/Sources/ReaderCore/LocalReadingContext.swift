@@ -326,7 +326,8 @@ public enum LocalReadingContext {
       historyTokens = min(Int(Double(reduce) * 0.4), historyLimit * 110)
       materialTokens = reduce - historyTokens
       directTokens = materialTokens
-      maxParts = 8
+      // At most 8, and few enough that every part's note gets at least 60 tokens of the budget.
+      maxParts = max(1, min(8, materialTokens / 60))
     }
   }
   static let excerptCharacters = 220
@@ -363,9 +364,12 @@ public enum LocalReadingContext {
         fallback = (error as? LocalModelError) ?? .failed
       }
     }
-    let context = try await generate(
+    var context = try await generate(
       article: article, history: newestFirst, finishedTotal: finishedTotal, model: onDevice,
       now: now, progress: progress)
+    if let fallback {
+      context = context.with(cloudFallback: ReadingContext.cloudFallbackCode(fallback))
+    }
     return Outcome(context: context, cloudFallback: fallback)
   }
 
@@ -406,7 +410,11 @@ public enum LocalReadingContext {
     var partCount = 0
     if TokenEstimate.tokens(text) > plan.directTokens {
       let all = ArticleText.chunks(text, maxTokens: plan.partTokens)
+      try Task.checkCancellation()
       let parts = ArticleText.evenlySpaced(all, limit: plan.maxParts)
+      // Each part's note gets an equal share of the combining budget, so all of them always fit
+      // (a CJK note costs about a token per character, three times an English one).
+      let noteTokens = max(20, plan.materialTokens / max(1, parts.count) - 6)
       excerpted = parts.count < all.count
       partCount = parts.count
       var notes: [String] = []
@@ -423,7 +431,7 @@ public enum LocalReadingContext {
             prompt: LocalPrompts.partPrompt(
               title: article.title, part: index + 1, of: parts.count, text: part),
             maxResponseTokens: plan.partAnswerTokens + model.reservedTokens)
-          let clean = LocalContextParser.clip(note, 700)
+          let clean = TokenEstimate.prefix(LocalContextParser.clip(note, 700), tokens: noteTokens)
           if !clean.isEmpty { notes.append("(\(index + 1)) \(clean)") }
         } catch LocalModelError.guardrail {
           // One sensitive passage shouldn't sink the whole note; the rest still describes it.
@@ -446,6 +454,7 @@ public enum LocalReadingContext {
     let history = ReadingHistory.select(
       newestFirst, article: text, title: article.title, limit: plan.historyLimit,
       budgetTokens: plan.historyTokens)
+    try Task.checkCancellation()
     let reply = try await model.respond(
       instructions: LocalPrompts.contextInstructions(hasHistory: !history.isEmpty),
       prompt: LocalPrompts.contextPrompt(

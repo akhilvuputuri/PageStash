@@ -280,8 +280,9 @@ import SwiftUI
   /// or when a note is already saved.
   func showsReadingContext(_ item: ReadingItem) -> Bool {
     guard item.status == "ready" else { return false }
+    // A cheap existence check: this runs while views render.
     return localAI.availability.deviceSupportsModel || readingContextEnabled
-      || localReadingContext(item) != nil
+      || store?.hasReadingContext(item) == true
   }
   func finishedCount(excluding id: String) -> Int {
     ReadingHistory.finished(items, excluding: id).count

@@ -8,9 +8,11 @@ import ReaderCore
 /// Chooses the model providers for this device. Everything FoundationModels-specific lives in
 /// this file, gated three ways so every supported toolchain and system works:
 /// - `#if canImport(FoundationModels)`: CI's Xcode 16.4 (iOS 18 SDK) has no such framework.
-/// - `#if compiler(>=6.4)`: symbols that exist only in the iOS 27 SDK (Xcode 27, Swift 6.4), such
-///   as Private Cloud Compute, `contextSize`, `tokenCount` and `LanguageModelError`, so the file
-///   also compiles with Xcode 26.x.
+/// - `#if compiler(>=6.4)`: iOS 27 SDK symbols (Xcode 27, Swift 6.4) such as Private Cloud
+///   Compute and `LanguageModelError`, so the file also compiles with Xcode 26.x. `contextSize`
+///   (`@backDeployed(before: iOS 26.4)`) and `tokenCount(for:)` (`@available(iOS 26.4)`) are
+///   probably in the Xcode 26.4 SDK too, but stay behind this stricter gate because no 26.x SDK
+///   was available to check: an Xcode 26.x build uses 4,096 and the estimate on every system.
 /// - `@available` / `#available`: iOS 26 for the on-device model, 26.4 for token counts, 27 for
 ///   Private Cloud Compute and the new errors. The app still runs on iOS 17; the framework is
 ///   weak-linked, so iOS 17 and 18 report `requiresNewerSystem`.

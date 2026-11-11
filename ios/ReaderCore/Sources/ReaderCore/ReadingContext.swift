@@ -39,11 +39,16 @@ public struct ReadingContext: Codable, Equatable, Sendable {
   public let historyTotal: Int?
   /// A long article was summarized from evenly spaced sections rather than all of its text.
   public let excerpted: Bool?
+  /// Set when Apple's Private Cloud Compute was tried first and the note was then written on this
+  /// iPhone, with why (`limitReached`, `offline` or `failed`). The cloud request may have gone
+  /// out, so the note must not claim nothing was sent. Device notes only; optional, so older notes
+  /// and server notes still decode.
+  public let cloudFallback: String?
   public init(
     itemId: String, contentVersion: Int, generatedAt: String, model: String, historyCount: Int,
     stale: Bool = false, summary: String, buildsOn: [Note] = [], covered: [Note] = [],
     newIdeas: [String] = [], keyPoints: [String]? = nil, historyTotal: Int? = nil,
-    excerpted: Bool? = nil
+    excerpted: Bool? = nil, cloudFallback: String? = nil
   ) {
     self.itemId = itemId
     self.contentVersion = contentVersion
@@ -58,6 +63,7 @@ public struct ReadingContext: Codable, Equatable, Sendable {
     self.keyPoints = keyPoints
     self.historyTotal = historyTotal
     self.excerpted = excerpted
+    self.cloudFallback = cloudFallback
   }
   /// Written by the app with an Apple model provider (on this iPhone or, for long articles when
   /// allowed, Apple's Private Cloud Compute) rather than synced from the server.
@@ -75,7 +81,37 @@ public struct ReadingContext: Codable, Equatable, Sendable {
       itemId: itemId, contentVersion: contentVersion, generatedAt: generatedAt, model: model,
       historyCount: historyCount, stale: stale, summary: summary, buildsOn: buildsOn,
       covered: covered, newIdeas: newIdeas, keyPoints: keyPoints, historyTotal: historyTotal,
-      excerpted: excerpted)
+      excerpted: excerpted, cloudFallback: cloudFallback)
+  }
+  public func with(cloudFallback: String?) -> ReadingContext {
+    ReadingContext(
+      itemId: itemId, contentVersion: contentVersion, generatedAt: generatedAt, model: model,
+      historyCount: historyCount, stale: stale, summary: summary, buildsOn: buildsOn,
+      covered: covered, newIdeas: newIdeas, keyPoints: keyPoints, historyTotal: historyTotal,
+      excerpted: excerpted, cloudFallback: cloudFallback)
+  }
+  /// The `cloudFallback` code for a Private Cloud Compute failure.
+  public static func cloudFallbackCode(_ error: LocalModelError) -> String {
+    switch error {
+    case .limitReached: return "limitReached"
+    case .offline: return "offline"
+    default: return "failed"
+    }
+  }
+  /// Why a note meant for the private cloud was written on this iPhone, in words.
+  public var cloudFallbackNotice: String? {
+    switch cloudFallback {
+    case nil: return nil
+    case "limitReached"?:
+      return
+        "Today's Apple Private Cloud Compute limit was used up, so this was written on your iPhone, in parts."
+    case "offline"?:
+      return
+        "Apple's Private Cloud Compute couldn't be reached, so this was written on your iPhone, in parts."
+    default:
+      return
+        "Apple's Private Cloud Compute couldn't write this, so it was written on your iPhone, in parts."
+    }
   }
   /// Whether a stored note should stay when a server copy arrives (by sync or refresh). On-device
   /// notes are primary: one for the same content is never replaced by a server note, whatever its

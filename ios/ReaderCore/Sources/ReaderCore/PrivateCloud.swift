@@ -71,19 +71,20 @@ public enum CodeSignature {
       guard let count = be32(data, 4), count < 64 else { return nil }
       for index in 0..<Int(count) {
         let entry = 8 + index * (wide ? 32 : 20)
+        // Offsets come from the file: convert exactly and add without overflow, or skip.
         let offset: Int?
         let size: Int?
         if wide {
-          offset = be64(data, entry + 8).map(Int.init)
-          size = be64(data, entry + 16).map(Int.init)
+          offset = be64(data, entry + 8).flatMap { Int(exactly: $0) }
+          size = be64(data, entry + 16).flatMap { Int(exactly: $0) }
         } else {
-          offset = be32(data, entry + 8).map(Int.init)
-          size = be32(data, entry + 12).map(Int.init)
+          offset = be32(data, entry + 8).flatMap { Int(exactly: $0) }
+          size = be32(data, entry + 12).flatMap { Int(exactly: $0) }
         }
-        guard let offset, let size, offset >= 0, size > 0, offset + size <= data.count else {
-          continue
-        }
-        let slice = data.subdata(in: data.startIndex + offset..<data.startIndex + offset + size)
+        guard let offset, let size, offset >= 0, size > 0 else { continue }
+        let (end, overflow) = offset.addingReportingOverflow(size)
+        guard !overflow, end <= data.count else { continue }
+        let slice = data.subdata(in: data.startIndex + offset..<data.startIndex + end)
         if let found = thin(slice) { return found }
       }
       return nil

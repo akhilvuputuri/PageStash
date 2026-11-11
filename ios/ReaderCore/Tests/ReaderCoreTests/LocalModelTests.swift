@@ -106,6 +106,19 @@ final class LocalModelTests: XCTestCase {
     XCTAssertEqual(long.joined().count, 3000)
   }
 
+  func testChunkingAHugeUnpunctuatedParagraphIsLinearAndKeepsEveryWord() {
+    let words = (1...200_000).map { "w\($0 % 977)" }
+    let text = words.joined(separator: " ")
+    let start = Date()
+    let chunks = ArticleText.chunks(text, maxTokens: 300)
+    XCTAssertLessThan(Date().timeIntervalSince(start), 10, "About 1.3 MB without punctuation")
+    XCTAssertTrue(chunks.allSatisfy { TokenEstimate.tokens($0) <= 300 })
+    XCTAssertEqual(chunks.joined(separator: " ").split(separator: " ").map(String.init), words)
+    // A single word longer than a piece is cut, keeping every character.
+    let long = String(repeating: "x", count: 2000)
+    XCTAssertEqual(ArticleText.chunks(long, maxTokens: 100).joined(), long)
+  }
+
   func testEvenlySpacedSamplesFirstAndLast() {
     XCTAssertEqual(ArticleText.evenlySpaced(Array(0..<20), limit: 5), [0, 5, 10, 14, 19])
     XCTAssertEqual(ArticleText.evenlySpaced([1, 2], limit: 5), [1, 2])
