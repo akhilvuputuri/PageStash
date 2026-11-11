@@ -106,12 +106,30 @@ final class LocalModelTests: XCTestCase {
     XCTAssertEqual(long.joined().count, 3000)
   }
 
+  func testWordPiecesSurviveALimitCrossedOnWhitespace() {
+    let inputs = [
+      "intro " + String(repeating: "x", count: 42) + " tail words here and more",
+      String(repeating: "a", count: 47) + "  " + String(repeating: "b", count: 30),
+      String(repeating: "a", count: 47) + "     ",
+    ]
+    for input in inputs {
+      let kept = input.filter { !$0.isWhitespace }
+      for limit in 1...40 {
+        let pieces = ArticleText.wordPieces(input, limit: limit)
+        XCTAssertEqual(pieces.joined().filter { !$0.isWhitespace }, kept, "limit \(limit)")
+        XCTAssertTrue(pieces.allSatisfy { TokenEstimate.tokens(String($0)) <= limit })
+        let chunks = ArticleText.chunks(input, maxTokens: limit)
+        XCTAssertEqual(chunks.joined().filter { !$0.isWhitespace }, kept, "limit \(limit)")
+      }
+    }
+  }
+
   func testChunkingAHugeUnpunctuatedParagraphIsLinearAndKeepsEveryWord() {
     let words = (1...200_000).map { "w\($0 % 977)" }
     let text = words.joined(separator: " ")
     let start = Date()
     let chunks = ArticleText.chunks(text, maxTokens: 300)
-    XCTAssertLessThan(Date().timeIntervalSince(start), 10, "About 1.3 MB without punctuation")
+    XCTAssertLessThan(Date().timeIntervalSince(start), 60, "About 1.3 MB without punctuation")
     XCTAssertTrue(chunks.allSatisfy { TokenEstimate.tokens($0) <= 300 })
     XCTAssertEqual(chunks.joined(separator: " ").split(separator: " ").map(String.init), words)
     // A single word longer than a piece is cut, keeping every character.

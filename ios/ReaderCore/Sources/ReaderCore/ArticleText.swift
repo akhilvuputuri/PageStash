@@ -165,6 +165,9 @@ public enum ArticleText {
         while start < scalars.endIndex, scalars[start].properties.isWhitespace {
           start = scalars.index(after: start)
         }
+        // The cut can land on whitespace that runs up to or past `index`; the next piece then
+        // starts after it, with nothing carried over.
+        if start > index { index = start }
         tally = Tally(Substring(scalars[start..<index]))
         lastSpace = nil
         sinceSpace = 0

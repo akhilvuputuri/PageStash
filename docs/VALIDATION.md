@@ -841,6 +841,7 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - **Cheaper button check.** `showsReadingContext` uses a cheap saved-note check.
   - **Part notes.** They are budgeted to always fit the combining call, including CJK text (test added).
   - **Chunking.** It runs in one linear pass (test added on a 1.3 MB unpunctuated paragraph).
+- Independent delta review of `37d9dfb` (Opus 5.5): REQUEST CHANGES. The new word splitter trapped when the token limit was crossed on a whitespace character (an invalid range). Fixed by starting the next piece after the whitespace; a test sweeps limits 1–40 over the reviewer's inputs through both `wordPieces` and `chunks`. `swift test` now passes 99 tests.
 
 ## Not yet tested
 
