@@ -511,6 +511,40 @@ public final class LocalStore: @unchecked Sendable {
           .map { $0[0] })
     }
   }
+  /// The opening of downloaded articles' text, for the on-device Spotlight index: all of them, or
+  /// only `ids`. SQLite clips it, so indexing doesn't copy whole articles; `LibraryQueries.excerpt`
+  /// tidies it. Safe to call off the main thread.
+  public func searchExcerpts(characters: Int, ids: Set<String>? = nil) throws -> [String: String] {
+    let clip = String(max(0, characters) * 2)
+    var excerpts: [String: String] = [:]
+    func collect(_ rows: [[String]]) {
+      for row in rows where row.count == 2 {
+        if let excerpt = LibraryQueries.excerpt(row[1], characters: characters) {
+          excerpts[row[0]] = excerpt
+        }
+      }
+    }
+    guard let ids else {
+      collect(
+        try synchronized {
+          try rows("SELECT id,substr(body,1,?) FROM search WHERE body<>''", [clip])
+        })
+      return excerpts
+    }
+    // Batches keep each statement well under SQLite's parameter limit.
+    let sorted = ids.sorted()
+    for start in stride(from: 0, to: sorted.count, by: 500) {
+      let batch = Array(sorted[start..<min(start + 500, sorted.count)])
+      let marks = Array(repeating: "?", count: batch.count).joined(separator: ",")
+      collect(
+        try synchronized {
+          try rows(
+            "SELECT id,substr(body,1,?) FROM search WHERE body<>'' AND id IN (\(marks))",
+            [clip] + batch)
+        })
+    }
+    return excerpts
+  }
   public var diskUsage: Int64 {
     synchronized {
       let enumerator = FileManager.default.enumerator(

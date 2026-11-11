@@ -29,7 +29,7 @@ product = obj('product', 'isa = PBXFileReference; explicitFileType = wrapper.app
 testProduct = obj('test-product', 'isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OfflineReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR;')
 testRefs, testBuilds = [], []
 for source in sorted((ios/'OfflineReaderTests').glob('*.swift')):
-    ref = obj('test-ref:'+source.name, f'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {q('OfflineReaderTests/'+source.name)}; sourceTree = "<group>";')
+    ref = obj('test-ref:'+source.name, f'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {q("OfflineReaderTests/"+source.name)}; sourceTree = "<group>";')
     testRefs.append(ref);testBuilds.append(obj('test-build:'+source.name,f'isa = PBXBuildFile; fileRef = {ref};'))
 sharedRefs, sharedBuilds, extensionRefs, extensionBuilds = [], [], [], []
 for source in sorted((ios/'ShareSupport').glob('*.swift')):
@@ -114,11 +114,11 @@ testConfigs=[]
 for name in ['Debug','Release']:
     settings={'IPHONEOS_DEPLOYMENT_TARGET':'17.0','SDKROOT':'iphoneos','SWIFT_VERSION':'5.0','CLANG_ENABLE_MODULES':'YES','PRODUCT_BUNDLE_IDENTIFIER':'com.akhilvuputuri.offlinereader.tests','PRODUCT_NAME':'$(TARGET_NAME)','GENERATE_INFOPLIST_FILE':'YES','TEST_HOST':'$(BUILT_PRODUCTS_DIR)/OfflineReader.app/OfflineReader','BUNDLE_LOADER':'$(TEST_HOST)','SWIFT_ACTIVE_COMPILATION_CONDITIONS':'DEBUG' if name=='Debug' else '', 'SWIFT_OPTIMIZATION_LEVEL':'-Onone' if name=='Debug' else '-O'}
     testConfigs.append(obj('test-config:'+name,'isa = XCBuildConfiguration; buildSettings = {'+''.join(f'{k} = {q(v)};' for k,v in settings.items())+f'}}; name = {name};'))
-testList=obj('test-list',f'isa = XCConfigurationList; buildConfigurations = ({','.join(testConfigs)}); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
-testSource=obj('test-sources',f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ({','.join(testBuilds)}); runOnlyForDeploymentPostprocessing = 0;')
+testList=obj('test-list',f'isa = XCConfigurationList; buildConfigurations = ({",".join(testConfigs)}); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
+testSource=obj('test-sources',f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ({",".join(testBuilds)}); runOnlyForDeploymentPostprocessing = 0;')
 testLink=obj('test-link',f'isa = PBXBuildFile; productRef = {dependency};')
 testFramework=obj('test-frameworks',f'isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = ({testLink}); runOnlyForDeploymentPostprocessing = 0;')
-proxy=obj('test-proxy',f'isa = PBXContainerItemProxy; containerPortal = {uid('project')}; proxyType = 1; remoteGlobalIDString = {target}; remoteInfo = OfflineReader;')
+proxy=obj('test-proxy',f'isa = PBXContainerItemProxy; containerPortal = {uid("project")}; proxyType = 1; remoteGlobalIDString = {target}; remoteInfo = OfflineReader;')
 targetDependency=obj('test-dependency',f'isa = PBXTargetDependency; target = {target}; targetProxy = {proxy};')
 testTarget=obj('test-target',f'isa = PBXNativeTarget; buildConfigurationList = {testList}; buildPhases = ({testSource},{testFramework}); buildRules = (); dependencies = ({targetDependency}); name = OfflineReaderTests; packageProductDependencies = ({dependency}); productName = OfflineReaderTests; productReference = {testProduct}; productType = "com.apple.product-type.bundle.unit-test";')
 projectID = obj('project', f'isa = PBXProject; attributes = {{BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2630; TargetAttributes = {{{target} = {{CreatedOnToolsVersion = 26.3;}};}};}}; buildConfigurationList = {projList}; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en,Base); mainGroup = {group}; packageReferences = ({package}); productRefGroup = {products}; projectDirPath = ""; projectRoot = ""; targets = ({target},{testTarget},{extensionTarget},{widgetTarget});')
