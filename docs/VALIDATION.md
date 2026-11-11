@@ -743,6 +743,28 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - The version goes to 0.5.1 (build 14) in `scripts/generate-project.py`, with `project.pbxproj` regenerated.
 - **Checks (tested, on the release branch):** ReaderCore 47 tests pass, and the unsigned device and simulator builds succeed. Native presentation tests run in CI.
 
+### Xcode Cloud for internal TestFlight uploads, 12 November 2026
+
+- **Why (reported).** On 29 October the local upload of 0.5.1 (14) failed at export with "exportArchive Failed to Use Accounts": Xcode's saved credential in the keychain had lost its username. The owner asked to move uploads to Xcode Cloud, which the Apple Developer Program includes (25 compute hours a month).
+- **Change.**
+  - `ios/ci_scripts/ci_post_clone.sh` refuses to archive unless the build was started by a tag `vX.Y.Z` equal to the app version, the tagged commit is on `main`, the committed project matches the generator, and Xcode Cloud's build number is at least `BUILD`. Outside Xcode Cloud it runs only the project check.
+  - `ios/ci_scripts/ci_post_xcodebuild.sh` prints the result for the release record.
+  - `scripts/generate-project.py` now runs on Xcode's bundled Python 3.9. Four f-strings needed 3.12. Only quote characters changed.
+  - `DEPLOYMENT.md` section 3 and `AGENTS.md` describe the new order: merge the release PR, push the owner-authorized tag, and Xcode Cloud uploads to internal TestFlight only. The local script stays as the fallback.
+  - CI syntax-checks both scripts and runs the project check with Xcode's Python.
+- **Checks (tested, locally with simulated Xcode Cloud variables).**
+  - The guard passes for `v0.5.1` on main with build 14, including from a shallow clone.
+  - It refuses a wrong or missing tag, a commit not on main, a build number below `BUILD`, a modified project (which it puts back unchanged) and a missing `python3`.
+  - Regenerating with Python 3.9.6 leaves the committed project byte-identical.
+- **Independent review of `e53c758` (Opus 5.5): REQUEST CHANGES.** All addressed:
+  - Blocking: the docs said to tag the release PR's merge commit. For 0.5.1 that is `91c728e`, which has no scripts, so Xcode Cloud would have uploaded it unchecked. The docs now say which commit to tag and that the guard only protects commits containing `ios/ci_scripts`.
+  - Blocking: this entry was missing.
+  - The restore step no longer copies back a partial backup, and it handles signals in other shells.
+  - The fetch can't wait on a credential prompt.
+  - The release checks run when any Xcode Cloud variable is set, not only when `CI_XCODE_CLOUD` is exactly `TRUE`.
+  - Three doc labels are corrected, and the build-number floor is described as project policy.
+- **Not verified.** Any real Xcode Cloud build. The workflow doesn't exist yet; the owner creates it (DEPLOYMENT.md step 6). The full list is at the end of DEPLOYMENT.md section 3.
+
 ## Not yet tested
 
 - Reading context against a real provider: answer quality, latency and cost per note, and the sheet in Dark and with VoiceOver.

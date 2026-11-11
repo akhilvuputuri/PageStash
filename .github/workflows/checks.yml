@@ -24,6 +24,11 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Check Xcode Cloud scripts with Xcode's Python
+        run: |
+          sh -n ios/ci_scripts/ci_post_clone.sh
+          sh -n ios/ci_scripts/ci_post_xcodebuild.sh
+          PATH=/usr/bin:/bin:/usr/sbin:/sbin ios/ci_scripts/ci_post_clone.sh
       - name: Check app icon artwork
         run: for icon in ios/OfflineReader/Assets.xcassets/AppIcon.appiconset/AppIcon*.png; do swift scripts/check-icon.swift "$icon"; done
       - name: Test local storage
