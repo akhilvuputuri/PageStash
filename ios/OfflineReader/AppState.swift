@@ -38,8 +38,11 @@ import SwiftUI
   /// Word counts of downloaded articles, for reading-time estimates in the Library.
   @Published var wordCounts: [String: Int] = [:]
   @Published var sharedSaves: [SharedSave] = []
-  /// Owner-only AI reading context. The server decides; the last answer is kept for offline use.
+  /// Server-written AI reading context for entitled accounts (the owner). The server decides; the
+  /// last answer is kept for offline use. On-device notes don't depend on it.
   @Published var readingContextEnabled = false
+  /// Apple's on-device model, for reading context and article questions on any account.
+  let localAI = LocalAI()
   @Published var sharingMessage: String?
   private var shareStore: SharedSaveStore?
   @Published var lastSync: String =
@@ -66,10 +69,13 @@ import SwiftUI
     #if DEBUG
       if ProcessInfo.processInfo.arguments.contains("--preview-library") {
         previewMode = true
+        localAI.state = self
+        localAI.allowsBackground = false
         configurePreview()
         return
       }
     #endif
+    localAI.state = self
     session = Vault.load()
     if let session { configure(session) } else { ShareServices.deactivate() }
     Downloads.shared.completion = { [weak self] in self?.reload() }
@@ -264,30 +270,53 @@ import SwiftUI
   }
   /// Asks the server which gated features this account has. Failures keep the last known answer.
   func refreshFeatures() async {
+    localAI.refreshAvailability()
     guard let api, let store, let features = try? await api.features() else { return }
     store.readingContextEnabled = features.readingContext
     readingContextEnabled = features.readingContext
   }
-  /// The context saved on this device for the item's current content. Works offline.
+  /// Whether to offer Reading Context for an article: on devices that support Apple's model (even
+  /// while it's off or downloading, so the sheet can say so), for accounts the server entitles,
+  /// or when a note is already saved.
+  func showsReadingContext(_ item: ReadingItem) -> Bool {
+    guard item.status == "ready" else { return false }
+    // A cheap existence check: this runs while views render.
+    return localAI.availability.deviceSupportsModel || readingContextEnabled
+      || store?.hasReadingContext(item) == true
+  }
+  func finishedCount(excluding id: String) -> Int {
+    ReadingHistory.finished(items, excluding: id).count
+  }
+  /// Starts writing the open article's note quietly, so it's usually ready before the tap.
+  func prepareReadingContext(_ itemID: String) {
+    guard !previewMode else { return }
+    localAI.prepare(itemID)
+  }
+  /// The context saved on this device for the item's current content. Works offline. A device
+  /// note is marked stale here once the finished articles have changed.
   func localReadingContext(_ item: ReadingItem) -> ReadingContext? {
-    try? store?.readingContext(item)
+    guard let context = try? store?.readingContext(item) else { return nil }
+    guard context.isLocal else { return context }
+    return context.with(stale: context.stale(finishedCount: finishedCount(excluding: item.id)))
   }
   /// The server's saved context, which also knows whether finished articles changed since. Never
   /// generates. Nil when offline or when the server has none, so the caller keeps what it shows.
+  /// An on-device note for the same content, or a newer note, stays (`ReadingContext.keepsStored`).
   func serverReadingContext(_ item: ReadingItem) async -> ReadingContext? {
     guard let api, let context = try? await api.readingContext(item.id),
       context.contentVersion == item.contentVersion
     else { return nil }
-    // Never let an older server copy replace a newer note on this device.
-    if let local = localReadingContext(item), local.generatedAt > context.generatedAt {
-      return local
-    }
-    try? store?.saveReadingContext(context)
-    return context
+    guard (try? store?.saveServerReadingContext(context)) != nil else { return nil }
+    return localReadingContext(item)
   }
+  /// Writes a note: on this device when Apple's model is available (any account, no network),
+  /// otherwise by the server for entitled accounts.
   func generateReadingContext(_ item: ReadingItem, regenerate: Bool) async throws
     -> ReadingContext
   {
+    localAI.refreshAvailability()
+    if localAI.isAvailable { return try await localAI.generate(item) }
+    guard readingContextEnabled else { throw LocalModelError.unavailable(localAI.availability) }
     guard let api else { throw APIError(message: "Sign in to generate reading context.") }
     let context = try await api.generateReadingContext(item.id, regenerate: regenerate)
     try? store?.saveReadingContext(context)
@@ -417,6 +446,7 @@ import SwiftUI
   }
   func logout() async {
     if previewMode {
+      localAI.reset()
       let root = store?.root
       session = nil
       store = nil
@@ -446,6 +476,7 @@ import SwiftUI
     sharedSaves = []
     sharingMessage = nil
     readingContextEnabled = false
+    localAI.reset()
     Vault.clear()
     let root = store?.root
     store = nil
@@ -570,12 +601,16 @@ import SwiftUI
           try store.accept(temporary, itemID: item.id, version: item.contentVersion, asset: asset)
           try FileManager.default.removeItem(at: temporary)
         }
-        // A synthetic reading context so the owner-only sheet can be checked without a provider.
+        // A synthetic reading context so the sheet can be checked without a model or provider.
+        // `--preview-on-device-context` shows it as an on-device note, with key points.
+        let onDeviceNote = ProcessInfo.processInfo.arguments.contains("--preview-on-device-context")
         store.readingContextEnabled = true
         try store.saveReadingContext(
           ReadingContext(
             itemId: ready.id, contentVersion: ready.contentVersion,
-            generatedAt: "2026-10-08T12:30:00Z", model: "preview/synthetic", historyCount: 12,
+            generatedAt: "2026-10-08T12:30:00Z",
+            model: onDeviceNote ? ReadingContext.onDeviceModel : "preview/synthetic",
+            historyCount: onDeviceNote ? 1 : 12,
             stale: ProcessInfo.processInfo.arguments.contains("--preview-stale-context"),
             summary:
               "Synthetic summary: this article argues for a calmer library and extends what you read earlier about reading without notifications.",
@@ -589,7 +624,11 @@ import SwiftUI
                 itemId: archived.id, title: "A synthetic earlier article",
                 note: "Already explained why offline copies need verification.")
             ],
-            newIdeas: ["Done Reading as the only completion signal", "Undo instead of confirmation"]
+            newIdeas: ["Done Reading as the only completion signal", "Undo instead of confirmation"],
+            keyPoints: onDeviceNote
+              ? ["Fewer status indicators make a library calmer", "Undo replaces confirmation dialogs"]
+              : nil,
+            historyTotal: onDeviceNote ? 1 : nil, excerpted: onDeviceNote ? true : nil
           ))
         self.store = store
         self.session = Session(token: "synthetic-preview-session", ownerId: UUID().uuidString)
@@ -651,16 +690,20 @@ struct ReaderRoute: Identifiable, Equatable {
             || !state.sharedSaves.isEmpty)
       ) {
         guard phase == .active else { return }
+        state.localAI.setForeground(true)
         // Once per foreground visit; the library loop below runs much more often.
         if state.session != nil { await state.refreshFeatures() }
         while !Task.isCancelled {
           if state.session != nil { try? await state.sync() }
+          // Quietly prepares a few unread articles' notes on the device (bounded, one at a time).
+          if state.session != nil, !state.previewMode { state.localAI.pregenerate() }
           let pending =
             state.items.contains { ["queued", "processing"].contains($0.status) }
             || state.sharedSaves.contains { [.queued, .sending].contains($0.state) }
           do { try await Task.sleep(for: .seconds(pending ? 3 : 60)) } catch { return }
         }
       }.onChange(of: phase) { _, value in
+        if value != .active { state.localAI.setForeground(false) }
         if value == .background {
           state.scheduleRefresh()
         }

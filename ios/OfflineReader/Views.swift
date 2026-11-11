@@ -720,8 +720,7 @@ struct ReaderScreen: View {
                 status: offline == .ready ? nil : offline.rawValue,
                 error: item.error, finishLabel: canFinish(item) ? "Done Reading" : nil,
                 sources: item.sources.compactMap(URL.init(string:)),
-                contextLabel: state.readingContextEnabled && item.status == "ready"
-                  ? "Reading Context" : nil),
+                contextLabel: state.showsReadingContext(item) ? "Reading Context" : nil),
               scrollState: scrollState,
               progress: (try? state.store?.readingPosition(item.id)) ?? item.progress,
               fontSize: fontSize,
@@ -816,7 +815,7 @@ struct ReaderScreen: View {
               } label: {
                 Label("Add to Collection", systemImage: "folder.badge.plus")
               }
-              if state.readingContextEnabled, item.status == "ready" {
+              if state.showsReadingContext(item) {
                 Button {
                   showContext = true
                 } label: {
@@ -872,6 +871,9 @@ struct ReaderScreen: View {
           ReaderDisplaySheet(fontSize: $fontSize)
         }.sheet(isPresented: $showContext) {
           ReadingContextSheet(item: item)
+        }.task(id: "\(item.id) \(isReadable(item))") {
+          // Writes the note on the device ahead of the tap, when the model is available.
+          state.prepareReadingContext(item.id)
         }.alert("Add to Collection", isPresented: $showCollection) {
           TextField("Collection name", text: $collection)
           Button("Add") {
@@ -1040,6 +1042,7 @@ struct SettingsView: View {
             "Used: \(ByteCountFormatter.string(fromByteCount:state.store?.diskUsage ?? 0,countStyle:.file))"
           )
         }.readerRowBackground()
+        if state.localAI.availability.deviceSupportsModel { PrivateCloudSetting() }
         Section("Background Refresh") {
           Text(
             UIApplication.shared.backgroundRefreshStatus == .available

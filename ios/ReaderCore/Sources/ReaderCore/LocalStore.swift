@@ -170,6 +170,18 @@ public final class LocalStore: @unchecked Sendable {
       }
     }
   }
+  /// Whether a reading context is saved for the item's current content. Cheap: decodes only the
+  /// content version, for checks made while views render.
+  public func hasReadingContext(_ item: ReadingItem) -> Bool {
+    struct Version: Decodable { let contentVersion: Int }
+    return
+      (try? synchronized { () -> Bool in
+        guard let json = try rows("SELECT json FROM contexts WHERE item=?", [item.id]).first?.first,
+          let version = try? decoder.decode(Version.self, from: Data(json.utf8))
+        else { return false }
+        return version.contentVersion == item.contentVersion
+      }) ?? false
+  }
   /// The saved reading context for an item's current content, so it opens offline.
   public func readingContext(_ item: ReadingItem) throws -> ReadingContext? {
     try synchronized {
@@ -179,19 +191,50 @@ public final class LocalStore: @unchecked Sendable {
       return context.contentVersion == item.contentVersion ? context : nil
     }
   }
-  /// Keeps a synced note for the item's current content, unless this device has a newer one.
+  /// Keeps a synced note for the item's current content, unless this device has a newer one or
+  /// one written by the on-device model (see `ReadingContext.keepsStored`).
   private func storeSyncedContext(_ context: ReadingContext, for item: ReadingItem) throws {
     guard context.itemId == item.id, context.contentVersion == item.contentVersion, !item.deleted
     else { return }
     if let json = try rows("SELECT json FROM contexts WHERE item=?", [item.id]).first?.first,
       let local = try? decoder.decode(ReadingContext.self, from: Data(json.utf8)),
-      local.contentVersion == context.contentVersion, local.generatedAt > context.generatedAt
+      ReadingContext.keepsStored(local, over: context)
     {
       return
     }
     try execute(
       "INSERT INTO contexts(item,json) VALUES(?,?) ON CONFLICT(item) DO UPDATE SET json=excluded.json",
       [item.id, String(decoding: try encoder.encode(context), as: UTF8.self)])
+  }
+  /// Saves a note fetched from the server, unless the stored one should stay. Returns what is
+  /// stored afterwards.
+  @discardableResult public func saveServerReadingContext(_ context: ReadingContext) throws
+    -> ReadingContext?
+  {
+    try synchronized {
+      guard let current = try item(context.itemId), !current.deleted else {
+        throw ReaderError.missingItem
+      }
+      try storeSyncedContext(context, for: current)
+      return try readingContext(current)
+    }
+  }
+  /// The readable text of a downloaded article, paragraphs kept, for the on-device model.
+  public func articleText(_ id: String) throws -> String? {
+    guard let path = try readerURL(id), let html = try? String(contentsOf: path, encoding: .utf8)
+    else { return nil }
+    return ArticleText.plainText(html: html)
+  }
+  /// The opening of an article's indexed text, for listing finished articles to the model. Uses
+  /// the search index, so it works for any article downloaded at least once on this device.
+  public func openingText(_ id: String, characters: Int) throws -> String? {
+    try synchronized {
+      guard let body = try rows("SELECT body FROM search WHERE id=?", [id]).first?.first,
+        !body.isEmpty
+      else { return nil }
+      let text = ArticleText.normalize(String(body.prefix(characters * 3)))
+      return text.isEmpty ? nil : String(text.prefix(characters))
+    }
   }
   public func saveReadingContext(_ context: ReadingContext) throws {
     try synchronized {
