@@ -854,6 +854,10 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Environment: Xcode "Latest Release" (27.2 at setup), Clean on. Settings > Build Number: Next Build Number 15.
 - **Measured.** Xcode Cloud build 1 (manual start, `main` at `3f1511e`, the onboarding Build action) succeeded, so the clone and `ci_post_clone.sh` project check run in real Xcode Cloud.
 - **Not yet observed.** An archive, the release checks in `ci_post_clone.sh` under real Xcode Cloud variables, the upload, and delivery to the "Owner" group. The `v0.6.0` tag build is their first run; its result is recorded after it finishes.
+- **Result (12 November 2026).** PR 73 merged as `a63584e`; `v0.6.0` was pushed on that commit with the owner's go-ahead. Xcode Cloud started build 15 from the tag ("Code push"), queued 37 s, ran 7 minutes (2 minutes of usage) on Xcode 27.2. App Store Connect shows "Archive - iOS: Succeeded" (5 warnings) and "TestFlight Internal Testing - iOS: Succeeded".
+  - **Inferred, not read.** The build logs were not opened. That `ci_post_clone.sh` ran its release checks in build 15, and its project check in build 1, is inferred from the builds' outcomes, not from the log lines.
+  - **Not yet verified.** The TestFlight build record (0.6.0, build 15, processed, in the "Owner" group) and the install on the owner's iPhone. The GitHub Release for `v0.6.0` waits for those. The warnings were not reviewed.
+  - Since the upload was accepted with the counter and `BUILD` both at 15, this run does not show whether Xcode Cloud applies its number to the Share and Widget extensions.
 
 ## Not yet tested
 
