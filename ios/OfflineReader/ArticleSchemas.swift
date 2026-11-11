@@ -14,6 +14,9 @@ import SwiftUI
 //   iOS 27, so it would be a second type naming the same article beside `ArticleEntity`, which
 //   every intent, the Spotlight index and the annotations below use; it also needs a link, which
 //   agent briefs don't have. Apple lists the browser domain as Shortcuts-only.
+// - `system.search` (iOS 18, deprecated in iOS 27): Xcode 27 accepts it beside `searchInApp`, but
+//   Xcode 16.4 (CI) would need the older `@AssistantIntent(schema:)` spelling, which can't be
+//   checked locally, and on iOS 27 it would be a second, deprecated search.
 // - The browser, books and reader domains' intents describe a web browser, purchased books and
 //   paged documents. Read next, Reading Context, Done Reading and Continue Reading match no schema.
 
@@ -44,8 +47,18 @@ extension View {
     /// Like a pending open, a request the Library sees much later (after signing in) is dropped.
     var isCurrent: Bool { Date().timeIntervalSince(date) < 15 }
   }
+  /// The Library closes what covers its results; the list fills its search field.
+  enum Step { case uncover, fill }
   static let shared = LibrarySearch()
   @Published var request: Request?
+  private var done: [Step: UUID] = [:]
+  /// The current request if this step hasn't handled it yet, so a Library view recreated within
+  /// the 15 seconds doesn't apply it again.
+  func take(_ step: Step) -> Request? {
+    guard let request, request.isCurrent, done[step] != request.id else { return nil }
+    done[step] = request.id
+    return request
+  }
 }
 
 #if compiler(>=6.4)

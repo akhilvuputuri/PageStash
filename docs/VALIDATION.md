@@ -781,10 +781,20 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - The books and reader schemas describe purchased books and paged documents.
 - **Compatibility.** The deployment target stays iOS 17. iOS 27 symbols sit inside `#if compiler(>=6.4)` and `@available(iOS 27.0, *)`; iOS 18 symbols have availability checks. CI still compiles with Xcode 16.4.
 - **Checks (tested, Xcode 27.2, after merging main at `3518cdd`).**
-  - ReaderCore: `swift test` passes 53 tests, 6 of them new.
+  - ReaderCore: `swift test` passes 53 tests, 6 of them new (57 after the review fixes below).
   - The unsigned device build and the simulator build both succeed.
   - The built app's intent metadata lists the 7 intents, the entity, the schema and 6 shortcuts.
   - The Xcode 16.4 path was approximated by typechecking with the iOS 27 blocks compiled out.
+- **Independent review of `ed1b2f5` (Opus 5.5): APPROVE**, with non-blocking findings. All were addressed before merge:
+  - Spotlight indexing is now incremental (`SpotlightSync` in ReaderCore). It keeps a per-article signature, indexes only new or changed articles, reads only their excerpts and does so off the main actor, and deletes removed articles by identifier. Before, every finished download re-read and re-indexed the whole library on the main actor. The one-off `v3` full re-index is kept.
+  - Index runs are serialized: one runs at a time, a request during a run gets exactly one more run, and each run checks the sign-out generation after every wait. Overlapping runs can no longer leave a trashed or deleted article, or its text, in Spotlight. The plan, record and gate logic is unit tested.
+  - An article that leaves the index (deleted, trashed, purged or removed by sync) has its donations deleted with `deleteDonations(matching: .entityIdentifier(_:))`. That predicate is iOS 16, so it needs no gate.
+  - `authenticationPolicy = .requiresAuthentication` is set on Mark Done Reading, Get Reading Context, What to Read Next (it speaks a title) and Save Link (it writes to the account). Open Article, Continue Reading and Search Library open the app, which needs an unlock anyway.
+  - "This article" now means the reader's article only while the app is in the foreground. With the reader left open in the background, Mark Done Reading names the article and confirms first (iOS 18; on iOS 17 it asks which article), and Get Reading Context asks which article.
+  - The iOS 18 `system.search` schema is not adopted, and the reason is documented. Xcode 27.2 accepted it beside `searchInApp` (measured), but Xcode 16.4 needs a spelling that can't be checked locally, and on iOS 27 it would leave a second, deprecated search.
+  - A Siri search request is consumed per step, so a Library view recreated within 15 seconds doesn't apply it again.
+  - README: the current activity is advertised on every iOS version; only its entity identifier needs iOS 18.2.
+  - Checks after the fixes (tested, Xcode 27.2): ReaderCore `swift test` passes 57 tests. The unsigned device build, the simulator build and the simulator build-for-testing succeed with no new warnings. The intent metadata shows the new authentication policies. With the iOS 27 blocks compiled out, the typecheck is clean.
 - **Not verified.**
   - Anything with real Siri, Spotlight or Shortcuts on a device.
   - The new native tests, which run only in CI.

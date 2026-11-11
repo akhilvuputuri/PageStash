@@ -72,6 +72,9 @@ final class LocalStoreTests: XCTestCase {
     XCTAssertEqual(excerpts[item.id], "Synthetic Alpha & beta gamma delta epsilon.")
     XCTAssertNil(excerpts[waiting.id])
     XCTAssertEqual(try store.searchExcerpts(characters: 20)[item.id], "Synthetic Alpha &…")
+    XCTAssertEqual(try store.searchExcerpts(characters: 100, ids: [item.id]).count, 1)
+    XCTAssertTrue(try store.searchExcerpts(characters: 100, ids: [waiting.id]).isEmpty)
+    XCTAssertTrue(try store.searchExcerpts(characters: 100, ids: []).isEmpty)
     try store.removeDownload(item.id)
     XCTAssertNil(try store.searchExcerpts(characters: 100)[item.id])
   }

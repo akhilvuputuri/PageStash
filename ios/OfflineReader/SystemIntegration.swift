@@ -9,9 +9,17 @@ import WidgetKit
   static let spotlightDomain = "library"
   static let continueAction = "continue-reading"
   static let lastOpenedKey = "lastOpenedItem"
-  private static let signatureKey = "spotlightSignature"
-  /// Bumped by `clear()`, so an index request that started before sign-out never re-adds the library.
+  /// What is in the Spotlight index: article ID to `SpotlightSync.signature`, and its version.
+  private static let indexedKey = "spotlightIndexed"
+  private static let indexVersionKey = "spotlightIndexVersion"
+  /// The whole-library digest earlier builds kept; removed on upgrade.
+  private static let legacySignatureKey = "spotlightSignature"
+  /// Bumped by `clear()`; an index run checks it after every wait, so a run that started before
+  /// sign-out never re-adds the library.
   private static var generation = 0
+  private static var indexGate = SpotlightSync.Gate()
+  /// The newest library an index run should reflect.
+  private static var indexItems: [ReadingItem] = []
   private static var shortcutID: String?
 
   /// The article to resume: the last one opened if it is still unfinished in the Library,
@@ -61,16 +69,54 @@ import WidgetKit
   /// Saved articles appear in Spotlight by title, source, author and, once downloaded, the opening
   /// of their text, which Apple Intelligence also uses to find an article from a vague description
   /// and answer questions about it. Only what is on this device is indexed, and nothing leaves it.
+  ///
+  /// Every finished download reloads the library, so indexing is incremental and serialized: one
+  /// run at a time touches only new, changed and removed articles, and a request during a run gets
+  /// one more run over the newest library. Runs never overlap, so an older one can't put back an
+  /// article (or its text) that was trashed or deleted meanwhile.
   private static func index(_ items: [ReadingItem]) {
-    // Trashed items leave Spotlight until they are restored.
-    let visible = items.filter { $0.hasPreparedContent && !$0.isTrashed }
-    let words = AppState.shared.wordCounts
-    let stable = stableSignature(visible, words: words)
+    indexItems = items
+    guard indexGate.request() else { return }
+    Task { @MainActor in
+      repeat { await indexRun() } while indexGate.finish()
+    }
+  }
+  private static func indexRun() async {
+    // Downloads finish in bursts; let a burst settle into one run.
+    try? await Task.sleep(for: .milliseconds(500))
+    let started = generation
     let defaults = UserDefaults.standard
-    guard stable != defaults.string(forKey: signatureKey) else { return }
-    // Read only when something changed: one clipped query over the local search index.
-    let excerpts = (try? AppState.shared.store?.searchExcerpts(characters: excerptLength)) ?? [:]
-    let searchable = visible.map { item in
+    let index = CSSearchableIndex.default()
+    var indexed = defaults.dictionary(forKey: indexedKey) as? [String: String] ?? [:]
+    if defaults.string(forKey: indexVersionKey) != SpotlightSync.version {
+      // Once per version (and after sign-out): replace the whole domain, then go incremental.
+      let replaced: Void? = try? await index.deleteSearchableItems(
+        withDomainIdentifiers: [spotlightDomain])
+      guard replaced != nil, started == generation else { return }
+      indexed = [:]
+      defaults.set(indexed, forKey: indexedKey)
+      defaults.set(SpotlightSync.version, forKey: indexVersionKey)
+      defaults.removeObject(forKey: legacySignatureKey)
+    }
+    // Trashed and deleted items leave Spotlight until they are restored.
+    let visible = SpotlightSync.visible(indexItems)
+    let words = AppState.shared.wordCounts
+    let current = Dictionary(
+      visible.map { ($0.id, SpotlightSync.signature($0, words: words[$0.id])) },
+      uniquingKeysWith: { first, _ in first })
+    let plan = SpotlightSync.plan(current, indexed: indexed)
+    guard !plan.isEmpty else { return }
+    // An article that left the library takes its suggestions with it.
+    ArticleDonation.forget(plan.remove)
+    // Read and tidy only the changed articles' text, off the main actor.
+    let store = AppState.shared.store
+    let ids = Set(plan.upsert.keys)
+    let length = excerptLength
+    let excerpts = await Task.detached(priority: .utility) {
+      ids.isEmpty ? [:] : ((try? store?.searchExcerpts(characters: length, ids: ids)) ?? [:])
+    }.value
+    guard started == generation else { return }
+    let searchable = visible.filter { ids.contains($0.id) }.map { item in
       let entity = ArticleEntity(item)
       let searchable = CSSearchableItem(
         uniqueIdentifier: item.id, domainIdentifier: spotlightDomain,
@@ -79,42 +125,33 @@ import WidgetKit
       if #available(iOS 18, *) { searchable.associateAppEntity(entity) }
       return searchable
     }
-    let started = generation
-    Task { @MainActor in
-      let index = CSSearchableIndex.default()
-      try? await index.deleteSearchableItems(withDomainIdentifiers: [spotlightDomain])
+    var removed = true
+    if !plan.remove.isEmpty {
+      removed =
+        (try? await index.deleteSearchableItems(withIdentifiers: Array(plan.remove))) != nil
       guard started == generation else { return }
-      // A failed write leaves the signature alone, so the next reload tries again.
-      guard (try? await index.indexSearchableItems(searchable)) != nil, started == generation
-      else { return }
-      defaults.set(stable, forKey: signatureKey)
     }
+    var upserted = true
+    if !searchable.isEmpty {
+      upserted = (try? await index.indexSearchableItems(searchable)) != nil
+      guard started == generation else { return }
+    }
+    // A failed write is retried by the next run; see `SpotlightSync.record`.
+    defaults.set(
+      SpotlightSync.record(plan, onto: indexed, upserted: upserted, removed: removed),
+      forKey: indexedKey)
   }
   /// Enough of an article's opening for semantic search and questions, without indexing it whole.
   private static let excerptLength = 4000
-  /// A launch-independent digest of what Spotlight shows, so a cold launch doesn't re-index.
-  /// Word counts stand in for the text: they appear when an article downloads and change with it.
-  private static func stableSignature(_ items: [ReadingItem], words: [String: Int]) -> String {
-    var value: UInt64 = 0xcbf2_9ce4_8422_2325
-    // The version re-indexes existing installs once when what is indexed changes (2: entities;
-    // 3: author, publisher, link and text).
-    for byte in "v3".utf8 { value = (value ^ UInt64(byte)) &* 0x100_0000_01b3 }
-    for item in items {
-      let fields = [
-        item.id, item.title, item.archived ? "1" : "0", item.siteName ?? "", item.author ?? "",
-        item.sourceUrl ?? "", String(item.contentVersion), String(words[item.id] ?? 0),
-      ]
-      for byte in fields.joined(separator: "\u{1}").utf8 + [0] {
-        value = (value ^ UInt64(byte)) &* 0x100_0000_01b3
-      }
-    }
-    return String(value, radix: 16)
-  }
   /// Signing out removes everything the system holds about the library.
   static func clear() {
     generation += 1
+    indexGate.reset()
+    indexItems = []
     shortcutID = nil
-    UserDefaults.standard.removeObject(forKey: signatureKey)
+    for key in [indexedKey, indexVersionKey, legacySignatureKey] {
+      UserDefaults.standard.removeObject(forKey: key)
+    }
     CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [spotlightDomain])
     ContinueReading(article: nil, updated: Date()).save()
     WidgetCenter.shared.reloadTimelines(ofKind: ContinueReading.widgetKind)
@@ -155,6 +192,8 @@ struct ContinueReadingIntent: AppIntent {
 }
 struct SaveLinkIntent: AppIntent {
   static let title: LocalizedStringResource = "Save Link"
+  /// It adds to the account, so not from a locked iPhone.
+  static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
   static let description = IntentDescription(
     "Saves a web article to your library so it can be read offline.")
   @Parameter(title: "Link") var url: URL

@@ -153,8 +153,8 @@ struct LibraryView: View {
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showImports) { ImportsView() }
         // A Siri search shows the Library's results, so whatever covers them closes.
-        .onChange(of: search.request, initial: true) { _, request in
-          guard request?.isCurrent == true else { return }
+        .onChange(of: search.request, initial: true) {
+          guard search.take(.uncover) != nil else { return }
           (showSave, showSettings, showImports) = (false, false, false)
           (showArchive, showTrash) = (false, false)
           state.readerRoute = nil
@@ -362,8 +362,8 @@ struct LibraryList: View {
     .refreshable { try? await state.sync(forceManifest: true) }
     .navigationTitle(archived ? "Archive" : "Library")
     .searchable(text: $query, prompt: "Search \(archived ? "archive" : "library")")
-    .onChange(of: search.request, initial: true) { _, request in
-      guard !archived, let request, request.isCurrent else { return }
+    .onChange(of: search.request, initial: true) {
+      guard !archived, let request = search.take(.fill) else { return }
       (query, collection) = (request.term, "All")
     }
     .toolbar {

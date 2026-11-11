@@ -90,8 +90,16 @@ struct ArticleQuery: EntityStringQuery {
 
 /// The library as intents see it, read from the app's state on the main actor.
 @MainActor enum ArticleLibrary {
-  /// The article open in the full-screen reader, which "this article" refers to.
+  /// The article open in the full-screen reader, even if the app is in the background.
   static var openArticleID: String? { AppState.shared.readerRoute?.id }
+  /// The reader's article only while the app is on screen, which is when "this article" means it.
+  /// A foreground-inactive scene counts: Siri's own interface can cover a visible reader.
+  static var onScreenArticleID: String? {
+    let visible = UIApplication.shared.connectedScenes.contains {
+      $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive
+    }
+    return visible ? openArticleID : nil
+  }
   static func item(_ id: String) throws -> ReadingItem {
     guard AppState.shared.session != nil else { throw IntentError.signedOut }
     guard let item = LibraryQueries.openable(AppState.shared.items).first(where: { $0.id == id })
@@ -125,6 +133,8 @@ struct OpenArticleIntent: OpenIntent {
 
 struct WhatToReadNextIntent: AppIntent {
   static let title: LocalizedStringResource = "What to Read Next"
+  /// It speaks a saved article's title, which shouldn't be heard from a locked iPhone.
+  static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
   static let description = IntentDescription(
     "Suggests an unread article from your Library: one already on this device if there is one, then one you haven't started, newest first."
   )
@@ -145,6 +155,8 @@ struct WhatToReadNextIntent: AppIntent {
 
 struct GetReadingContextIntent: AppIntent {
   static let title: LocalizedStringResource = "Get Reading Context"
+  /// It speaks titles and a note about the library: not from a locked iPhone.
+  static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
   static let description = IntentDescription(
     "Reads the AI-generated Reading Context saved for an article: what it builds on, what you've already read and what's new. Uses the note on this device and never asks for a new one."
   )
@@ -156,7 +168,8 @@ struct GetReadingContextIntent: AppIntent {
   @MainActor func perform() async throws
     -> some IntentResult & ReturnsValue<String> & ProvidesDialog & ShowsSnippetView
   {
-    guard let id = article?.id ?? ArticleLibrary.openArticleID else {
+    // Unnamed means the article on screen; a reader left open in the background isn't "this".
+    guard let id = article?.id ?? ArticleLibrary.onScreenArticleID else {
       throw $article.needsValueError("Which article?")
     }
     let item = try ArticleLibrary.item(id)
@@ -177,6 +190,8 @@ struct GetReadingContextIntent: AppIntent {
 
 struct MarkDoneReadingIntent: AppIntent {
   static let title: LocalizedStringResource = "Mark Done Reading"
+  /// It changes the library: not from a locked iPhone.
+  static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
   static let description = IntentDescription(
     "Marks an article as read and moves it to Archive, like Done Reading in the reader. Undo it from the Library."
   )
@@ -184,10 +199,7 @@ struct MarkDoneReadingIntent: AppIntent {
   var article: ArticleEntity?
   static var parameterSummary: some ParameterSummary { Summary("Mark \(\.$article) done reading") }
   @MainActor func perform() async throws -> some IntentResult & ProvidesDialog {
-    guard let id = article?.id ?? ArticleLibrary.openArticleID else {
-      throw $article.needsValueError("Which article?")
-    }
-    let item = try ArticleLibrary.item(id)
+    let item = try await target()
     if item.archived && item.progress >= 1 {
       return .result(dialog: "“\(item.title)” is already done.")
     }
@@ -198,6 +210,20 @@ struct MarkDoneReadingIntent: AppIntent {
     // Like the in-app action, close the reader if it shows this article.
     if AppState.shared.readerRoute?.id == item.id { AppState.shared.readerRoute = nil }
     return .result(dialog: "Done. “\(item.title)” is in Archive. You can undo it in the Library.")
+  }
+  /// The named article, else the one on screen. A reader left open while the app is in the
+  /// background is named and confirmed first (iOS 18), or asked for, so yesterday's article isn't
+  /// archived unseen.
+  @MainActor private func target() async throws -> ReadingItem {
+    if let id = article?.id ?? ArticleLibrary.onScreenArticleID {
+      return try ArticleLibrary.item(id)
+    }
+    guard let id = ArticleLibrary.openArticleID, #available(iOS 18, *) else {
+      throw $article.needsValueError("Which article?")
+    }
+    let item = try ArticleLibrary.item(id)
+    try await requestConfirmation(dialog: "Mark “\(item.title)” done reading?")
+    return item
   }
 }
 
@@ -230,6 +256,18 @@ struct MarkDoneReadingIntent: AppIntent {
     let intent = SaveLinkIntent()
     intent.url = url
     donate(intent)
+  }
+  /// Articles that left the library (deleted, trashed, purged or removed by sync) take their
+  /// donations with them, so Siri stops suggesting them.
+  static func forget(_ ids: Set<String>) {
+    guard !ids.isEmpty else { return }
+    Task {
+      for id in ids {
+        let entity = EntityIdentifier(for: ArticleEntity.self, identifier: id)
+        _ = try? await IntentDonationManager.shared.deleteDonations(
+          matching: .entityIdentifier(entity))
+      }
+    }
   }
   /// Signing out forgets what this account did, including intents the system donated itself.
   static func clear() {
