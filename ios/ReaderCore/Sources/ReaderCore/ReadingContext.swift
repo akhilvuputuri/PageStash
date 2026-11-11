@@ -1,6 +1,8 @@
 import Foundation
 
-/// An AI-written note relating one article to articles the reader has finished. Gated by the server.
+/// An AI-written note relating one article to articles the reader has finished. Written either on
+/// this iPhone by Apple's on-device model (any account) or by the server for entitled accounts and
+/// synced. The optional fields exist only on notes written on the device; server notes omit them.
 public struct ReadingContext: Codable, Equatable, Sendable {
   public struct Note: Codable, Equatable, Sendable, Identifiable {
     public let itemId: String
@@ -13,6 +15,8 @@ public struct ReadingContext: Codable, Equatable, Sendable {
       self.note = note
     }
   }
+  /// The `model` label of notes written by Apple's on-device model.
+  public static let onDeviceModel = "apple-on-device"
   public let itemId: String
   public let contentVersion: Int
   public let generatedAt: String
@@ -25,10 +29,18 @@ public struct ReadingContext: Codable, Equatable, Sendable {
   public let buildsOn: [Note]
   public let covered: [Note]
   public let newIdeas: [String]
+  /// The article's main points, independent of reading history. Device notes only.
+  public let keyPoints: [String]?
+  /// How many articles were marked Done when it was written, so a device note knows when it's
+  /// stale. The prompt may list fewer (`historyCount`) because the local context window is small.
+  public let historyTotal: Int?
+  /// A long article was summarized from evenly spaced sections rather than all of its text.
+  public let excerpted: Bool?
   public init(
     itemId: String, contentVersion: Int, generatedAt: String, model: String, historyCount: Int,
     stale: Bool = false, summary: String, buildsOn: [Note] = [], covered: [Note] = [],
-    newIdeas: [String] = []
+    newIdeas: [String] = [], keyPoints: [String]? = nil, historyTotal: Int? = nil,
+    excerpted: Bool? = nil
   ) {
     self.itemId = itemId
     self.contentVersion = contentVersion
@@ -40,5 +52,31 @@ public struct ReadingContext: Codable, Equatable, Sendable {
     self.buildsOn = buildsOn
     self.covered = covered
     self.newIdeas = newIdeas
+    self.keyPoints = keyPoints
+    self.historyTotal = historyTotal
+    self.excerpted = excerpted
+  }
+  /// Written on this device by an Apple model provider rather than synced from the server.
+  public var isLocal: Bool { model.hasPrefix("apple-") }
+  /// A device note goes stale when the number of finished articles changes. Server notes carry the
+  /// server's own judgement in `stale`.
+  public func stale(finishedCount: Int) -> Bool {
+    guard isLocal else { return stale }
+    return stale || (historyTotal.map { $0 != finishedCount } ?? false)
+  }
+  public func with(stale: Bool) -> ReadingContext {
+    ReadingContext(
+      itemId: itemId, contentVersion: contentVersion, generatedAt: generatedAt, model: model,
+      historyCount: historyCount, stale: stale, summary: summary, buildsOn: buildsOn,
+      covered: covered, newIdeas: newIdeas, keyPoints: keyPoints, historyTotal: historyTotal,
+      excerpted: excerpted)
+  }
+  /// Whether a stored note should stay when a server copy arrives (by sync or refresh). On-device
+  /// notes are primary: one for the same content is never replaced by a server note, whatever its
+  /// time, because the device can regenerate it for free. Otherwise the newer note wins. An
+  /// explicit generation on the phone always saves.
+  public static func keepsStored(_ stored: ReadingContext, over server: ReadingContext) -> Bool {
+    guard stored.contentVersion == server.contentVersion else { return false }
+    return stored.isLocal || stored.generatedAt > server.generatedAt
   }
 }
