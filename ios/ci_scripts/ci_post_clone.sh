@@ -44,15 +44,20 @@ echo "Workflow ${CI_WORKFLOW:-none}; action ${CI_XCODEBUILD_ACTION:-unknown}; st
 #    so compare against a copy and always put the committed bytes back.
 project=ios/OfflineReader.xcodeproj
 saved=$(mktemp -d "${TMPDIR:-/tmp}/pagestash-project.XXXXXX")
+copied=0
 restore() {
-  if [ -d "$saved/OfflineReader.xcodeproj" ]; then
+  # Only a complete copy is put back: a copy that failed partway must never replace the project.
+  if [ "$copied" = 1 ]; then
     rm -rf "$project"
     cp -R "$saved/OfflineReader.xcodeproj" "$project"
   fi
   rm -rf "$saved"
 }
 trap restore EXIT
+# Shells such as dash don't run the EXIT trap on a signal.
+trap 'exit 130' INT TERM
 cp -R "$project" "$saved/OfflineReader.xcodeproj"
+copied=1
 python3 "$generator" >/dev/null || fail "scripts/generate-project.py failed with $(python3 --version 2>&1)"
 if ! diff -r "$saved/OfflineReader.xcodeproj" "$project" >/dev/null; then
   fail "the committed project doesn't match scripts/generate-project.py; regenerate and commit it"
@@ -60,7 +65,9 @@ fi
 echo "Project matches scripts/generate-project.py."
 
 # Outside Xcode Cloud (a local dry run) stop here: the release checks need Xcode Cloud's variables.
-if [ "${CI_XCODE_CLOUD:-}" != "TRUE" ]; then
+# Apple documents CI_XCODE_CLOUD as "TRUE". Any of its other variables also counts, so a change
+# in that value can't silently skip the release checks.
+if [ "${CI_XCODE_CLOUD:-}" != "TRUE" ] && [ -z "${CI_XCODE_CLOUD:-}${CI_BUILD_ID:-}${CI_WORKFLOW:-}" ]; then
   echo "Not running in Xcode Cloud; skipping the release checks."
   exit 0
 fi
@@ -90,7 +97,7 @@ fetch_main() {
   fi
   # $depth is intentionally unquoted: it is empty or one word.
   # shellcheck disable=SC2086
-  git fetch --quiet --no-tags $depth "$1" "+refs/heads/main:refs/remotes/pagestash-release/main"
+  GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags $depth "$1" "+refs/heads/main:refs/remotes/pagestash-release/main"
 }
 if ! fetch_main origin 2>/dev/null && ! fetch_main https://github.com/akhilvuputuri/PageStash.git; then
   fail "could not fetch main to confirm $commit is on it"
