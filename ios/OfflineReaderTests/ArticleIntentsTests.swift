@@ -21,6 +21,13 @@ import XCTest
       XCTAssertEqual(entity.attributeSet.title, "Synthetic title")
       XCTAssertEqual(entity.attributeSet.contentDescription, entity.details)
     }
+    let indexed = entity.spotlightAttributes(excerpt: "Synthetic opening text")
+    XCTAssertEqual(indexed.title, "Synthetic title")
+    XCTAssertEqual(indexed.authorNames, ["A. Writer"])
+    XCTAssertEqual(indexed.publishers, ["example.com"])
+    XCTAssertEqual(indexed.url, URL(string: "https://www.example.com/a"))
+    XCTAssertEqual(indexed.textContent, "Synthetic opening text")
+    XCTAssertNil(entity.spotlightAttributes(excerpt: nil).textContent)
   }
 
   func testUnfinishedBriefWithoutLinkHasNoDetailsBeyondItsKind() {

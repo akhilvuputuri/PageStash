@@ -27,7 +27,10 @@ import WidgetKit
     }
     return unfinished.first { $0.progress > 0 }
   }
-  static func didOpen(_ id: String) { UserDefaults.standard.set(id, forKey: lastOpenedKey) }
+  static func didOpen(_ id: String) {
+    UserDefaults.standard.set(id, forKey: lastOpenedKey)
+    ArticleDonation.opened(id)
+  }
 
   static func update(items: [ReadingItem], position: (ReadingItem) -> Double) {
     let next = continueItem(items)
@@ -55,44 +58,51 @@ import WidgetKit
     }
     index(items)
   }
-  /// Saved articles appear in Spotlight by title, source and author. Only what is on this device
-  /// is indexed, and nothing leaves it.
+  /// Saved articles appear in Spotlight by title, source, author and, once downloaded, the opening
+  /// of their text, which Apple Intelligence also uses to find an article from a vague description
+  /// and answer questions about it. Only what is on this device is indexed, and nothing leaves it.
   private static func index(_ items: [ReadingItem]) {
     // Trashed items leave Spotlight until they are restored.
     let visible = items.filter { $0.hasPreparedContent && !$0.isTrashed }
-    let stable = stableSignature(visible)
+    let words = AppState.shared.wordCounts
+    let stable = stableSignature(visible, words: words)
     let defaults = UserDefaults.standard
     guard stable != defaults.string(forKey: signatureKey) else { return }
+    // Read only when something changed: one clipped query over the local search index.
+    let excerpts = (try? AppState.shared.store?.searchExcerpts(characters: excerptLength)) ?? [:]
     let searchable = visible.map { item in
       let entity = ArticleEntity(item)
-      let attributes = CSSearchableItemAttributeSet(contentType: .text)
-      attributes.title = item.title
-      attributes.contentDescription = entity.details
       let searchable = CSSearchableItem(
-        uniqueIdentifier: item.id, domainIdentifier: spotlightDomain, attributeSet: attributes)
+        uniqueIdentifier: item.id, domainIdentifier: spotlightDomain,
+        attributeSet: entity.spotlightAttributes(excerpt: excerpts[item.id]))
       // Lets Siri and Apple Intelligence resolve the Spotlight result to the article entity.
       if #available(iOS 18, *) { searchable.associateAppEntity(entity) }
       return searchable
     }
-    let index = CSSearchableIndex.default()
     let started = generation
-    index.deleteSearchableItems(withDomainIdentifiers: [spotlightDomain]) { _ in
-      Task { @MainActor in
-        guard started == generation else { return }
-        index.indexSearchableItems(searchable)
-        defaults.set(stable, forKey: signatureKey)
-      }
+    Task { @MainActor in
+      let index = CSSearchableIndex.default()
+      try? await index.deleteSearchableItems(withDomainIdentifiers: [spotlightDomain])
+      guard started == generation else { return }
+      // A failed write leaves the signature alone, so the next reload tries again.
+      guard (try? await index.indexSearchableItems(searchable)) != nil, started == generation
+      else { return }
+      defaults.set(stable, forKey: signatureKey)
     }
   }
+  /// Enough of an article's opening for semantic search and questions, without indexing it whole.
+  private static let excerptLength = 4000
   /// A launch-independent digest of what Spotlight shows, so a cold launch doesn't re-index.
-  private static func stableSignature(_ items: [ReadingItem]) -> String {
+  /// Word counts stand in for the text: they appear when an article downloads and change with it.
+  private static func stableSignature(_ items: [ReadingItem], words: [String: Int]) -> String {
     var value: UInt64 = 0xcbf2_9ce4_8422_2325
-    // The version re-indexes existing installs once when what is indexed changes (2: entities).
-    for byte in "v2".utf8 { value = (value ^ UInt64(byte)) &* 0x100_0000_01b3 }
+    // The version re-indexes existing installs once when what is indexed changes (2: entities;
+    // 3: author, publisher, link and text).
+    for byte in "v3".utf8 { value = (value ^ UInt64(byte)) &* 0x100_0000_01b3 }
     for item in items {
       let fields = [
         item.id, item.title, item.archived ? "1" : "0", item.siteName ?? "", item.author ?? "",
-        item.sourceUrl ?? "",
+        item.sourceUrl ?? "", String(item.contentVersion), String(words[item.id] ?? 0),
       ]
       for byte in fields.joined(separator: "\u{1}").utf8 + [0] {
         value = (value ^ UInt64(byte)) &* 0x100_0000_01b3
@@ -110,6 +120,7 @@ import WidgetKit
     WidgetCenter.shared.reloadTimelines(ofKind: ContinueReading.widgetKind)
     UIApplication.shared.shortcutItems = []
     UserDefaults.standard.removeObject(forKey: lastOpenedKey)
+    ArticleDonation.clear()
   }
   @discardableResult static func handle(_ shortcut: UIApplicationShortcutItem) -> Bool {
     guard shortcut.type == continueAction, let id = shortcut.userInfo?["id"] as? String else {
@@ -138,7 +149,7 @@ struct ContinueReadingIntent: AppIntent {
     guard let item = SystemIntegration.continueItem(AppState.shared.items) else {
       throw IntentError.nothingInProgress
     }
-    AppState.shared.open(item.id)
+    ArticleDonation.open(item.id)
     return .result()
   }
 }

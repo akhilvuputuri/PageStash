@@ -6,12 +6,11 @@ import SwiftUI
 // Saved articles for Siri, Shortcuts, Spotlight and Apple Intelligence. Everything here reads the
 // signed-in library on this device (or the synthetic preview store); nothing new leaves it.
 //
-// Later SDKs: the iOS 27 App Schemas for the new Siri and on-screen View Annotations are not in the
-// iOS 26.2 SDK this builds with. When they are, `ArticleEntity` and these intents are what they
-// would describe, and `ArticleActivity` is where the open article would be annotated instead.
-// The iOS 18 Assistant Schemas were considered and not adopted: the `books` domain models
-// purchased books (series, genre, purchase date) and `reader` models paged documents (rotate,
-// insert pages), neither of which fits a saved web article.
+// iOS 27 additions (the `system.searchInApp` schema) and view annotations are in
+// ArticleSchemas.swift, behind the Swift 6.4 compiler that ships with the iOS 27 SDK. The iOS 18
+// Assistant Schemas were considered and not adopted: the `books` domain models purchased books
+// (series, genre, purchase date) and `reader` models paged documents (rotate, insert pages),
+// neither of which fits a saved web article.
 
 /// A saved article. Its identifier is the library item ID, which is also the Spotlight item's
 /// unique identifier, so Siri, Spotlight and the app all name the same article the same way.
@@ -48,10 +47,22 @@ struct ArticleEntity: AppEntity {
 /// on iOS 17 articles are still indexed, just without the association.
 @available(iOS 18, *)
 extension ArticleEntity: IndexedEntity {
-  var attributeSet: CSSearchableItemAttributeSet {
+  var attributeSet: CSSearchableItemAttributeSet { spotlightAttributes(excerpt: nil) }
+}
+
+extension ArticleEntity {
+  /// What Spotlight indexes for the article, and Apple Intelligence searches semantically and
+  /// answers questions from: title, source, author, link and, once downloaded, the opening of its
+  /// text. The system index stays on this iPhone.
+  func spotlightAttributes(excerpt: String?) -> CSSearchableItemAttributeSet {
     let attributes = CSSearchableItemAttributeSet(contentType: .text)
     attributes.title = title
+    attributes.displayName = title
     attributes.contentDescription = details
+    attributes.authorNames = author.map { [$0] }
+    attributes.publishers = source.map { [$0] }
+    attributes.url = link
+    attributes.textContent = excerpt
     return attributes
   }
 }
@@ -107,7 +118,7 @@ struct OpenArticleIntent: OpenIntent {
   static var parameterSummary: some ParameterSummary { Summary("Open \(\.$target)") }
   @MainActor func perform() async throws -> some IntentResult {
     // Same route as rows, links, Spotlight and the quick action.
-    AppState.shared.open(try ArticleLibrary.item(target.id).id)
+    ArticleDonation.open(try ArticleLibrary.item(target.id).id)
     return .result()
   }
 }
@@ -187,6 +198,58 @@ struct MarkDoneReadingIntent: AppIntent {
     // Like the in-app action, close the reader if it shows this article.
     if AppState.shared.readerRoute?.id == item.id { AppState.shared.readerRoute = nil }
     return .result(dialog: "Done. “\(item.title)” is in Archive. You can undo it in the Library.")
+  }
+}
+
+/// Tells the system what the person did in the app, so Siri and Apple Intelligence can suggest it
+/// again and resolve vague requests. Donations stay in the system's on-device store. Intents that
+/// Siri or Shortcuts run are donated by the system already, so those aren't donated again.
+@MainActor enum ArticleDonation {
+  /// The article an intent just opened; the reader appearing for it isn't an in-app action.
+  private static var openedByIntent: String?
+  /// Opens an article on behalf of an intent.
+  static func open(_ id: String) {
+    openedByIntent = id
+    AppState.shared.open(id)
+  }
+  static func opened(_ id: String) {
+    defer { openedByIntent = nil }
+    guard openedByIntent != id,
+      let item = LibraryQueries.openable(AppState.shared.items).first(where: { $0.id == id })
+    else { return }
+    let intent = OpenArticleIntent()
+    intent.target = ArticleEntity(item)
+    donate(intent)
+  }
+  static func finished(_ item: ReadingItem) {
+    let intent = MarkDoneReadingIntent()
+    intent.article = ArticleEntity(item)
+    donate(intent)
+  }
+  static func saved(_ url: URL) {
+    let intent = SaveLinkIntent()
+    intent.url = url
+    donate(intent)
+  }
+  /// Signing out forgets what this account did, including intents the system donated itself.
+  static func clear() {
+    openedByIntent = nil
+    var types: [any AppIntent.Type] = [
+      OpenArticleIntent.self, WhatToReadNextIntent.self, GetReadingContextIntent.self,
+      MarkDoneReadingIntent.self, ContinueReadingIntent.self, SaveLinkIntent.self,
+    ]
+    #if compiler(>=6.4)
+      if #available(iOS 27.0, *) { types.append(SearchLibraryIntent.self) }
+    #endif
+    Task { [types] in
+      for type in types {
+        _ = try? await IntentDonationManager.shared.deleteDonations(matching: .intentType(type))
+      }
+    }
+  }
+  /// Fire and forget: a failed donation only costs a suggestion.
+  private static func donate(_ intent: some AppIntent) {
+    IntentDonationManager.shared.donate(intent: intent)
   }
 }
 

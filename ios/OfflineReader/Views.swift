@@ -93,6 +93,7 @@ struct LibraryView: View {
   @State private var showImports = false
   @State private var showArchive = false
   @State private var showTrash = false
+  @ObservedObject private var search = LibrarySearch.shared
   private var pendingImports: Int {
     state.items.filter(\.needsImportReview).count + state.sharedSaves.count
   }
@@ -151,6 +152,13 @@ struct LibraryView: View {
         .sheet(isPresented: $showSave) { SaveView() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showImports) { ImportsView() }
+        // A Siri search shows the Library's results, so whatever covers them closes.
+        .onChange(of: search.request, initial: true) { _, request in
+          guard request?.isCurrent == true else { return }
+          (showSave, showSettings, showImports) = (false, false, false)
+          (showArchive, showTrash) = (false, false)
+          state.readerRoute = nil
+        }
         .onChange(of: state.openRequest) { _, request in
           guard let request else { return }
           state.openRequest = nil
@@ -182,6 +190,7 @@ struct LibraryList: View {
   let transition: Namespace.ID
   @State private var query = ""
   @State private var collection = "All"
+  @ObservedObject private var search = LibrarySearch.shared
   /// The last item moved to Trash, offered for Undo until the next action or dismissal.
   @State private var trashedUndo: ReadingItem?
   /// Undo applies only while that item is still in Trash (it may be restored elsewhere).
@@ -292,6 +301,7 @@ struct LibraryList: View {
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .articleEntity(item.id)
         .readerZoomSource(id: item.id, in: transition)
         .listRowBackground(tokens.nativePage)
         .listRowSeparator(.hidden).listRowInsets(
@@ -352,6 +362,10 @@ struct LibraryList: View {
     .refreshable { try? await state.sync(forceManifest: true) }
     .navigationTitle(archived ? "Archive" : "Library")
     .searchable(text: $query, prompt: "Search \(archived ? "archive" : "library")")
+    .onChange(of: search.request, initial: true) { _, request in
+      guard !archived, let request, request.isCurrent else { return }
+      (query, collection) = (request.term, "All")
+    }
     .toolbar {
       if !collections.isEmpty {
         ToolbarItem(placement: .topBarTrailing) {
@@ -610,6 +624,7 @@ struct SaveView: View {
             Task {
               do {
                 try await state.save(url, key: key)
+                if let link = URL(string: url) { ArticleDonation.saved(link) }
                 dismiss()
               } catch { self.error = error.localizedDescription }
               busy = false
@@ -658,6 +673,7 @@ struct ReaderScreen: View {
       linkNoticeDismissal?.cancel()
       withAnimation(reduceMotion ? nil : .default) { linkNotice = result }
       guard result.saved else { return }
+      ArticleDonation.saved(url)
       linkNoticeDismissal = Task {
         try? await Task.sleep(for: .seconds(4))
         guard !Task.isCancelled else { return }
@@ -678,6 +694,7 @@ struct ReaderScreen: View {
   private func finish(_ item: ReadingItem) {
     scrollState.flush?()
     if state.finishReading(item.id) {
+      ArticleDonation.finished(item)
       let id = item.id
       undoManager?.registerUndo(withTarget: state) { state in
         // Only while this article's Undo is still the current one.
@@ -876,7 +893,9 @@ struct ReaderScreen: View {
       .navigationBarTitleDisplayMode(.inline)
       .userActivity(ArticleActivity.type, isActive: item != nil) { activity in
         ArticleActivity.describe(activity, id: itemID, title: item?.title)
-      }.onAppear {
+      }
+      .articleEntity(item == nil ? nil : itemID)
+      .onAppear {
         finished = false
         SystemIntegration.didOpen(itemID)
       }.onDisappear {

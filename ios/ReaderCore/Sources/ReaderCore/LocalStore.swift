@@ -480,6 +480,21 @@ public final class LocalStore: @unchecked Sendable {
           .map { $0[0] })
     }
   }
+  /// The opening of each downloaded article's text, for the on-device Spotlight index. SQLite clips
+  /// it, so indexing doesn't copy whole articles; `LibraryQueries.excerpt` tidies it.
+  public func searchExcerpts(characters: Int) throws -> [String: String] {
+    try synchronized {
+      var excerpts: [String: String] = [:]
+      for row in try rows(
+        "SELECT id,substr(body,1,?) FROM search WHERE body<>''", [String(max(0, characters) * 2)])
+      where row.count == 2 {
+        if let excerpt = LibraryQueries.excerpt(row[1], characters: characters) {
+          excerpts[row[0]] = excerpt
+        }
+      }
+      return excerpts
+    }
+  }
   public var diskUsage: Int64 {
     synchronized {
       let enumerator = FileManager.default.enumerator(

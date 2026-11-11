@@ -61,6 +61,17 @@ final class LibraryQueriesTests: XCTestCase {
     XCTAssertTrue(LibraryQueries.search("  ", in: items, bodyMatches: ["b1"]).isEmpty)
   }
 
+  func testExcerptDecodesCollapsesAndCutsAtAWord() {
+    XCTAssertEqual(
+      LibraryQueries.excerpt("  It&#39;s  &quot;slow&quot;\n\n reading &lt;3 ", characters: 100),
+      "It's \"slow\" reading <3")
+    XCTAssertEqual(
+      LibraryQueries.excerpt("one two three four", characters: 9), "one two…")
+    XCTAssertEqual(LibraryQueries.excerpt("unbroken", characters: 4), "unbr…")
+    XCTAssertNil(LibraryQueries.excerpt(" \n&nbsp; ", characters: 10))
+    XCTAssertNil(LibraryQueries.excerpt("text", characters: 0))
+  }
+
   func testSpokenTextIsLabelledAndCompact() {
     let context = ReadingContext(
       itemId: "a", contentVersion: 1, generatedAt: "2026-11-01T00:00:00Z", model: "m",

@@ -46,6 +46,24 @@ public enum LibraryQueries {
     let titledIDs = Set(titled.map(\.id))
     return titled + candidates.filter { bodyMatches.contains($0.id) && !titledIDs.contains($0.id) }
   }
+  /// Readable opening text from the search index's tag-stripped article body, for Spotlight's
+  /// semantic search and questions about an article: common entities decoded, whitespace collapsed
+  /// and cut at a word boundary. Nil when there is no text.
+  public static func excerpt(_ body: String, characters: Int) -> String? {
+    var text = body
+    for (entity, value) in [
+      ("&nbsp;", " "), ("&#160;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""),
+      ("&#39;", "'"), ("&#x27;", "'"), ("&apos;", "'"), ("&amp;", "&"),
+    ] {
+      text = text.replacingOccurrences(of: entity, with: value)
+    }
+    text = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    guard !text.isEmpty, characters > 0 else { return nil }
+    guard text.count > characters else { return text }
+    let clipped = text.prefix(characters)
+    let cut = clipped.lastIndex(of: " ").map { clipped[..<$0] } ?? clipped
+    return String(cut) + "…"
+  }
 }
 
 extension ReadingContext {
