@@ -36,6 +36,12 @@ public enum SpotlightSync {
       upsert: current.filter { indexed[$0.key] != $0.value },
       remove: Set(indexed.keys).subtracting(current.keys))
   }
+  /// The record to save before writing a plan (write-ahead): its articles under an empty
+  /// signature, so if the app is killed while Spotlight finishes the write, a later run still knows
+  /// they may be indexed and removes them (and their donations) once they leave the library.
+  public static func pending(_ plan: Plan, onto indexed: [String: String]) -> [String: String] {
+    record(plan, onto: indexed, upserted: false, removed: false)
+  }
   /// The record after applying a plan. A failed write may have left the index part-way, so its
   /// articles stay recorded under an empty signature: still present ones are retried, and ones
   /// that disappear later are still removed.

@@ -43,6 +43,17 @@ final class SpotlightSyncTests: XCTestCase {
       SpotlightSync.record(plan, onto: ["gone": "old"], upserted: true, removed: true), ["a": "s1"])
   }
 
+  func testTheRecordSavedBeforeAWriteHoldsItsArticlesAsPending() {
+    let plan = SpotlightSync.plan(["new": "s1", "kept": "k"], indexed: ["kept": "k", "gone": "g"])
+    let ahead = SpotlightSync.pending(plan, onto: ["kept": "k", "gone": "g"])
+    XCTAssertEqual(ahead, ["new": "", "kept": "k", "gone": "g"])
+    // Killed during the write: the next run rewrites it while it is in the library...
+    XCTAssertEqual(
+      SpotlightSync.plan(["new": "s1", "kept": "k"], indexed: ahead).upsert, ["new": "s1"])
+    // ...and removes it, with its text, once it has been trashed or deleted.
+    XCTAssertEqual(SpotlightSync.plan(["kept": "k"], indexed: ahead).remove, ["new", "gone"])
+  }
+
   func testGateRunsOneAtATimeAndOnceMoreForRequestsMeanwhile() {
     var gate = SpotlightSync.Gate()
     XCTAssertTrue(gate.request())

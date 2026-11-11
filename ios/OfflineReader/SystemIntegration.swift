@@ -20,6 +20,12 @@ import WidgetKit
   private static var indexGate = SpotlightSync.Gate()
   /// The newest library an index run should reflect.
   private static var indexItems: [ReadingItem] = []
+  /// Spotlight's requests to rebuild, applied at the start of the next run so a run in flight
+  /// can't overwrite them: everything, or these articles.
+  private static var reindexAll = false
+  private static var reindexIDs: Set<String> = []
+  /// Held strongly: the index keeps its delegate weakly.
+  private static let reindexer = SpotlightReindexer()
   private static var shortcutID: String?
 
   /// The article to resume: the last one opened if it is still unfinished in the Library,
@@ -76,6 +82,8 @@ import WidgetKit
   /// article (or its text) that was trashed or deleted meanwhile.
   private static func index(_ items: [ReadingItem]) {
     indexItems = items
+    let systemIndex = CSSearchableIndex.default()
+    if systemIndex.indexDelegate == nil { systemIndex.indexDelegate = reindexer }
     guard indexGate.request() else { return }
     Task { @MainActor in
       repeat { await indexRun() } while indexGate.finish()
@@ -88,6 +96,9 @@ import WidgetKit
     let defaults = UserDefaults.standard
     let index = CSSearchableIndex.default()
     var indexed = defaults.dictionary(forKey: indexedKey) as? [String: String] ?? [:]
+    if reindexAll { defaults.removeObject(forKey: indexVersionKey) }
+    for id in reindexIDs where indexed[id] != nil { indexed[id] = "" }
+    (reindexAll, reindexIDs) = (false, [])
     if defaults.string(forKey: indexVersionKey) != SpotlightSync.version {
       // Once per version (and after sign-out): replace the whole domain, then go incremental.
       let replaced: Void? = try? await index.deleteSearchableItems(
@@ -105,7 +116,13 @@ import WidgetKit
       visible.map { ($0.id, SpotlightSync.signature($0, words: words[$0.id])) },
       uniquingKeysWith: { first, _ in first })
     let plan = SpotlightSync.plan(current, indexed: indexed)
-    guard !plan.isEmpty else { return }
+    guard !plan.isEmpty else {
+      defaults.set(indexed, forKey: indexedKey)
+      return
+    }
+    // Write-ahead: record the articles about to be written before Spotlight can have them, so a
+    // kill during the write can't leave one indexed that a later run doesn't know to remove.
+    defaults.set(SpotlightSync.pending(plan, onto: indexed), forKey: indexedKey)
     // An article that left the library takes its suggestions with it.
     ArticleDonation.forget(plan.remove)
     // Read and tidy only the changed articles' text, off the main actor.
@@ -143,6 +160,11 @@ import WidgetKit
   }
   /// Enough of an article's opening for semantic search and questions, without indexing it whole.
   private static let excerptLength = 4000
+  /// Spotlight lost or couldn't apply some of the app's items: rebuild them on the next run.
+  static func reindex(_ ids: Set<String>?) {
+    if let ids { reindexIDs.formUnion(ids) } else { reindexAll = true }
+    index(indexItems)
+  }
   /// Signing out removes everything the system holds about the library.
   static func clear() {
     generation += 1
@@ -165,6 +187,31 @@ import WidgetKit
     }
     AppState.shared.open(id)
     return true
+  }
+}
+
+/// Receives Spotlight's requests to rebuild the app's items while the app runs. (Requests while it
+/// isn't running would need an index extension; the app re-checks its items on every reload.)
+final class SpotlightReindexer: NSObject, CSSearchableIndexDelegate {
+  func searchableIndex(
+    _ searchableIndex: CSSearchableIndex,
+    reindexAllSearchableItemsWithAcknowledgementHandler acknowledgementHandler: @escaping () -> Void
+  ) {
+    // The request is kept until the next run applies it, so it can be acknowledged now.
+    DispatchQueue.main.async {
+      MainActor.assumeIsolated { SystemIntegration.reindex(nil) }
+      acknowledgementHandler()
+    }
+  }
+  func searchableIndex(
+    _ searchableIndex: CSSearchableIndex,
+    reindexSearchableItemsWithIdentifiers identifiers: [String],
+    acknowledgementHandler: @escaping () -> Void
+  ) {
+    DispatchQueue.main.async {
+      MainActor.assumeIsolated { SystemIntegration.reindex(Set(identifiers)) }
+      acknowledgementHandler()
+    }
   }
 }
 

@@ -795,6 +795,11 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - A Siri search request is consumed per step, so a Library view recreated within 15 seconds doesn't apply it again.
   - README: the current activity is advertised on every iOS version; only its entity identifier needs iOS 18.2.
   - Checks after the fixes (tested, Xcode 27.2): ReaderCore `swift test` passes 57 tests. The unsigned device build, the simulator build and the simulator build-for-testing succeed with no new warnings. The intent metadata shows the new authentication policies. With the iOS 27 blocks compiled out, the typecheck is clean.
+- **Delta review of `dc293b6` (Opus 5.5): REQUEST CHANGES, addressed:**
+  - Blocking: the Spotlight record was saved only after a write returned. A kill during that wait could leave an article indexed that a later trash or delete never removed. The record is now written ahead: the plan's articles are saved under an empty signature before any write, including the first full upsert after a version change, and their real signatures after success. Pure tests cover the write-ahead record and removing a pending article that has left the library.
+  - `CSSearchableIndexDelegate` (both required methods, checked in the iOS 27.2 SDK header) re-runs indexing when Spotlight asks to rebuild all items or given ones while the app runs. It needs no Info.plist entry. Requests while the app isn't running would need an index extension, which is recorded as a known limit.
+  - ARCHITECTURE now names `requestConfirmation(dialog:)`, as the code calls it.
+  - Checks (tested, Xcode 27.2): ReaderCore `swift test` passes 58 tests. The unsigned device build and the simulator build succeed with no new warnings.
 - **Not verified.**
   - Anything with real Siri, Spotlight or Shortcuts on a device.
   - The new native tests, which run only in CI.
