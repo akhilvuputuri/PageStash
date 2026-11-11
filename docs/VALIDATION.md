@@ -765,6 +765,31 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Three doc labels are corrected, and the build-number floor is described as project policy.
 - **Not verified.** Any real Xcode Cloud build. The workflow doesn't exist yet; the owner creates it (DEPLOYMENT.md step 6). The full list is at the end of DEPLOYMENT.md section 3.
 
+### Articles for Siri, Shortcuts and Spotlight, 12 November 2026
+
+- **Request (reported).** The owner asked to integrate Siri and Apple Intelligence. The first pass was built on Xcode 26.3. After the owner installed Xcode 27.2 on 12 November, a second pass added what the iOS 27 SDK offers.
+- **Change.**
+  - `ArticleEntity` and its query make saved articles available to Siri, Shortcuts and Spotlight: lookup by ID, suggestions, and search over titles and downloaded text. On iOS 18 and later the entity is linked to the existing Spotlight items.
+  - New intents: Open Article, What to Read Next, Get Reading Context (spoken, labelled AI-generated, never generates) and Mark Done Reading (same Undo as the app). Continue Reading and Save Link are unchanged. There are 6 App Shortcuts.
+  - The reader marks the open article as the current activity. On iOS 18.4 and later it also annotates the reader and Library rows with the entity, so "this article" can resolve.
+  - iOS 27: `SearchLibraryIntent` adopts the `system.searchInApp` schema, so Siri can search the Library without a set phrase.
+  - Opened, finished and saved articles are donated to the system, and sign-out deletes those donations.
+  - Spotlight items now carry author, site and the first 4,000 characters of downloaded text.
+- **Not adopted, with reasons.**
+  - `system.open`: it can't coexist with the `OpenIntent` that Spotlight needs on iOS 18 to 26.
+  - `browser.readingListItem`: it needs a second entity type, and briefs have no link.
+  - The books and reader schemas describe purchased books and paged documents.
+- **Compatibility.** The deployment target stays iOS 17. iOS 27 symbols sit inside `#if compiler(>=6.4)` and `@available(iOS 27.0, *)`; iOS 18 symbols have availability checks. CI still compiles with Xcode 16.4.
+- **Checks (tested, Xcode 27.2, after merging main at `3518cdd`).**
+  - ReaderCore: `swift test` passes 53 tests, 6 of them new.
+  - The unsigned device build and the simulator build both succeed.
+  - The built app's intent metadata lists the 7 intents, the entity, the schema and 6 shortcuts.
+  - The Xcode 16.4 path was approximated by typechecking with the iOS 27 blocks compiled out.
+- **Not verified.**
+  - Anything with real Siri, Spotlight or Shortcuts on a device.
+  - The new native tests, which run only in CI.
+  - The app on an iOS 27 simulator. Only the iOS 26.3 runtime is installed.
+
 ## Not yet tested
 
 - Reading context against a real provider: answer quality, latency and cost per note, and the sheet in Dark and with VoiceOver.
