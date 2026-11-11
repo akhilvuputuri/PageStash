@@ -59,6 +59,25 @@ final class LocalStoreTests: XCTestCase {
     try store.edit(item.id, ItemPatch(deleted: true))
     XCTAssertNil(try store.wordCounts()[item.id])
   }
+  func testSearchExcerptsCoverOnlyDownloadedTextAndAreClipped() throws {
+    let html = Data("<h1>Synthetic</h1><p>Alpha &amp; beta gamma delta epsilon.</p>".utf8)
+    let content = asset(html)
+    let item = ReadingItem(id: UUID().uuidString, title: "Excerpted", assets: [content])
+    let waiting = ReadingItem(id: UUID().uuidString, title: "Not downloaded", assets: [])
+    let store = try LocalStore(root: root)
+    try store.apply(LibraryPage(items: [item, waiting], cursor: 1))
+    XCTAssertTrue(try store.searchExcerpts(characters: 100).isEmpty)
+    try install(html, asset: content, item: item, store: store)
+    let excerpts = try store.searchExcerpts(characters: 100)
+    XCTAssertEqual(excerpts[item.id], "Synthetic Alpha & beta gamma delta epsilon.")
+    XCTAssertNil(excerpts[waiting.id])
+    XCTAssertEqual(try store.searchExcerpts(characters: 20)[item.id], "Synthetic Alpha &…")
+    XCTAssertEqual(try store.searchExcerpts(characters: 100, ids: [item.id]).count, 1)
+    XCTAssertTrue(try store.searchExcerpts(characters: 100, ids: [waiting.id]).isEmpty)
+    XCTAssertTrue(try store.searchExcerpts(characters: 100, ids: []).isEmpty)
+    try store.removeDownload(item.id)
+    XCTAssertNil(try store.searchExcerpts(characters: 100)[item.id])
+  }
   func testTrashSurvivesRefreshAndRestoreKeepsTheDownload() throws {
     let html = Data("<p>Kept while in Trash</p>".utf8)
     let content = asset(html)

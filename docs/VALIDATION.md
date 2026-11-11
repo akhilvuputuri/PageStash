@@ -765,6 +765,46 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - Three doc labels are corrected, and the build-number floor is described as project policy.
 - **Not verified.** Any real Xcode Cloud build. The workflow doesn't exist yet; the owner creates it (DEPLOYMENT.md step 6). The full list is at the end of DEPLOYMENT.md section 3.
 
+### Articles for Siri, Shortcuts and Spotlight, 12 November 2026
+
+- **Request (reported).** The owner asked to integrate Siri and Apple Intelligence. The first pass was built on Xcode 26.3. After the owner installed Xcode 27.2 on 12 November, a second pass added what the iOS 27 SDK offers.
+- **Change.**
+  - `ArticleEntity` and its query make saved articles available to Siri, Shortcuts and Spotlight: lookup by ID, suggestions, and search over titles and downloaded text. On iOS 18 and later the entity is linked to the existing Spotlight items.
+  - New intents: Open Article, What to Read Next, Get Reading Context (spoken, labelled AI-generated, never generates) and Mark Done Reading (same Undo as the app). Continue Reading and Save Link are unchanged. There are 6 App Shortcuts.
+  - The reader marks the open article as the current activity. On iOS 18.4 and later it also annotates the reader and Library rows with the entity, so "this article" can resolve.
+  - iOS 27: `SearchLibraryIntent` adopts the `system.searchInApp` schema, so Siri can search the Library without a set phrase.
+  - Opened, finished and saved articles are donated to the system, and sign-out deletes those donations.
+  - Spotlight items now carry author, site and the first 4,000 characters of downloaded text.
+- **Not adopted, with reasons.**
+  - `system.open`: it can't coexist with the `OpenIntent` that Spotlight needs on iOS 18 to 26.
+  - `browser.readingListItem`: it needs a second entity type, and briefs have no link.
+  - The books and reader schemas describe purchased books and paged documents.
+- **Compatibility.** The deployment target stays iOS 17. iOS 27 symbols sit inside `#if compiler(>=6.4)` and `@available(iOS 27.0, *)`; iOS 18 symbols have availability checks. CI still compiles with Xcode 16.4.
+- **Checks (tested, Xcode 27.2, after merging main at `3518cdd`).**
+  - ReaderCore: `swift test` passes 53 tests, 6 of them new (57 after the review fixes below).
+  - The unsigned device build and the simulator build both succeed.
+  - The built app's intent metadata lists the 7 intents, the entity, the schema and 6 shortcuts.
+  - The Xcode 16.4 path was approximated by typechecking with the iOS 27 blocks compiled out.
+- **Independent review of `ed1b2f5` (Opus 5.5): APPROVE**, with non-blocking findings. All were addressed before merge:
+  - Spotlight indexing is now incremental (`SpotlightSync` in ReaderCore). It keeps a per-article signature, indexes only new or changed articles, reads only their excerpts and does so off the main actor, and deletes removed articles by identifier. Before, every finished download re-read and re-indexed the whole library on the main actor. The one-off `v3` full re-index is kept.
+  - Index runs are serialized: one runs at a time, a request during a run gets exactly one more run, and each run checks the sign-out generation after every wait. Overlapping runs can no longer leave a trashed or deleted article, or its text, in Spotlight. The plan, record and gate logic is unit tested.
+  - An article that leaves the index (deleted, trashed, purged or removed by sync) has its donations deleted with `deleteDonations(matching: .entityIdentifier(_:))`. That predicate is iOS 16, so it needs no gate.
+  - `authenticationPolicy = .requiresAuthentication` is set on Mark Done Reading, Get Reading Context, What to Read Next (it speaks a title) and Save Link (it writes to the account). Open Article, Continue Reading and Search Library open the app, which needs an unlock anyway.
+  - "This article" now means the reader's article only while the app is in the foreground. With the reader left open in the background, Mark Done Reading names the article and confirms first (iOS 18; on iOS 17 it asks which article), and Get Reading Context asks which article.
+  - The iOS 18 `system.search` schema is not adopted, and the reason is documented. Xcode 27.2 accepted it beside `searchInApp` (measured), but Xcode 16.4 needs a spelling that can't be checked locally, and on iOS 27 it would leave a second, deprecated search.
+  - A Siri search request is consumed per step, so a Library view recreated within 15 seconds doesn't apply it again.
+  - README: the current activity is advertised on every iOS version; only its entity identifier needs iOS 18.2.
+  - Checks after the fixes (tested, Xcode 27.2): ReaderCore `swift test` passes 57 tests. The unsigned device build, the simulator build and the simulator build-for-testing succeed with no new warnings. The intent metadata shows the new authentication policies. With the iOS 27 blocks compiled out, the typecheck is clean.
+- **Delta review of `dc293b6` (Opus 5.5): REQUEST CHANGES, addressed:**
+  - Blocking: the Spotlight record was saved only after a write returned. A kill during that wait could leave an article indexed that a later trash or delete never removed. The record is now written ahead: the plan's articles are saved under an empty signature before any write, including the first full upsert after a version change, and their real signatures after success. Pure tests cover the write-ahead record and removing a pending article that has left the library.
+  - `CSSearchableIndexDelegate` (both required methods, checked in the iOS 27.2 SDK header) re-runs indexing when Spotlight asks to rebuild all items or given ones while the app runs. It needs no Info.plist entry. Requests while the app isn't running would need an index extension, which is recorded as a known limit.
+  - ARCHITECTURE now names `requestConfirmation(dialog:)`, as the code calls it.
+  - Checks (tested, Xcode 27.2): ReaderCore `swift test` passes 58 tests. The unsigned device build and the simulator build succeed with no new warnings.
+- **Not verified.**
+  - Anything with real Siri, Spotlight or Shortcuts on a device.
+  - The new native tests, which run only in CI.
+  - The app on an iOS 27 simulator. Only the iOS 26.3 runtime is installed.
+
 ## Not yet tested
 
 - Reading context against a real provider: answer quality, latency and cost per note, and the sheet in Dark and with VoiceOver.
