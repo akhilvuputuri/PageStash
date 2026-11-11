@@ -17,6 +17,9 @@ public struct ReadingContext: Codable, Equatable, Sendable {
   }
   /// The `model` label of notes written by Apple's on-device model.
   public static let onDeviceModel = "apple-on-device"
+  /// The `model` label of notes written by Apple's Private Cloud Compute model, at the reader's
+  /// request, for long articles. Still an app-written note (`isLocal`), stored only on this device.
+  public static let privateCloudModel = "apple-private-cloud"
   public let itemId: String
   public let contentVersion: Int
   public let generatedAt: String
@@ -56,8 +59,11 @@ public struct ReadingContext: Codable, Equatable, Sendable {
     self.historyTotal = historyTotal
     self.excerpted = excerpted
   }
-  /// Written on this device by an Apple model provider rather than synced from the server.
+  /// Written by the app with an Apple model provider (on this iPhone or, for long articles when
+  /// allowed, Apple's Private Cloud Compute) rather than synced from the server.
   public var isLocal: Bool { model.hasPrefix("apple-") }
+  /// Written by Apple's Private Cloud Compute model rather than on this iPhone.
+  public var isPrivateCloud: Bool { model == Self.privateCloudModel }
   /// A device note goes stale when the number of finished articles changes. Server notes carry the
   /// server's own judgement in `stale`.
   public func stale(finishedCount: Int) -> Bool {

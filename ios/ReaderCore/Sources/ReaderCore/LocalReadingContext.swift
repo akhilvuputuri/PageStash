@@ -41,7 +41,8 @@ public enum ReadingHistory {
   }
   /// Finished items, most recently changed first (the sync revision stands in for the server's
   /// activity order), excluding the article itself.
-  public static func finished(_ items: [ReadingItem], excluding id: String? = nil) -> [ReadingItem] {
+  public static func finished(_ items: [ReadingItem], excluding id: String? = nil) -> [ReadingItem]
+  {
     items.filter { isFinished($0) && $0.id != id }.sorted {
       $0.revision != $1.revision ? $0.revision > $1.revision : $0.capturedAt > $1.capturedAt
     }
@@ -55,7 +56,9 @@ public enum ReadingHistory {
     guard limit > 0, budgetTokens > 0, !newestFirst.isEmpty else { return [] }
     let titleWords = Set(ArticleText.keywords(title))
     var weights: [String: Double] = [:]
-    for word in ArticleText.keywords(String(article.prefix(20_000))) { weights[word, default: 0] += 1 }
+    for word in ArticleText.keywords(String(article.prefix(20_000))) {
+      weights[word, default: 0] += 1
+    }
     for word in titleWords { weights[word, default: 0] += 5 }
     func score(_ entry: HistoryEntry) -> Double {
       let words = Set(ArticleText.keywords(entry.title + " " + (entry.excerpt ?? "")))
@@ -128,7 +131,9 @@ public enum LocalPrompts {
     title: String, site: String?, material: String, isNotes: Bool, history: [HistoryEntry]
   ) -> String {
     var parts: [String] = []
-    if !history.isEmpty { parts.append("FINISHED ARTICLES, newest first:\n\(historyList(history))") }
+    if !history.isEmpty {
+      parts.append("FINISHED ARTICLES, newest first:\n\(historyList(history))")
+    }
     parts.append(
       "NEW ARTICLE\nTitle: \(line(title, 200))"
         + (site.map { "\nSite: \(line($0, 80))" } ?? "")
@@ -147,7 +152,8 @@ public enum LocalPrompts {
     Answer in at most 120 words, in the question's language. Use only facts stated in the passages. If the passages don't answer the question, reply only: The article doesn't say.
     """
   public static func answerPrompt(question: String, passages: [String]) -> String {
-    "PASSAGES FROM THE ARTICLE:\n" + passages.enumerated().map { "[\($0.offset + 1)] \($0.element)" }
+    "PASSAGES FROM THE ARTICLE:\n"
+      + passages.enumerated().map { "[\($0.offset + 1)] \($0.element)" }
       .joined(separator: "\n\n") + "\n\nQUESTION: \(line(question, 400))"
   }
 
@@ -273,19 +279,24 @@ public enum LocalContextParser {
 /// Map-reduce reading context on a small local model: short articles go in whole; long ones are
 /// split into parts that are each condensed to notes (map), then the notes and the finished-article
 /// list produce the note (reduce). Budgets come from the provider's window, and an overflow retries
-/// the whole plan at a smaller scale.
+/// the whole plan at a smaller scale. `write` adds the Private Cloud Compute route (see
+/// `PrivateCloudPolicy`).
 public enum LocalReadingContext {
   public enum Step: Equatable, Sendable {
     case reading(part: Int, of: Int)
     case relating
+    /// One whole-article call on Apple's Private Cloud Compute.
+    case privateCloud
   }
   public struct Progress: Equatable, Sendable {
     public let step: Step
     /// Completed fraction of the model calls, 0…1.
     public let fraction: Double
   }
-  /// The plan's numbers for one window size. Fractions of the window, so they scale with the
-  /// provider; tokens are the pessimistic estimate (see `TokenEstimate`).
+  /// The plan's numbers for one window. Answer caps are real tokens. Input budgets are in
+  /// estimated tokens (`TokenEstimate`): the real window divided by `tokenRatio`, the measured
+  /// real-per-estimated ratio, so a provider that can count tokens gets budgets that use its
+  /// window fully, and one that can't keeps the pessimistic estimate.
   public struct Plan: Equatable, Sendable {
     public let partTokens: Int
     public let partAnswerTokens: Int
@@ -295,21 +306,68 @@ public enum LocalReadingContext {
     public let materialTokens: Int
     public let answerTokens: Int
     public let historyLimit: Int
-    public init(contextTokens: Int, scale: Double = 1) {
-      let window = Double(contextTokens) * scale
-      partTokens = Int(window * 0.45)
+    /// Instructions plus framing, in real tokens (measured at most about 330; see ARCHITECTURE).
+    static let instructionTokens = 360
+    public init(
+      contextTokens: Int, reservedTokens: Int = 0, tokenRatio: Double = 1, scale: Double = 1
+    ) {
+      let ratio = min(1.5, max(0.4, tokenRatio))
+      let window = Double(contextTokens - reservedTokens) * scale
+      func estimated(_ real: Double) -> Int { max(0, Int(real / ratio)) }
       partAnswerTokens = 160
       answerTokens = 520
-      // Reduce: window minus instructions (~300), the answer and a margin.
-      let reduce = max(400, Int(window) - 300 - answerTokens - 160)
-      historyTokens = Int(Double(reduce) * 0.4)
+      // A part: the window less its short instructions and answer, with a 10% margin.
+      partTokens = max(200, estimated((window - 200 - Double(partAnswerTokens)) * 0.9))
+      // Reduce: the window less instructions, the answer and a 10% margin.
+      let reduce = max(
+        400, estimated((window - Double(Self.instructionTokens) - Double(answerTokens)) * 0.9))
+      // Titles and openings: about 40% on a small window, never more than 60 entries' worth.
+      historyLimit = max(4, min(60, Int(Double(reduce) * 0.4) / 40))
+      historyTokens = min(Int(Double(reduce) * 0.4), historyLimit * 110)
       materialTokens = reduce - historyTokens
       directTokens = materialTokens
       maxParts = 8
-      historyLimit = max(4, min(60, historyTokens / 40))
     }
   }
   static let excerptCharacters = 220
+
+  /// What `write` produced and, when Private Cloud Compute was tried and the note was written on
+  /// the device instead, why.
+  public struct Outcome: Sendable {
+    public let context: ReadingContext
+    public let cloudFallback: LocalModelError?
+  }
+
+  /// Writes a note on the device by default, or with one whole-article call on Private Cloud
+  /// Compute when `PrivateCloudPolicy` allows it for this article (`privateCloud` is only passed
+  /// when the reader allowed it). Any cloud failure (offline, limit reached, rate limited, not
+  /// available, overflow, refusal) falls back to the device, which needs no connection.
+  public static func write(
+    article: LocalArticle, history newestFirst: [HistoryEntry], finishedTotal: Int,
+    onDevice: any LocalLanguageModel, privateCloud: (any LocalLanguageModel)?, now: Date = Date(),
+    progress: @escaping @Sendable (Progress) -> Void = { _ in }
+  ) async throws -> Outcome {
+    var fallback: LocalModelError?
+    if let cloud = privateCloud,
+      await PrivateCloudPolicy.prefersCloud(article.text, onDevice: onDevice, cloud: cloud)
+    {
+      do {
+        let context = try await generate(
+          article: article, history: newestFirst, finishedTotal: finishedTotal, model: cloud,
+          now: now, progress: progress)
+        return Outcome(context: context, cloudFallback: nil)
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        try Task.checkCancellation()
+        fallback = (error as? LocalModelError) ?? .failed
+      }
+    }
+    let context = try await generate(
+      article: article, history: newestFirst, finishedTotal: finishedTotal, model: onDevice,
+      now: now, progress: progress)
+    return Outcome(context: context, cloudFallback: fallback)
+  }
 
   public static func generate(
     article: LocalArticle, history newestFirst: [HistoryEntry], finishedTotal: Int,
@@ -318,12 +376,16 @@ public enum LocalReadingContext {
   ) async throws -> ReadingContext {
     let text = article.text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { throw LocalModelError.emptyAnswer }
+    let ratio = await TokenEstimate.ratio(text, model: model)
     var lastError: Error = LocalModelError.contextTooLong
     for scale in [1.0, 0.6, 0.35] {
       do {
         return try await attempt(
           article: article, text: text, history: newestFirst, finishedTotal: finishedTotal,
-          model: model, plan: Plan(contextTokens: model.contextTokens, scale: scale), now: now,
+          model: model,
+          plan: Plan(
+            contextTokens: model.contextTokens, reservedTokens: model.reservedTokens,
+            tokenRatio: ratio, scale: scale), now: now,
           progress: progress)
       } catch LocalModelError.contextTooLong {
         lastError = LocalModelError.contextTooLong
@@ -360,7 +422,7 @@ public enum LocalReadingContext {
             instructions: LocalPrompts.partInstructions,
             prompt: LocalPrompts.partPrompt(
               title: article.title, part: index + 1, of: parts.count, text: part),
-            maxResponseTokens: plan.partAnswerTokens)
+            maxResponseTokens: plan.partAnswerTokens + model.reservedTokens)
           let clean = LocalContextParser.clip(note, 700)
           if !clean.isEmpty { notes.append("(\(index + 1)) \(clean)") }
         } catch LocalModelError.guardrail {
@@ -368,14 +430,18 @@ public enum LocalReadingContext {
           declined += 1
         }
       }
-      if notes.isEmpty { throw declined > 0 ? LocalModelError.guardrail : LocalModelError.emptyAnswer }
+      if notes.isEmpty {
+        throw declined > 0 ? LocalModelError.guardrail : LocalModelError.emptyAnswer
+      }
       if declined > 0 { excerpted = true }
       material = notes.joined(separator: "\n")
       isNotes = true
     }
     try Task.checkCancellation()
     progress(
-      Progress(step: .relating, fraction: Double(partCount) / Double(partCount + 1)))
+      Progress(
+        step: model.location == .privateCloud && partCount == 0 ? .privateCloud : .relating,
+        fraction: Double(partCount) / Double(partCount + 1)))
     material = TokenEstimate.prefix(material, tokens: plan.materialTokens)
     let history = ReadingHistory.select(
       newestFirst, article: text, title: article.title, limit: plan.historyLimit,
@@ -385,14 +451,15 @@ public enum LocalReadingContext {
       prompt: LocalPrompts.contextPrompt(
         title: article.title, site: article.site, material: material, isNotes: isNotes,
         history: history),
-      maxResponseTokens: plan.answerTokens)
+      maxResponseTokens: plan.answerTokens + model.reservedTokens)
     try Task.checkCancellation()
     let draft = try LocalContextParser.parse(reply, history: history)
     progress(Progress(step: .relating, fraction: 1))
     return ReadingContext(
       itemId: article.id, contentVersion: article.contentVersion, generatedAt: timestamp(now),
       model: model.label, historyCount: history.count, summary: draft.summary,
-      buildsOn: draft.buildsOn, covered: draft.covered, newIdeas: history.isEmpty ? [] : draft.newIdeas,
+      buildsOn: draft.buildsOn, covered: draft.covered,
+      newIdeas: history.isEmpty ? [] : draft.newIdeas,
       keyPoints: draft.keyPoints, historyTotal: finishedTotal, excerpted: excerpted)
   }
 

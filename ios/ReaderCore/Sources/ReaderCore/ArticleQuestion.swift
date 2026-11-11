@@ -22,7 +22,9 @@ public enum ArticleQuestion {
     let terms = Set(ArticleText.keywords(question))
     let docs = passages.map { ArticleText.keywords($0) }
     var frequency: [String: Int] = [:]
-    for doc in docs { for term in Set(doc) where terms.contains(term) { frequency[term, default: 0] += 1 } }
+    for doc in docs {
+      for term in Set(doc) where terms.contains(term) { frequency[term, default: 0] += 1 }
+    }
     let average = max(1, Double(docs.reduce(0) { $0 + $1.count }) / Double(max(1, docs.count)))
     let n = Double(docs.count)
     let scores = docs.map { doc -> Double in
@@ -49,46 +51,96 @@ public enum ArticleQuestion {
     return chosen.sorted().map { passages[$0] }
   }
 
+  /// The answer so far and where it is being written.
+  public struct Partial: Equatable, Sendable {
+    public let text: String
+    public let location: ModelLocation
+  }
+
+  /// Passage budget in estimated tokens: a fraction of the window left after the instructions,
+  /// the question, the answer and any reasoning.
+  public static func passageBudget(_ model: any LocalLanguageModel, fraction: Double) -> Int {
+    let usable = model.contextTokens - model.reservedTokens - answerTokens - 300
+    return max(200, Int(Double(usable) * fraction))
+  }
+  static let answerTokens = 300
+
   /// Streams the answer so far, clipped. Retries once with fewer passages if the window overflows.
+  /// With `privateCloud` (only passed when the reader allowed it) a long article's question is
+  /// answered there from many more passages; if that fails before any text arrives, the device
+  /// answers instead.
   public static func answer(
-    _ question: String, articleText: String, model: any LocalLanguageModel
-  ) -> AsyncThrowingStream<String, Error> {
+    _ question: String, articleText: String, model: any LocalLanguageModel,
+    privateCloud: (any LocalLanguageModel)? = nil
+  ) -> AsyncThrowingStream<Partial, Error> {
     let question = String(
       question.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maxQuestionCharacters))
     let all = passages(articleText)
+    var models: [any LocalLanguageModel] = [model]
+    if let cloud = privateCloud,
+      PrivateCloudPolicy.prefersCloudForQuestions(articleText, onDevice: model, cloud: cloud)
+    {
+      models.insert(cloud, at: 0)
+    }
     return AsyncThrowingStream { continuation in
       let task = Task {
         guard !question.isEmpty, !all.isEmpty else {
           continuation.finish(throwing: LocalModelError.emptyAnswer)
           return
         }
-        for fraction in [0.5, 0.3] {
-          let budget = Int(Double(model.contextTokens) * fraction)
-          let chosen = relevant(all, question: question, budgetTokens: budget)
+        var lastError: Error = LocalModelError.contextTooLong
+        for (index, model) in models.enumerated() {
+          let isLast = index == models.count - 1
           var produced = false
           do {
-            for try await partial in model.stream(
-              instructions: LocalPrompts.answerInstructions,
-              prompt: LocalPrompts.answerPrompt(question: question, passages: chosen),
-              maxResponseTokens: 300)
-            {
+            try await stream(question, all, model: model) {
               produced = true
-              continuation.yield(clip(partial))
+              continuation.yield(Partial(text: clip($0), location: model.location))
             }
-            if !produced { throw LocalModelError.emptyAnswer }
             continuation.finish()
             return
-          } catch LocalModelError.contextTooLong where !produced {
+          } catch is CancellationError {
+            continuation.finish(throwing: CancellationError())
+            return
+          } catch  where !produced && !isLast {
+            // The private cloud failed before answering: the device answers instead.
+            lastError = error
             continue
           } catch {
-            continuation.finish(throwing: error)
-            return
+            lastError = error
+            break
           }
         }
-        continuation.finish(throwing: LocalModelError.contextTooLong)
+        continuation.finish(throwing: lastError)
       }
       continuation.onTermination = { _ in task.cancel() }
     }
+  }
+
+  private static func stream(
+    _ question: String, _ all: [String], model: any LocalLanguageModel,
+    yield: (String) -> Void
+  ) async throws {
+    for fraction in [0.5, 0.3] {
+      let chosen = relevant(
+        all, question: question, budgetTokens: passageBudget(model, fraction: fraction))
+      var produced = false
+      do {
+        for try await partial in model.stream(
+          instructions: LocalPrompts.answerInstructions,
+          prompt: LocalPrompts.answerPrompt(question: question, passages: chosen),
+          maxResponseTokens: answerTokens + model.reservedTokens)
+        {
+          produced = true
+          yield(partial)
+        }
+        if !produced { throw LocalModelError.emptyAnswer }
+        return
+      } catch LocalModelError.contextTooLong where !produced {
+        continue
+      }
+    }
+    throw LocalModelError.contextTooLong
   }
 
   /// Plain text, trimmed and length-limited; rendered with `Text`, never as markup.

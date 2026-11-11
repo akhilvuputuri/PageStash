@@ -1020,6 +1020,7 @@ struct SettingsView: View {
             "Used: \(ByteCountFormatter.string(fromByteCount:state.store?.diskUsage ?? 0,countStyle:.file))"
           )
         }.readerRowBackground()
+        if state.localAI.availability.deviceSupportsModel { PrivateCloudSetting() }
         Section("Background Refresh") {
           Text(
             UIApplication.shared.backgroundRefreshStatus == .available
