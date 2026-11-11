@@ -805,6 +805,29 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - The new native tests, which run only in CI.
   - The app on an iOS 27 simulator. Only the iOS 26.3 runtime is installed.
 
+### Reading Context on the device with Apple Intelligence, 12 November 2026
+
+- **Request (reported).** The owner asked to use Apple's built-in models for PageStash's AI features in place of the paid server model, and to push the on-device model as far as it goes. The first pass was built on Xcode 26.3, and the second on Xcode 27.2 after the owner updated on 12 November.
+- **Change.**
+  - Reading Context is written on the iPhone with Apple's on-device model (FoundationModels, iOS 26 and later), for any signed-in user whose device supports it. Nothing is sent anywhere. The note's model label is `apple-on-device`.
+  - Long articles are condensed in parts and then combined. On iOS 26.4 and later, budgets come from the model's real context size and token counts. Otherwise they come from an estimate and a 4,096-token window.
+  - The sheet adds Key Points and "Ask About This Article", answered from the article's text.
+  - Notes are written ahead of time: for the article opened in the reader, and for up to 3 of the newest unread downloaded articles per foreground visit. This is skipped in Low Power Mode and in preview mode.
+  - An on-device note is never replaced by a server note for the same content. Server notes still show for the owner when the device can't run the model.
+  - iOS 27: an opt-in Settings switch, off by default, lets long articles go to Apple's Private Cloud Compute model (32,768-token window). It is used only when the reader opens Reading Context or asks a question. Notes and answers say when the cloud produced them, and any failure falls back to the device.
+  - PCC needs the `com.apple.developer.private-cloud-compute` entitlement, which the app doesn't have. The app reads its own code signature and offers the switch only when the entitlement is present. No entitlement, capability or signing change is in this work.
+- **Compatibility.** The deployment target stays iOS 17. All FoundationModels code is in `AppleModel.swift` inside `#if canImport(FoundationModels)`. iOS 27 symbols are also inside `#if compiler(>=6.4)`.
+- **Checks (tested, Xcode 27.2, after merging main at `3f1511e`).**
+  - ReaderCore: `swift test` passes 94 tests.
+  - The unsigned device build and the preview simulator build both succeed.
+  - The preview build launches on the iPhone 17 / iOS 27.2 simulator and shows the Library.
+- **Measured on this Mac (macOS 27.2.1).** `PrivateCloudComputeLanguageModel().contextSize` reads 32,768 from an unentitled tool, which reports unavailable and throws on use.
+- **Not verified.**
+  - Anything against the real on-device model. Apple Intelligence reported `modelNotReady` on this Mac for the whole session, so prompts, part sizes, parsing and answer quality are untested. A harness with a synthetic corpus is ready outside the repo.
+  - Private Cloud Compute, entirely.
+  - The sheet on a simulator or device after these changes.
+- **Owner steps for PCC.** Enrol in the App Store Small Business Program. Request the managed entitlement with Apple's form. Then authorize adding the capability.
+
 ## Not yet tested
 
 - Reading context against a real provider: answer quality, latency and cost per note, and the sheet in Dark and with VoiceOver.
