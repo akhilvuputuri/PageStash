@@ -64,13 +64,15 @@ import WidgetKit
     let defaults = UserDefaults.standard
     guard stable != defaults.string(forKey: signatureKey) else { return }
     let searchable = visible.map { item in
+      let entity = ArticleEntity(item)
       let attributes = CSSearchableItemAttributeSet(contentType: .text)
       attributes.title = item.title
-      attributes.contentDescription = [
-        ArticleRow.source(item), item.author, item.archived ? "Archived" : nil,
-      ].compactMap { $0 }.joined(separator: " · ")
-      return CSSearchableItem(
+      attributes.contentDescription = entity.details
+      let searchable = CSSearchableItem(
         uniqueIdentifier: item.id, domainIdentifier: spotlightDomain, attributeSet: attributes)
+      // Lets Siri and Apple Intelligence resolve the Spotlight result to the article entity.
+      if #available(iOS 18, *) { searchable.associateAppEntity(entity) }
+      return searchable
     }
     let index = CSSearchableIndex.default()
     let started = generation
@@ -85,6 +87,8 @@ import WidgetKit
   /// A launch-independent digest of what Spotlight shows, so a cold launch doesn't re-index.
   private static func stableSignature(_ items: [ReadingItem]) -> String {
     var value: UInt64 = 0xcbf2_9ce4_8422_2325
+    // The version re-indexes existing installs once when what is indexed changes (2: entities).
+    for byte in "v2".utf8 { value = (value ^ UInt64(byte)) &* 0x100_0000_01b3 }
     for item in items {
       let fields = [
         item.id, item.title, item.archived ? "1" : "0", item.siteName ?? "", item.author ?? "",
@@ -173,5 +177,25 @@ struct ReaderShortcuts: AppShortcutsProvider {
     AppShortcut(
       intent: SaveLinkIntent(), phrases: ["Save a link to \(.applicationName)"],
       shortTitle: "Save Link", systemImageName: "plus")
+    // Article intents live in ArticleIntents.swift.
+    AppShortcut(
+      intent: WhatToReadNextIntent(),
+      phrases: [
+        "What should I read next in \(.applicationName)", "What's next in \(.applicationName)",
+      ], shortTitle: "What to Read Next", systemImageName: "text.book.closed")
+    AppShortcut(
+      intent: OpenArticleIntent(),
+      phrases: ["Open an article in \(.applicationName)", "Find an article in \(.applicationName)"],
+      shortTitle: "Open Article", systemImageName: "doc.text")
+    AppShortcut(
+      intent: GetReadingContextIntent(),
+      phrases: [
+        "Get Reading Context in \(.applicationName)",
+        "What does this build on in \(.applicationName)",
+      ], shortTitle: "Reading Context", systemImageName: "sparkles")
+    AppShortcut(
+      intent: MarkDoneReadingIntent(),
+      phrases: ["Mark done reading in \(.applicationName)", "I'm done reading in \(.applicationName)"],
+      shortTitle: "Done Reading", systemImageName: "checkmark.circle")
   }
 }

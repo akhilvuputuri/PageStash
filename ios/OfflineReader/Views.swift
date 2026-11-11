@@ -873,7 +873,10 @@ struct ReaderScreen: View {
     .background(Color(hex: tokens.page).ignoresSafeArea())
       .toolbar(scrollState.barsHidden ? .hidden : .visible, for: .navigationBar, .bottomBar)
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: scrollState.barsHidden)
-      .navigationBarTitleDisplayMode(.inline).onAppear {
+      .navigationBarTitleDisplayMode(.inline)
+      .userActivity(ArticleActivity.type, isActive: item != nil) { activity in
+        ArticleActivity.describe(activity, id: itemID, title: item?.title)
+      }.onAppear {
         finished = false
         SystemIntegration.didOpen(itemID)
       }.onDisappear {

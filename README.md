@@ -97,6 +97,12 @@ Going Home or locking the phone leaves Reader eligible for refresh. Swiping it a
 
 Build 4 records bounded local scheduling, wake, sync and verified-download diagnostics for troubleshooting. It retains no article text, URLs, item/account IDs, credentials or raw error messages. A controlled physical-device test passed; naturally scheduled delivery is still unverified. See [device investigation](docs/VALIDATION.md#background-refresh-investigation-13-october-2026).
 
+## Siri, Shortcuts and Spotlight
+
+Saved articles are App Intents entities, so Siri, the Shortcuts app and Spotlight can name them. Besides **Continue Reading** and **Save Link**, there are **Open Article**, **What to Read Next** (an unread Library article: one already downloaded first, then one not started, newest first), **Get Reading Context** (reads the saved, AI-generated note; it never asks the server to write one) and **Mark Done Reading** (the reader's Done Reading, with the same Undo in the Library). Get Reading Context and Mark Done Reading use the article open in the reader when none is named. Everything reads the library on this iPhone; nothing new leaves it.
+
+On iOS 18 and later the Spotlight items are associated with their entities, and from iOS 18.2 the open article is advertised as the current activity, so Siri can resolve "this article". These compile and their metadata is generated; how Siri phrases and resolves them on a device is not yet tested.
+
 ## Scope
 
 This is a personal beta with one allowed production email, designed with account ownership throughout. The only AI is the owner-gated [reading context](#reading-context-owner-only); nothing else on the backend calls a model, and imports never do. There are no public feeds, PDF/EPUB imports or paywall bypassing. The initial Markdown renderer supports headings, paragraphs, bold, fenced code, and links; advanced Markdown formatting and embedded images are deliberately deferred. The app does not promise a freshness deadline.
