@@ -843,6 +843,18 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - **Chunking.** It runs in one linear pass (test added on a 1.3 MB unpunctuated paragraph).
 - Independent delta review of `37d9dfb` (Opus 5.5): REQUEST CHANGES. The new word splitter trapped when the token limit was crossed on a whitespace character (an invalid range). Fixed by starting the next piece after the whitespace; a test sweeps limits 1–40 over the reviewer's inputs through both `wordPieces` and `chunks`. `swift test` now passes 99 tests.
 
+### Release 0.6.0 (build floor 15) and Xcode Cloud workflow setup (12 November 2026)
+
+- **Version.** `MARKETING_VERSION, BUILD` is `0.6.0`, `15`; the project was regenerated with `/usr/bin/python3 scripts/generate-project.py`. 0.6.0 carries the Xcode Cloud release scripts, Siri and App Intents, and on-device Reading Context.
+- **0.5.1 was never tagged.** Whether the owner's Organizer upload of 0.5.1 (14) reached App Store Connect was not confirmed, so the floor moves to 15 either way.
+- **Xcode Cloud workflow "Default" (configured in App Store Connect on 12 November 2026, with the owner's go-ahead).**
+  - Start conditions: Tag Changes for tags beginning with `v`, and Manual Start. The onboarding default "Branch Changes: main" was removed.
+  - Action: Archive, iOS, scheme `OfflineReader`, Distribution Preparation "TestFlight (Internal Testing Only)". The onboarding default Build action was removed.
+  - Post-action: TestFlight Internal Testing, artifact "Archive - iOS", group "Owner" (1 member). No external testing.
+  - Environment: Xcode "Latest Release" (27.2 at setup), Clean on. Settings > Build Number: Next Build Number 15.
+- **Measured.** Xcode Cloud build 1 (manual start, `main` at `3f1511e`, the onboarding Build action) succeeded, so the clone and `ci_post_clone.sh` project check run in real Xcode Cloud.
+- **Not yet observed.** An archive, the release checks in `ci_post_clone.sh` under real Xcode Cloud variables, the upload, and delivery to the "Owner" group. The `v0.6.0` tag build is their first run; its result is recorded after it finishes.
+
 ## Not yet tested
 
 - On-device Reading Context against Apple's real on-device model: prompt fit, part sizes, parse success, output quality, guardrail refusals, injection resistance, latency per note and question answers. The development Mac reported `modelNotReady` throughout 12 November 2026.
