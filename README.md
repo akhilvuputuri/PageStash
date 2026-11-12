@@ -79,6 +79,8 @@ Only prepared readable articles enter Library. Pending and failed submissions ap
 
 The HTTP/MCP status value `bookmark` is retained for compatibility but now describes a failed submission outside the normal article list. A new intentional save of the same owned failed URL retries its retained submission; repeating a known request key never silently starts another attempt. The server adds a private retry-receipt registry on startup. These changes ship in 0.2.0, with backend revision `89d28a5` deployed on Northflank Free.
 
+Update, 13 November 2026 (on branch `fix/backend-import-fixes`, not deployed): failed imports say why in short words, such as "The site took too long to respond." or "That domain couldn't be found.", and transient failures retry after about 30 seconds, 5 minutes and 30 minutes. Pages in legacy encodings such as Shift_JIS and windows-1252 decode correctly, right-to-left articles render right to left, and archived or trashed items no longer count toward the 1,000-item library limit.
+
 ## Browser sharing
 
 The embedded PageStash share destination accepts a webpage URL from Safari/Chrome. It displays the PageStash destination and queues the selected link before submitting. Multiple shared links require an explicit choice. Offline shares remain queued on this device and are sent when the app next has connectivity and a valid sign-in; background scheduling is controlled by iOS.

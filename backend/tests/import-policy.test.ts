@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { extract, briefDocument } from "../src/content.js";
 import { ImportFailure } from "../src/import-error.js";
-import { Service } from "../src/service.js";
+import {
+  Service,
+  MAX_ATTEMPTS,
+  RETRY_DELAYS_SECONDS,
+  retryDelaySeconds,
+} from "../src/service.js";
 import { configuration } from "../src/config.js";
 import { openDatabase, migrate } from "../src/db.js";
 import { buildServer } from "../src/server.js";
@@ -210,11 +215,26 @@ test("transient failures stop after bounded retries and hide provider details", 
       url: "https://example.com/retry",
       idempotency_key: randomUUID(),
     });
-    for (let attempt = 0; attempt < 3; attempt++) {
+    // Each retryable failure waits longer: about 30 seconds, 5 minutes, then 30 minutes.
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       await service.db.query("UPDATE jobs SET available_at=now() WHERE id=$1", [
         receipt.submission_id,
       ]);
       await service.runOne();
+      if (attempt === MAX_ATTEMPTS) break;
+      const wait = await service.db.query<{ seconds: number }>(
+        "SELECT extract(epoch FROM available_at-now())::float AS seconds FROM jobs WHERE id=$1",
+        [receipt.submission_id],
+      );
+      const expected = RETRY_DELAYS_SECONDS[attempt - 1];
+      assert.ok(
+        Math.abs(Number(wait.rows[0].seconds) - expected) < 5,
+        `attempt ${attempt} waits about ${expected}s, got ${wait.rows[0].seconds}`,
+      );
+      assert.equal(
+        (await service.status(agent, receipt.submission_id!)).status,
+        "queued",
+      );
     }
     const state = await service.status(agent, receipt.submission_id!);
     assert.equal(state.status, "bookmark");
@@ -230,11 +250,11 @@ test("a job whose attempts ended the process is kept as a retryable bookmark", a
       url: "https://example.com/crashes",
       idempotency_key: randomUUID(),
     });
-    // Three claims whose processes exited before recording a failure: each counted an attempt
+    // MAX_ATTEMPTS claims whose processes exited before recording a failure: each counted an attempt
     // and left an expired lease.
     await service.db.query(
-      "UPDATE jobs SET attempts=3,lease_token=gen_random_uuid(),lease_until=now()-interval '1 second',available_at=now() WHERE id=$1",
-      [receipt.submission_id],
+      "UPDATE jobs SET attempts=$2,lease_token=gen_random_uuid(),lease_until=now()-interval '1 second',available_at=now() WHERE id=$1",
+      [receipt.submission_id, MAX_ATTEMPTS],
     );
     assert.equal(await service.runOne(), true);
     const state = await service.status(agent, receipt.submission_id!);
@@ -244,14 +264,14 @@ test("a job whose attempts ended the process is kept as a retryable bookmark", a
     assert.equal(await service.retry(owner, receipt.submission_id!), true);
     await service.runOne();
     assert.equal((await service.status(agent, receipt.submission_id!)).status, "ready");
-    // Two crashed claims leave one real attempt: the third claim still prepares the article.
+    // One fewer crashed claim leaves one real attempt: the last claim still prepares the article.
     const second = await service.save(agent, {
       url: "https://example.com/crashed-twice",
       idempotency_key: randomUUID(),
     });
     await service.db.query(
-      "UPDATE jobs SET attempts=2,lease_token=gen_random_uuid(),lease_until=now()-interval '1 second',available_at=now() WHERE id=$1",
-      [second.submission_id],
+      "UPDATE jobs SET attempts=$2,lease_token=gen_random_uuid(),lease_until=now()-interval '1 second',available_at=now() WHERE id=$1",
+      [second.submission_id, MAX_ATTEMPTS - 1],
     );
     await service.runOne();
     assert.equal((await service.status(agent, second.submission_id!)).status, "ready");
