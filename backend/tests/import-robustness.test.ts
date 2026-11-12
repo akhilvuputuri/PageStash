@@ -14,6 +14,7 @@ import {
 } from "../src/fetch.js";
 import {
   decodePage,
+  ELEMENT_LIMIT,
   elementCounts,
   extract,
   TAG_LIMIT,
@@ -264,7 +265,7 @@ test("element counting skips script and style text and does not count SVG as rea
         mime: "text/html",
         bytes: Buffer.from(`<html><body>${"<div>x</div>".repeat(20_001)}</body></html>`),
       })),
-    /element limit/,
+    /too many elements to process \(more than 12,000\)/,
   );
   // A page with an inline icon sprite and a long script still extracts.
   const sprite = `<svg viewBox="0 0 1 1">${"<path d='M0 0'/>".repeat(10_000)}</svg>`;
@@ -304,8 +305,8 @@ test("markup hidden from the readable count still hits the hard tag cap", async 
     assert.equal(failure.terminal, true, name);
   }
   // The comment and attribute cases are also caught by the readable count itself.
-  assert.ok(elementCounts(`<!--<script>-->${"<p>".repeat(20_001)}<!--</script>-->`).elements > 20_000);
-  assert.ok(elementCounts(`<a title="><script>">x</a>${"<p>".repeat(20_001)}`).elements > 20_000);
+  assert.ok(elementCounts(`<!--<script>-->${"<p>".repeat(ELEMENT_LIMIT + 1)}<!--</script>-->`).elements > ELEMENT_LIMIT);
+  assert.ok(elementCounts(`<a title="><script>">x</a>${"<p>".repeat(ELEMENT_LIMIT + 1)}`).elements > ELEMENT_LIMIT);
   // Abrupt comments end immediately, as in a browser.
   assert.equal(elementCounts(`<!--><p><!---><p>`).elements, 2);
 });

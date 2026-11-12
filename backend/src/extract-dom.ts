@@ -1,13 +1,14 @@
 /**
  * The DOM half of article extraction: JSDOM parsing, Readability, DOMPurify and building the
  * result. It does no network or file access and imports nothing native, so it can run inside the
- * extraction worker thread (extract-worker.ts) that bounds its memory and time.
+ * extraction child process (extract-child.ts) that bounds its memory and time.
  */
 import { randomUUID } from "node:crypto";
 import { JSDOM } from "jsdom";
 import createDOMPurify from "dompurify";
 import { Readability } from "@mozilla/readability";
-import { ImportFailure } from "./import-error.js";
+import { ImportFailure, errorCode, errorName } from "./import-error.js";
+import type { SandboxReply, SandboxRequest } from "./extract-sandbox.js";
 
 const purifierWindow = new JSDOM("").window;
 const purify = createDOMPurify(purifierWindow);
@@ -122,11 +123,54 @@ export function briefDocument(markdown: string): string {
 }
 
 
-/** Readable elements allowed in a page: outside `<svg>`, not counting script or style text. */
-export const ELEMENT_LIMIT = 20_000;
+/**
+ * Readable elements allowed in a page: outside `<svg>`, not counting script or style text. Checked
+ * cheaply on the main thread before the extraction child starts. Lowered from 20,000 on 13 November
+ * 2026: with the child's 192 MB heap, encyclopedia-style pages of 12,800 elements passed 3 of 3
+ * runs and 13,500 failed 3 of 3 (docs/VALIDATION.md), so bigger pages are refused up front with an
+ * honest message instead of running out of memory after seconds of work.
+ */
+export const ELEMENT_LIMIT = 12_000;
+
+export const tooComplex = () =>
+  new ImportFailure(
+    "This content is too complex to process. It would need more memory than PageStash allows.",
+    true,
+    "too_complex",
+  );
+
+/**
+ * Estimated serialised size (in characters) a parsed page may reach. Pages are at most 3 MB, and a
+ * parse can only exceed its source by implied end tags, unless the parser amplified it: the
+ * adoption-agency algorithm re-creates open formatting elements with all their attributes, so
+ * nine `<b title>` of 8 KB re-opened in 1,900 paragraphs make about 137 MB of attribute text from a
+ * 110 KB page, which then runs out of memory when Readability or the serialiser concatenates it.
+ * 8 M characters is well above any real 3 MB page and stops that before any serialisation.
+ */
+export const PARSED_SIZE_LIMIT = 8 * 1024 * 1024;
+
+/** One pass over the parsed tree, stopping as soon as the estimate passes PARSED_SIZE_LIMIT. */
+function rejectAmplified(document: Document) {
+  // NodeFilter.SHOW_ELEMENT | SHOW_TEXT | SHOW_COMMENT
+  const walker = document.createTreeWalker(document.documentElement, 0x1 | 0x4 | 0x80);
+  let size = 0;
+  for (let node: Node | null = walker.currentNode; node; node = walker.nextNode()) {
+    if (node.nodeType === 1) {
+      const element = node as Element;
+      size += 2 * element.localName.length + 5;
+      for (const attribute of element.attributes)
+        size += attribute.name.length + attribute.value.length + 4;
+    } else size += (node as CharacterData).data.length;
+    if (size > PARSED_SIZE_LIMIT) throw tooComplex();
+  }
+}
 
 export const elementFailure = () =>
-  new ImportFailure("Source HTML exceeds the element limit.", true, "too_many_elements");
+  new ImportFailure(
+    `This page has too many elements to process (more than ${ELEMENT_LIMIT.toLocaleString("en-US")}).`,
+    true,
+    "too_many_elements",
+  );
 
 /** What barrier detection needs from the source page, read before Readability changes it. */
 interface BarrierFacts {
@@ -219,7 +263,7 @@ export interface ArticleImage {
   missing: string;
 }
 
-/** Plain data only, so it can cross from the worker thread by structured clone. */
+/** Plain data only, so it can cross from the child process as JSON. */
 export interface ParsedArticle {
   /** The sanitised article HTML, cut at each image: `parts.length === images.length + 1`. */
   parts: string[];
@@ -243,11 +287,13 @@ const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 /**
  * Parses page HTML into the readable article. Throws `ImportFailure` for permanent rejections
  * (barrier pages, no article text, Readability's element limit). CPU and memory here grow with the
- * number of parsed nodes, which the caller's tag cap does not bound (see extract-sandbox.ts).
+ * number of parsed nodes, which the caller's tag cap does not bound (see extract-sandbox.ts), apart from
+ * the size check right after parsing.
  */
 export async function parseArticle(html: string, pageUrl: string): Promise<ParsedArticle> {
   const dom = new JSDOM(html, { url: pageUrl });
   const source = dom.window.document;
+  rejectAmplified(source);
   // Everything later steps need from the source page, read before Readability rewrites it (in
   // place: there is no second copy of the page).
   const facts = barrierFacts(source);
@@ -310,4 +356,25 @@ export async function parseArticle(html: string, pageUrl: string): Promise<Parse
     lang: languageTag(article.lang || rootLang),
     dir: direction(article.dir, rootDir, bodyDir),
   };
+}
+
+export const failureReply = (error: ImportFailure): SandboxReply => ({
+  ok: false,
+  failure: { message: error.message, terminal: error.terminal, code: error.code },
+});
+
+/** Runs one sandbox request (in the extraction child) and turns any error into plain data. */
+export async function runRequest(request: SandboxRequest): Promise<SandboxReply> {
+  try {
+    return request.kind === "article"
+      ? { ok: true, article: await parseArticle(request.html, request.url) }
+      : { ok: true, html: briefDocument(request.markdown) };
+  } catch (error) {
+    if (error instanceof ImportFailure) return failureReply(error);
+    // "Invalid string length" and call-stack exhaustion come from the page's size or shape, so
+    // they are as permanent as running out of memory.
+    if (error instanceof RangeError) return failureReply(tooComplex());
+    // Only the class name and code cross back: messages could quote the page.
+    return { ok: false, error: { name: errorName(error), code: errorCode(error) } };
+  }
 }

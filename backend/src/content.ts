@@ -11,9 +11,9 @@ import {
   markdownDocument,
   sanitize,
 } from "./extract-dom.js";
-import { parseInWorker, type SandboxOptions } from "./extract-sandbox.js";
+import { parseInSandbox, type SandboxOptions } from "./extract-sandbox.js";
 
-// The DOM helpers moved to extract-dom.ts (worker-safe); these names stay importable from here.
+// The DOM helpers moved to extract-dom.ts (safe to load in the extraction child); these names stay importable from here.
 export { ELEMENT_LIMIT, briefDocument, escapeHTML, languageTag, markdownDocument, sanitize };
 export interface Prepared {
   html: string;
@@ -38,7 +38,7 @@ export type Fetcher = (
  * trick can hide markup from it. It bounds tag tokens, not parsed nodes: the parser can build far
  * more elements than tags (adoption-agency re-creation of formatting elements builds about N×M
  * from N+3M tags). It is a cheap early rejection of large pages, not the memory bound; the
- * extraction worker's heap limit and deadline (extract-sandbox.ts) are. Measured on 13 November
+ * extraction child process's heap limit and deadline (extract-sandbox.ts) are. Measured on 13 November
  * 2026, a parsed page plus Readability's copy cost about 4.5 KB of RSS per element (20,000 elements
  * +93 MB, 50,000 +229 MB, 100,000 +460 MB).
  */
@@ -170,7 +170,7 @@ export async function extract(
   sandbox?: SandboxOptions,
 ): Promise<Prepared> {
   // Fetching stays on this thread, behind safeFetch's address checks; only the decoded HTML string
-  // goes to the extraction worker, and only plain data comes back.
+  // goes to the extraction child process, and only plain data comes back.
   const page = await fetcher(url, 3 * 1024 * 1024, { trace });
   const article = await timed(trace, "extract", async () => {
     if (!["text/html", "application/xhtml+xml"].includes(page.mime))
@@ -178,11 +178,11 @@ export async function extract(
     const charset = pageCharset(page.bytes, page.charset);
     if (trace) trace.charset = charset;
     const html = decodePage(page.bytes, page.charset);
-    // Cheap linear pre-checks here, so obviously oversized pages never start a worker.
+    // Cheap linear pre-checks here, so obviously oversized pages never start a child process.
     const counts = elementCounts(html);
     if (trace) trace.elements = counts.elements;
     if (counts.elements > ELEMENT_LIMIT || counts.tags > TAG_LIMIT) throw elementFailure();
-    return parseInWorker(html, page.url, sandbox);
+    return parseInSandbox(html, page.url, sandbox);
   });
   const images: Prepared["images"] = [];
   let missingImages = 0;
