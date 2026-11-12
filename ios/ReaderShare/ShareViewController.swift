@@ -19,7 +19,8 @@ final class ShareViewController: UIViewController {
     ])
     host.didMove(toParent: self)
     let items = extensionContext?.inputItems.compactMap { $0 as? NSExtensionItem } ?? []
-    loading = Task { await model.load(items) }
+    // Reads the share and, with one link and a usable session, saves it without a Save tap.
+    loading = Task { await model.run(items) }
   }
   private func finish() {
     loading?.cancel()
