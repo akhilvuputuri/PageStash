@@ -6,7 +6,10 @@ import SwiftUI
   static let shared = AppState()
   @Published var session: Session?
   @Published var items: [ReadingItem] = []
-  @Published var message: String?
+  /// The status line under the Library. Setting it clears `messageRetryable`.
+  @Published var message: String? { didSet { messageRetryable = false } }
+  /// Whether `message` reports a failed sync or download, which Retry (a full sync) can fix.
+  @Published private(set) var messageRetryable = false
   @Published var refreshing = false
   @Published var readingUndo: ReadingUndo?
   /// The article open in the full-screen reader. Rows, deep links, Spotlight, the Home Screen quick
@@ -141,7 +144,29 @@ import SwiftUI
         sharedSaves = try shareStore.records(credentials.account)
       }
     } catch { message = error.localizedDescription }
-    if let error = UserDefaults.standard.string(forKey: "downloadError") { message = error }
+    if let error = UserDefaults.standard.string(forKey: "downloadError") {
+      message = error
+      messageRetryable = true
+    }
+  }
+  /// Hides the status line. A remembered download error is forgotten too, so it doesn't return on
+  /// the next reload; the next failure shows again.
+  func dismissMessage() {
+    UserDefaults.standard.removeObject(forKey: "downloadError")
+    message = nil
+  }
+  /// Articles behind a visible Undo banner in a Library list, by banner, so Undo never needs a
+  /// download again. Lists set and clear their own entries.
+  private var undoProtection: [String: String] = [:]
+  func protectForUndo(_ id: String?, banner: String) { undoProtection[banner] = id }
+  /// Articles whose files are never removed to make room: the one open in the reader, ones behind
+  /// an Undo (Done Reading or a Library banner) and ones with changes not yet synced.
+  private var protectedDownloads: Set<String> {
+    var ids = Set(undoProtection.values)
+    if let id = readerRoute?.id { ids.insert(id) }
+    if let id = readingUndo?.itemId { ids.insert(id) }
+    if let edits = try? store?.pendingEdits() { ids.formUnion(edits.map(\.itemID)) }
+    return ids
   }
   /// A kept (rejected) edit from the latest sync run, shown when it finishes. Reset only when a run
   /// starts, so every caller that joined a shared run reads the same result.
@@ -239,7 +264,7 @@ import SwiftUI
             "itemCount": self.items.count,
             "readyCount": self.items.filter { $0.status == "ready" }.count,
           ])
-        await Downloads.shared.enqueue(items: self.items)
+        await Downloads.shared.enqueue(items: self.items, protected: self.protectedDownloads)
         BackgroundDiagnostics.shared.record(
           "downloads_enqueued",
           fields: [
@@ -264,6 +289,7 @@ import SwiftUI
           ])
         reload()
         message = error.localizedDescription
+        messageRetryable = true
       }
       throw error
     }
@@ -322,9 +348,10 @@ import SwiftUI
     try? store?.saveReadingContext(context)
     return context
   }
+  /// Saves a link from the Save sheet. It returns once the server has accepted the link; the
+  /// library then refreshes in the background, so a sync error can't make the save look failed.
   func save(_ url: String, key: String) async throws {
-    try await submit(url, key: key, syncAfter: false)
-    try await sync()
+    try await submit(url, key: key)
   }
   /// Submits a link. With `syncAfter`, the library refreshes in the background and its errors don't
   /// make a successful save look failed.
@@ -359,9 +386,33 @@ import SwiftUI
   func download(_ item: ReadingItem) async {
     do {
       try store?.resumeDownload(item.id)
+      // Asked for by hand, so automatic removal leaves it even while archived or finished.
+      try store?.pinDownload(item.id)
       try await sync(forceManifest: true)
-      await Downloads.shared.enqueue(items: items, manual: [item.id])
+      await Downloads.shared.enqueue(
+        items: items, manual: [item.id], protected: protectedDownloads.union([item.id]))
     } catch { message = error.localizedDescription }
+  }
+  /// Archived and finished articles (not in Trash) with files on this device, for Settings'
+  /// Remove Downloads of Archived and Finished Articles. Pinned downloads are included: the
+  /// reader asks for this explicitly.
+  var archivedDownloads: [ReadingItem] {
+    guard let store else { return [] }
+    return StorageEviction.candidates(
+      items.filter { !$0.isTrashed }, sizes: store.downloadSizes(), protected: protectedDownloads)
+  }
+  /// Frees space by removing the downloads of archived and finished articles. Unlike Remove
+  /// Download, an article moved back to the Library unfinished downloads again.
+  func removeArchivedDownloads() {
+    guard let store else { return }
+    let removing = archivedDownloads
+    for item in removing {
+      Downloads.shared.cancel(itemID: item.id)
+      try? store.evictDownload(item.id)
+    }
+    reload()
+    // Space is free now, so articles waiting for it can download.
+    Task { await Downloads.shared.enqueue(items: items, protected: protectedDownloads) }
   }
   func finishReading(_ id: String) -> Bool {
     do {
