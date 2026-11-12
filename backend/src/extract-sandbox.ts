@@ -181,7 +181,15 @@ function runInChild(
     };
     const abort = () => finish(() => reject(new ExtractProcessError("EXTRACT_ABORTED")));
     options.signal?.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(() => finish(() => reject(extractTimeout())), request.deadlineMs);
+    // A child that never became ready says nothing about the page (a slow or overloaded host), so
+    // that is a retryable start failure, not a timeout of the page's own work.
+    const timer = setTimeout(
+      () =>
+        finish(() =>
+          reject(ready ? extractTimeout() : new ExtractProcessError("EXTRACT_CHILD_START")),
+        ),
+      request.deadlineMs,
+    );
     child.on("message", (message: { ready?: true } | SandboxReply) => {
       if (!ready) {
         if (!(message as { ready?: true }).ready) return;

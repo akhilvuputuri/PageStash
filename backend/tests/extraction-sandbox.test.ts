@@ -117,14 +117,14 @@ test("a tiny adoption-agency page runs out of child memory and fails permanently
 
 test("many empty paragraphs hit the extraction deadline, and the child is killed", async () => {
   const run = await whileTicking(() =>
-    extract("https://example.com/empty", page(emptyParagraphs), undefined, { deadlineMs: 1_000 }),
+    extract("https://example.com/empty", page(emptyParagraphs), undefined, { deadlineMs: 3_000 }),
   );
   const failure = run.result;
   assert.ok(failure instanceof ImportFailure, String(failure));
   assert.equal(failure.code, "extract_timeout");
   assert.equal(failure.terminal, true);
   assert.equal(importOutcome(failure, "extract").terminal, true);
-  assert.ok(run.ms < 5_000, `gave up after ${Math.round(run.ms)} ms`);
+  assert.ok(run.ms < 10_000, `gave up after ${Math.round(run.ms)} ms`);
   assert.ok(run.longestGap < 1_000, `event loop blocked for ${Math.round(run.longestGap)} ms`);
   await noChildrenLeft();
 });
@@ -179,6 +179,18 @@ test("a RangeError from the page's size or shape is too_complex, other errors st
   } finally {
     Readability.prototype.parse = parse;
   }
+});
+
+test("a child that never becomes ready is a retryable start failure, not a page timeout", async () => {
+  const hanging = new URL("./hanging-child.mjs", import.meta.url);
+  const failure = await parseInSandbox("<p>x</p>", "https://example.com/", {
+    childUrl: hanging,
+    deadlineMs: 1_000,
+  }).catch((error: unknown) => error);
+  assert.ok(failure instanceof ExtractProcessError, String(failure));
+  assert.equal(failure.code, "EXTRACT_CHILD_START");
+  assert.equal(importOutcome(failure, "extract").terminal, false);
+  await noChildrenLeft();
 });
 
 test("a child that cannot start is a retryable internal failure carrying no message", async () => {
@@ -278,7 +290,7 @@ async function withService(
 
 test("a page stopped at the deadline ends the import at once and logs its code without the URL", async () => {
   await withService(
-    (url, trace) => extract(url, page(emptyParagraphs), trace, { deadlineMs: 500 }),
+    (url, trace) => extract(url, page(emptyParagraphs), trace, { deadlineMs: 3_000 }),
     async (service, owner, runLogged) => {
       const receipt = await service.save(owner, {
         url: "https://private-host.example/private-path",
