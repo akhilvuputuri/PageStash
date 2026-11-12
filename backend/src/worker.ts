@@ -22,7 +22,7 @@ export class ImportWorker {
   constructor(
     private readonly tasks: WorkerTasks,
     options: Partial<WorkerOptions> = {},
-    private readonly onError = () => {},
+    private readonly onError: (error: unknown) => void = () => {},
   ) {
     this.options = {
       idleMs: 60_000,
@@ -75,8 +75,8 @@ export class ImportWorker {
         await this.tasks.cleanup();
         this.nextCleanup = Date.now() + this.options.cleanupMs;
       }
-    } catch {
-      this.onError();
+    } catch (error) {
+      this.onError(error);
       delay = this.options.retryMs;
     }
     // A save can arrive while an empty claim query is in flight. Preserve that wake-up.

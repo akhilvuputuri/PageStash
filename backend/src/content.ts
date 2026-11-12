@@ -3,8 +3,8 @@ import createDOMPurify from "dompurify";
 import { Readability } from "@mozilla/readability";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
-import { safeFetch } from "./fetch.js";
-import { ImportFailure } from "./import-error.js";
+import { IMAGE_ACCEPT, safeFetch, type Fetched, type FetchOptions } from "./fetch.js";
+import { ImportFailure, timed, type ImportTrace } from "./import-error.js";
 
 const purifierWindow = new JSDOM("").window;
 const purify = createDOMPurify(purifierWindow);
@@ -70,6 +70,8 @@ export interface Prepared {
   siteName?: string;
   /** BCP 47 language of the source page, so the reader can hyphenate correctly. */
   lang?: string;
+  /** Text direction from the source page, so right-to-left articles render correctly. */
+  dir?: "rtl" | "ltr";
   missingImages: number;
   images: { id: string; bytes: Buffer }[];
 }
@@ -125,88 +127,262 @@ function rejectBarrier(document: Document, text: string) {
   ) {
     throw new ImportFailure(
       "The source returned an error, sign-in or access-check page instead of readable article text.",
+      true,
+      "barrier",
     );
   }
 }
 
-export async function extract(
+export type Fetcher = (
   url: string,
-  fetcher = safeFetch,
-): Promise<Prepared> {
-  const page = await fetcher(url, 3 * 1024 * 1024);
-  if (!["text/html", "application/xhtml+xml"].includes(page.mime))
-    throw new ImportFailure("This source is not an HTML article.");
-  const html = page.bytes.toString("utf8");
-  if ((html.match(/<[A-Za-z][^>]*>/g)?.length ?? 0) > 20_000)
-    throw new ImportFailure("Source HTML exceeds the element limit.");
-  const dom = new JSDOM(html, { url: page.url });
-  const article = new Readability(
-    dom.window.document.cloneNode(true) as Document,
-    {
-      maxElemsToParse: 20_000,
-    },
-  ).parse();
-  const sourceText =
-    dom.window.document.body.textContent?.replace(/\s+/g, " ").trim() ?? "";
-  rejectBarrier(
-    dom.window.document,
-    article?.textContent?.replace(/\s+/g, " ").trim() || sourceText,
-  );
-  if (!article)
-    throw new ImportFailure("Readable article text could not be extracted.");
-  const result = new JSDOM(sanitize(article.content ?? ""));
-  const text =
-    result.window.document.body.textContent?.replace(/\s+/g, " ").trim() ?? "";
-  if (text.length < 100 || (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0) < 40)
-    throw new ImportFailure("Readable article text could not be extracted.");
-  const images: Prepared["images"] = [];
-  let missingImages = 0;
-  let total = 0;
-  const allImages = [...result.window.document.querySelectorAll("img")];
-  for (const [index, img] of allImages.entries()) {
-    try {
-      if (index >= 20) throw new Error("Image count limit");
-      const raw = img.getAttribute("src");
-      if (!raw) throw new Error("Image unavailable");
-      const image = await fetcher(
-        new URL(raw, page.url).toString(),
-        5 * 1024 * 1024,
-      );
-      if (
-        ![
-          "image/jpeg",
-          "image/png",
-          "image/webp",
-          "image/gif",
-          "image/avif",
-        ].includes(image.mime)
-      )
-        throw new Error("Unsupported image");
-      total += image.bytes.length;
-      if (total > 25 * 1024 * 1024) throw new Error("Image byte limit");
-      const bytes = await sharp(image.bytes, { limitInputPixels: 20_000_000 })
-        .resize({ width: 1800, withoutEnlargement: true })
-        .webp({ quality: 82 })
-        .toBuffer();
-      const id = randomUUID();
-      images.push({ id, bytes });
-      img.setAttribute("src", `${id}.webp`);
-    } catch {
-      missingImages++;
-      const placeholder = result.window.document.createElement("p");
-      placeholder.textContent = `[Image unavailable${img.alt ? ": " + img.alt : ""}]`;
-      img.replaceWith(placeholder);
+  limit: number,
+  options?: FetchOptions,
+) => Promise<Fetched>;
+
+/** Readable elements allowed in a page: outside `<svg>`, not counting script or style text. */
+export const ELEMENT_LIMIT = 20_000;
+/**
+ * Every `<` followed by a letter, counted without any context, so no comment, attribute or raw-text
+ * trick can hide markup from it. This is what bounds parser memory: measured on 13 November 2026,
+ * the parsed page plus Readability's copy cost about 4.5 KB of RSS per element (20,000 elements
+ * +93 MB, 50,000 +229 MB, 100,000 +460 MB), so 40,000 tags stay under about 200 MB on top of the
+ * process baseline in a 512 MB container.
+ */
+export const TAG_LIMIT = 40_000;
+/** Time for all of an article's images; any left over are marked unavailable. */
+const IMAGE_BUDGET_MS = 120_000;
+
+/** WHATWG labels for UTF-16 can't describe an ASCII-compatible `<meta>`; browsers use UTF-8. */
+function usableCharset(label: string | undefined): string | undefined {
+  if (!label) return undefined;
+  try {
+    const encoding = new TextDecoder(label.trim()).encoding;
+    return encoding.startsWith("utf-16") ? "utf-8" : encoding;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Picks the page's character encoding the way a browser would, in order: a byte-order mark, the
+ * Content-Type charset, a `<meta charset>` or `http-equiv` declaration in the first 4 KB, else UTF-8.
+ */
+export function pageCharset(bytes: Buffer, headerCharset?: string): string {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
+  const declared = usableCharset(headerCharset);
+  if (declared) return declared;
+  const head = bytes.subarray(0, 4096).toString("latin1");
+  for (const tag of head.match(/<meta\b[^>]*>/gi) ?? []) {
+    const value = /charset\s*=\s*["']?\s*([A-Za-z0-9._:-]+)/i.exec(tag)?.[1];
+    const meta = usableCharset(value);
+    if (meta) return meta;
+  }
+  return "utf-8";
+}
+
+/** Decodes page bytes without throwing; invalid sequences become U+FFFD. */
+export function decodePage(bytes: Buffer, headerCharset?: string): string {
+  const charset = pageCharset(bytes, headerCharset);
+  // The decoder strips a byte-order mark that matches its encoding.
+  return new TextDecoder(charset, { fatal: false }).decode(bytes);
+}
+
+const isLetter = (code: number) =>
+  (code >= 97 && code <= 122) || (code >= 65 && code <= 90);
+const isNameChar = (code: number) =>
+  isLetter(code) || (code >= 48 && code <= 57) || code === 45 || code === 58;
+
+/**
+ * Counts tags with a linear hand scanner (no regular expression can backtrack on input without
+ * `>`). `tags` counts every `<letter` anywhere, context-free. `elements` approximates the elements
+ * a parser would build outside `<svg>`: it skips comments, quoted attribute values, and the text of
+ * `<script>` and `<style>` outside SVG (inside SVG they are ordinary elements).
+ */
+export function elementCounts(html: string): { elements: number; tags: number } {
+  let tags = 0;
+  for (let i = html.indexOf("<"); i >= 0; i = html.indexOf("<", i + 1))
+    if (isLetter(html.charCodeAt(i + 1)) && ++tags > TAG_LIMIT) break;
+  const lower = html.toLowerCase();
+  let elements = 0;
+  let svgDepth = 0;
+  let i = 0;
+  scan: while (elements <= ELEMENT_LIMIT) {
+    const open = lower.indexOf("<", i);
+    if (open < 0) break;
+    if (lower.startsWith("<!--", open)) {
+      // "<!-->" and "<!--->" are complete (empty) comments to an HTML parser.
+      const abrupt = lower.startsWith("<!-->", open) ? 5 : lower.startsWith("<!--->", open) ? 6 : 0;
+      if (abrupt) {
+        i = open + abrupt;
+        continue;
+      }
+      const close = lower.indexOf("-->", open + 4);
+      if (close < 0) break;
+      i = close + 3;
+      continue;
+    }
+    const closing = lower.charCodeAt(open + 1) === 47; // "/"
+    let j = open + (closing ? 2 : 1);
+    if (!isLetter(lower.charCodeAt(j))) {
+      i = open + 1;
+      continue;
+    }
+    const nameStart = j;
+    while (j < lower.length && isNameChar(lower.charCodeAt(j))) j++;
+    const name = lower.slice(nameStart, j);
+    // Find the end of the tag, skipping quoted attribute values; every character is read once.
+    let previous = 0;
+    for (;;) {
+      if (j >= lower.length) break scan;
+      const code = lower.charCodeAt(j);
+      if (code === 62) break; // ">"
+      if ((code === 34 || code === 39) && previous === 61) {
+        const quote = lower.indexOf(code === 34 ? '"' : "'", j + 1);
+        if (quote < 0) break scan;
+        j = quote + 1;
+        previous = 0;
+        continue;
+      }
+      if (code !== 32 && code !== 9 && code !== 10 && code !== 12 && code !== 13) previous = code;
+      j++;
+    }
+    const selfClosing = lower.charCodeAt(j - 1) === 47;
+    i = j + 1;
+    if (closing) {
+      if (name === "svg" && svgDepth > 0) svgDepth--;
+      continue;
+    }
+    if (svgDepth > 0) {
+      if (name === "svg" && !selfClosing) svgDepth++;
+      continue;
+    }
+    elements++;
+    if (name === "svg" && !selfClosing) svgDepth++;
+    else if (name === "script" || name === "style") {
+      const end = lower.indexOf(`</${name}`, i);
+      if (end < 0) break; // The rest of the page is that element's text.
+      i = end;
     }
   }
-  return {
-    html: result.window.document.body.innerHTML,
-    title: article.title || new URL(url).hostname,
-    author: article.byline || undefined,
-    siteName: article.siteName?.trim().slice(0, 120) || undefined,
-    lang: languageTag(article.lang || dom.window.document.documentElement.lang),
-    images,
-    missingImages,
-  };
+  return { elements, tags };
+}
+
+const elementFailure = () =>
+  new ImportFailure("Source HTML exceeds the element limit.", true, "too_many_elements");
+
+function direction(...values: (string | null | undefined)[]): "rtl" | "ltr" | undefined {
+  for (const value of values) {
+    const dir = value?.trim().toLowerCase();
+    if (dir === "rtl" || dir === "ltr") return dir;
+  }
+  return undefined;
+}
+
+export async function extract(
+  url: string,
+  fetcher: Fetcher = safeFetch,
+  trace?: ImportTrace,
+): Promise<Prepared> {
+  const page = await fetcher(url, 3 * 1024 * 1024, { trace });
+  return timed(trace, "extract", async () => {
+    if (!["text/html", "application/xhtml+xml"].includes(page.mime))
+      throw new ImportFailure("This source is not an HTML article.", true, "not_html");
+    const charset = pageCharset(page.bytes, page.charset);
+    if (trace) trace.charset = charset;
+    const html = decodePage(page.bytes, page.charset);
+    const counts = elementCounts(html);
+    if (trace) trace.elements = counts.elements;
+    if (counts.elements > ELEMENT_LIMIT || counts.tags > TAG_LIMIT) throw elementFailure();
+    const dom = new JSDOM(html, { url: page.url });
+    const copy = dom.window.document.cloneNode(true) as Document;
+    // Drawings are never article text; removing them keeps Readability's own count to real content.
+    for (const drawing of copy.querySelectorAll("svg")) drawing.remove();
+    let article: ReturnType<Readability["parse"]>;
+    try {
+      article = new Readability(copy, {
+        // A little above our count, which excludes the implied html, head and body elements.
+        maxElemsToParse: ELEMENT_LIMIT + 100,
+      }).parse();
+    } catch (error) {
+      // Readability's own element limit: as permanent as ours, so it must not be retried.
+      if (/^Aborting parsing document/.test((error as Error)?.message ?? "")) throw elementFailure();
+      throw error;
+    }
+    const sourceText =
+      dom.window.document.body.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    rejectBarrier(
+      dom.window.document,
+      article?.textContent?.replace(/\s+/g, " ").trim() || sourceText,
+    );
+    if (!article)
+      throw new ImportFailure("Readable article text could not be extracted.", true, "no_article");
+    const result = new JSDOM(sanitize(article.content ?? ""));
+    const text =
+      result.window.document.body.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    if (text.length < 100 || (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0) < 40)
+      throw new ImportFailure("Readable article text could not be extracted.", true, "no_article");
+    return { dom, article, result };
+  }).then(async ({ dom, article, result }) => {
+    const images: Prepared["images"] = [];
+    let missingImages = 0;
+    const allImages = [...result.window.document.querySelectorAll("img")];
+    await timed(trace, "images", async () => {
+      let total = 0;
+      const deadline = Date.now() + IMAGE_BUDGET_MS;
+      for (const [index, img] of allImages.entries()) {
+        try {
+          if (index >= 20) throw new Error("Image count limit");
+          if (Date.now() > deadline) throw new Error("Image time limit");
+          const raw = img.getAttribute("src");
+          if (!raw) throw new Error("Image unavailable");
+          const image = await fetcher(
+            new URL(raw, page.url).toString(),
+            5 * 1024 * 1024,
+            { accept: IMAGE_ACCEPT, hopMs: 10_000, totalMs: 15_000 },
+          );
+          if (
+            ![
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+              "image/gif",
+              "image/avif",
+            ].includes(image.mime)
+          )
+            throw new Error("Unsupported image");
+          total += image.bytes.length;
+          if (total > 25 * 1024 * 1024) throw new Error("Image byte limit");
+          const bytes = await sharp(image.bytes, { limitInputPixels: 20_000_000 })
+            .resize({ width: 1800, withoutEnlargement: true })
+            .webp({ quality: 82 })
+            .toBuffer();
+          const id = randomUUID();
+          images.push({ id, bytes });
+          img.setAttribute("src", `${id}.webp`);
+        } catch {
+          missingImages++;
+          const placeholder = result.window.document.createElement("p");
+          placeholder.textContent = `[Image unavailable${img.alt ? ": " + img.alt : ""}]`;
+          img.replaceWith(placeholder);
+        }
+      }
+    });
+    if (trace)
+      trace.images = { found: allImages.length, saved: images.length, missing: missingImages };
+    const root = dom.window.document.documentElement;
+    return {
+      html: result.window.document.body.innerHTML,
+      title: article.title || new URL(url).hostname,
+      author: article.byline || undefined,
+      siteName: article.siteName?.trim().slice(0, 120) || undefined,
+      lang: languageTag(article.lang || root.lang),
+      dir: direction(article.dir, root.getAttribute("dir"), dom.window.document.body?.getAttribute("dir")),
+      images,
+      missingImages,
+    };
+  });
 }
 
 // Deliberately small Markdown renderer: no raw HTML, embeds, or remote images.
@@ -243,6 +419,8 @@ export function briefDocument(markdown: string): string {
   if (!/[\p{L}\p{N}]/u.test(text))
     throw new ImportFailure(
       "The brief contains no readable text. Submit a corrected brief as a new request.",
+      true,
+      "empty_brief",
     );
   return html;
 }
@@ -253,7 +431,13 @@ export function languageTag(value: string | null | undefined): string | undefine
   return tag && /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/.test(tag) ? tag : undefined;
 }
 
-export function readerHTML(content: string, title: string, lang?: string): string {
+export function readerHTML(
+  content: string,
+  title: string,
+  lang?: string,
+  dir?: string,
+): string {
   const language = languageTag(lang);
-  return `<!doctype html><html${language ? ` lang="${language}"` : ""}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${escapeHTML(title)}</title><style>:root{color-scheme:light dark}body{font:20px/1.65 Georgia,serif;padding:18px;max-width:720px;margin:auto;overflow-wrap:anywhere}img{max-width:100%;height:auto}pre{overflow:auto}a{color:#4685c5}h1,h2,h3{line-height:1.25}table{display:block;overflow:auto}blockquote{border-left:3px solid #888;padding-left:16px;margin-left:0}</style></head><body>${content}</body></html>`;
+  const textDirection = dir === "rtl" || dir === "ltr" ? dir : undefined;
+  return `<!doctype html><html${language ? ` lang="${language}"` : ""}${textDirection ? ` dir="${textDirection}"` : ""}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' file:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${escapeHTML(title)}</title><style>:root{color-scheme:light dark}body{font:20px/1.65 Georgia,serif;padding:18px;max-width:720px;margin:auto;overflow-wrap:anywhere}img{max-width:100%;height:auto}pre{overflow:auto}a{color:#4685c5}h1,h2,h3{line-height:1.25}table{display:block;overflow:auto}blockquote{border-inline-start:3px solid #888;padding-inline-start:16px;margin-inline-start:0}</style></head><body>${content}</body></html>`;
 }

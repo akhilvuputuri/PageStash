@@ -7,6 +7,11 @@ import { Service } from "./service.js";
 import { buildServer } from "./server.js";
 import { ImportWorker } from "./worker.js";
 import { openRouterModel } from "./reading-context.js";
+import { errorCode, errorName } from "./import-error.js";
+
+/** The error's class and code only: messages can quote URLs, SQL values or provider responses. */
+const errorFields = (error: unknown) =>
+  JSON.stringify({ error: errorName(error), code: errorCode(error) });
 
 const config = configuration();
 await mkdir(config.dataDirectory, { recursive: true });
@@ -39,7 +44,8 @@ const worker = new ImportWorker(
     },
   },
   {},
-  () => console.error("Worker cycle failed; durable jobs will retry."),
+  (error) =>
+    console.error("Worker cycle failed; durable jobs will retry.", errorFields(error)),
 );
 service.onQueued = () => worker.wake();
 // Reading context for newly prepared articles and the backfill, one at a time. It wakes when an
@@ -47,7 +53,8 @@ service.onQueued = () => worker.wake();
 const contextWorker = new ImportWorker(
   { runOne: () => service.runContextJob(), cleanup: async () => {} },
   { idleMs: 600_000, busyMs: 5_000, retryMs: 60_000, batchSize: 1, cleanupMs: Number.MAX_SAFE_INTEGER },
-  () => console.error("Reading-context cycle failed; it will retry."),
+  (error) =>
+    console.error("Reading-context cycle failed; it will retry.", errorFields(error)),
 );
 service.onPrepared = () => contextWorker.wake();
 const app = await buildServer(service);

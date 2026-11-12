@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { Service, HTTPError } from "./service.js";
 import { oauthRoutes } from "./oauth.js";
 import { normalizedURL } from "./fetch.js";
+import { errorCode, errorName } from "./import-error.js";
 
 const id = z.string().uuid();
 export const linkInput = z.object({
@@ -63,7 +64,7 @@ export async function buildServer(service: Service) {
         "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
       );
   });
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     if (error instanceof HTTPError) {
       if (error.status === 401)
         reply.header(
@@ -79,6 +80,17 @@ export async function buildServer(service: Service) {
     const status = (error as { statusCode?: number }).statusCode;
     if (status && status >= 400 && status < 500)
       return reply.code(status).send({ error: "Invalid request." });
+    // The route pattern (for example /v1/downloads/:token), never the URL, which can hold a
+    // capability; the error's class and code, never its message.
+    console.error(
+      "Request failed",
+      JSON.stringify({
+        method: request.method,
+        route: request.routeOptions?.url,
+        error: errorName(error),
+        code: errorCode(error),
+      }),
+    );
     return reply.code(500).send({ error: "Request could not complete." });
   });
   const auth = (request: { headers: { authorization?: string } }) =>

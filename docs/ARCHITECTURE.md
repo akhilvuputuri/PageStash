@@ -18,6 +18,8 @@ flowchart LR
 
 Server states retain the existing wire values: queued → processing → ready, or bookmark for a failed submission. Only validated readable content becomes a prepared article. Permanent source/extraction failures stop immediately; transient failures stop after three attempts. The phone shows pending/failed records in a secondary Imports screen, outside the normal Library. Previously prepared copies and all retained submission metadata remain intact. Original URL, title, author when available, references and capture time are retained. Briefs render only supplied text and are labelled agent-created.
 
+Update, 13 November 2026 (on branch `fix/backend-import-fixes`, not deployed): transient failures now retry after about 30 seconds, 5 minutes and 30 minutes, so they stop after four attempts. A TLS certificate failure is permanent. The `error` text names the cause in short words (timeout, unknown domain, certificate, connection, HTTP status) and each import outcome logs one structured line without URLs or messages. See [validation](VALIDATION.md#backend-import-robustness-and-failure-visibility-13-november-2026).
+
 Phone states: not downloaded, partial/downloading, text available with incomplete images, or available offline. Presence of server metadata never implies offline readiness. Every file is checked against the manifest's size/hash before commit. Text can be read when images are incomplete. Old content remains installed until replacement text is verified. Local state is independent of connectivity.
 
 ## Sync
@@ -69,6 +71,10 @@ The backend is the OAuth authorization server for agents, with Supabase login at
 ## Fetching and rendering
 
 Fetches accept HTTP(S) without URL credentials or nonstandard ports. Every DNS result must be public; the actual socket is pinned to a validated IP. Redirect targets and image fetches undergo the same checks, preventing DNS rebinding and internal-network fetches. Requests have total deadlines and byte limits. The worker limits article size, element count, image count, input pixels and aggregate image bytes. Supported raster images are transcoded to WebP; SVG and active embeds are excluded.
+
+Update, 13 November 2026 (on branch `fix/backend-import-fixes`, not deployed): pages are decoded by byte-order mark, Content-Type charset, then `<meta>` declaration, else UTF-8. Requests send `Accept`, `Accept-Language` and a product User-Agent, accept gzip and Brotli with the byte cap on decompressed size, and time each hop within an overall ceiling (15 s per hop and 30 s in all for a page) instead of one total. The element count skips script and style text and counts SVG separately. Reader HTML carries the article's `dir`.
+
+Update after review, 13 November 2026 (same branch, not deployed): memory is bounded by a context-free cap of 40,000 tags (every `<` followed by a letter); the 20,000 readable-element count skips comments, quoted attributes and script or style text outside SVG, using a linear scanner. A failing import can stay queued about 35 minutes under the backoff and counts toward the 50-import queue cap meanwhile.
 
 Readability output passes through DOMPurify; the DOM parser runs neither scripts nor resource loading. Markdown escapes raw HTML. The reader disables content JavaScript, isolates website data, uses CSP, and allows file access only to that article version's directory. Reader-controlled typography/scroll restoration is separate from source content scripts. Links open only after an explicit user tap.
 

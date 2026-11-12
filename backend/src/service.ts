@@ -8,7 +8,15 @@ import type { Database } from "./db.js";
 import { supabaseHeaders, type Config } from "./config.js";
 import type { Storage } from "./storage.js";
 import { normalizedURL } from "./fetch.js";
-import { ImportFailure } from "./import-error.js";
+import {
+  ImportFailure,
+  errorCode,
+  errorName,
+  importOutcome,
+  newTrace,
+  timed,
+  type ImportTrace,
+} from "./import-error.js";
 import {
   extract,
   briefDocument,
@@ -32,8 +40,68 @@ import {
   type HistoryEntry,
 } from "./reading-context.js";
 
+/**
+ * Waits before retrying a retryable import failure (network, timeout, 5xx, 408 or 429): about
+ * 30 seconds, 5 minutes, then 30 minutes. The attempt after the last wait is the final one.
+ */
+export const RETRY_DELAYS_SECONDS = [30, 300, 1800] as const;
 /** Import attempts before an article is kept as a bookmark that can be retried from Imports. */
-const MAX_ATTEMPTS = 3;
+export const MAX_ATTEMPTS = RETRY_DELAYS_SECONDS.length + 1;
+/** Seconds to wait after failed attempt number `attempt` (1-based), or null when it was the last. */
+export function retryDelaySeconds(attempt: number): number | null {
+  return attempt >= MAX_ATTEMPTS
+    ? null
+    : RETRY_DELAYS_SECONDS[Math.max(0, attempt - 1)];
+}
+/** Items counted against the per-account library cap: not in Trash and not archived. */
+export const LIBRARY_LIMIT = 1000;
+export const QUEUE_LIMIT = 50;
+
+/**
+ * One structured line per import outcome. It carries the item ID, stage, error class and code,
+ * HTTP status, byte counts, per-stage milliseconds and image counts; never a URL, body, message
+ * or credential.
+ */
+function logImport(
+  fields: {
+    item: string;
+    kind: "article" | "brief";
+    attempt: number;
+    /** `superseded`: the lease was lost or the item deleted, so nothing was recorded. */
+    outcome: "ready" | "retry" | "failed" | "abandoned" | "superseded";
+    code?: string;
+    error?: unknown;
+    retryIn?: number | null;
+    startedAt: number;
+  },
+  trace?: ImportTrace,
+) {
+  const line = {
+    item: fields.item,
+    kind: fields.kind,
+    attempt: fields.attempt,
+    outcome: fields.outcome,
+    stage: trace?.stage,
+    code: fields.code,
+    error: fields.error === undefined ? undefined : errorName(fields.error),
+    errno: fields.error === undefined ? undefined : errorCode(fields.error),
+    status: trace?.status,
+    wire_bytes: trace?.wireBytes,
+    bytes: trace?.bytes,
+    encoding: trace?.encoding,
+    charset: trace?.charset,
+    redirects: trace?.redirects,
+    elements: trace?.elements,
+    images: trace?.images,
+    ms: trace?.ms,
+    total_ms: Math.round(performance.now() - fields.startedAt),
+    retry_in_s: fields.retryIn ?? undefined,
+  };
+  const text = JSON.stringify(line);
+  if (fields.outcome === "ready" || fields.outcome === "superseded")
+    console.log("Import finished", text);
+  else console.error("Import failed", text);
+}
 
 export const hash = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
@@ -123,7 +191,10 @@ export class Service {
     public db: Database,
     public config: Config,
     public files: Storage,
-    private prepareArticle: (url: string) => Promise<Prepared> = extract,
+    private prepareArticle: (
+      url: string,
+      trace?: ImportTrace,
+    ) => Promise<Prepared> = (url, trace) => extract(url, undefined, trace),
     private contextModel?: ContextModel,
   ) {}
   async credential(
@@ -282,13 +353,15 @@ export class Service {
     return this.existingSave(identity, winner, input.idempotency_key, url);
   }
   private async checkCapacity(identity: Identity, newItem: boolean) {
+    // The library cap counts what is in Library: items in Trash (purged after 30 days) and
+    // archived items don't use it up. The queue cap still counts every pending import.
     const capacity = await this.db.query<{ queued: string; total: string }>(
-      "SELECT count(*) FILTER(WHERE status IN('queued','processing')) AS queued,count(*) AS total FROM items WHERE owner_id=$1 AND deleted=false",
+      "SELECT count(*) FILTER(WHERE status IN('queued','processing')) AS queued,count(*) FILTER(WHERE trashed_at IS NULL AND archived=false) AS total FROM items WHERE owner_id=$1 AND deleted=false",
       [identity.owner_id],
     );
     if (
-      Number(capacity.rows[0].queued) >= 50 ||
-      (newItem && Number(capacity.rows[0].total) >= 1000)
+      Number(capacity.rows[0].queued) >= QUEUE_LIMIT ||
+      (newItem && Number(capacity.rows[0].total) >= LIBRARY_LIMIT)
     )
       throw new HTTPError(
         429,
@@ -1041,14 +1114,25 @@ export class Service {
     // Each claim counts an attempt, but only a failure the worker catches can end a job. A job
     // whose attempts ended the process instead (its lease expired) must not be retried forever.
     if (row.attempts > MAX_ATTEMPTS) {
-      await this.db.query(
+      const ended = await this.db.query(
         `WITH claimed AS (DELETE FROM jobs WHERE id=$1 AND lease_token=$2 RETURNING id)
-         UPDATE items SET status='bookmark',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) AND deleted=false`,
+         UPDATE items SET status='bookmark',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) AND deleted=false RETURNING id`,
         [row.id, lease, "Import could not complete. Retry from Imports."],
       );
+      logImport({
+        item: row.id,
+        kind: row.payload.url ? "article" : "brief",
+        attempt: row.attempts,
+        outcome: ended.rows.length ? "abandoned" : "superseded",
+        code: "attempts_exhausted",
+        startedAt: performance.now(),
+      });
       return true;
     }
     const uploaded: string[] = [];
+    const trace = newTrace();
+    const kind = row.payload.url ? "article" : "brief";
+    const startedAt = performance.now();
     try {
       const active = await this.db.query(
         "UPDATE items SET status=$2,error=NULL,revision=nextval('library_revision') WHERE id=$1 AND deleted=false RETURNING id",
@@ -1059,12 +1143,14 @@ export class Service {
           row.id,
           lease,
         ]);
+        logImport({ item: row.id, kind, attempt: row.attempts, outcome: "superseded", code: "deleted", startedAt });
         return true;
       }
       let prepared: Prepared;
       if (row.payload.url)
-        prepared = await this.prepareArticle(row.payload.url);
+        prepared = await this.prepareArticle(row.payload.url, trace);
       else {
+        trace.stage = "extract";
         if (!row.payload.markdown?.trim())
           throw new ImportFailure("The brief contains no readable text.");
         prepared = {
@@ -1097,7 +1183,7 @@ export class Service {
           role: "content",
           mime: "text/html",
           filename: "article.html",
-          bytes: Buffer.from(readerHTML(prepared.html, prepared.title, prepared.lang)),
+          bytes: Buffer.from(readerHTML(prepared.html, prepared.title, prepared.lang, prepared.dir)),
         },
         ...prepared.images.map((i) => ({
           ...i,
@@ -1108,7 +1194,7 @@ export class Service {
       ];
       for (const blob of blobs) {
         const key = `${row.owner_id}/${row.id}/${blob.id}`;
-        await this.files.put(key, blob.bytes, blob.mime);
+        await timed(trace, "upload", () => this.files.put(key, blob.bytes, blob.mime));
         uploaded.push(key);
         assets.push({
           id: blob.id,
@@ -1120,7 +1206,7 @@ export class Service {
           storage_key: key,
         });
       }
-      const published = await this.db.query(
+      const published = await timed(trace, "publish", () => this.db.query(
         `WITH claimed AS (DELETE FROM jobs j WHERE j.id=$1 AND lease_token=$2 AND EXISTS(SELECT 1 FROM items WHERE id=j.id AND deleted=false) RETURNING id), inserted AS (
     INSERT INTO assets(id,item_id,role,mime,size,sha256,filename,storage_key) SELECT a.id,c.id,a.role,a.mime,a.size,a.sha256,a.filename,a.storage_key FROM jsonb_to_recordset($3::jsonb) AS a(id uuid,role text,mime text,size integer,sha256 text,filename text,storage_key text) CROSS JOIN claimed c RETURNING id)
     UPDATE items SET status='ready',title=$4,author=$5,error=$6,site_name=$7,content_version=content_version+1,activity_revision=NULL,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) RETURNING id`,
@@ -1135,30 +1221,53 @@ export class Service {
             : null,
           prepared.siteName ?? null,
         ],
-      );
+      ));
       if (!published.rows.length) await this.files.remove(uploaded);
       else this.onPrepared?.();
+      logImport(
+        {
+          item: row.id,
+          kind,
+          attempt: row.attempts,
+          // Deleted or reclaimed while it ran: nothing was published.
+          outcome: published.rows.length ? "ready" : "superseded",
+          code: published.rows.length ? undefined : "lease_lost_or_deleted",
+          startedAt,
+        },
+        trace,
+      );
     } catch (error) {
+      const outcome = importOutcome(error, trace.stage);
+      const delay = outcome.terminal ? null : retryDelaySeconds(row.attempts);
       await this.files.remove(uploaded);
-      const message =
-        error instanceof ImportFailure
-          ? error.message.slice(0, 240)
-          : "Import could not complete. Retry from Imports.";
-      const terminal =
-        row.attempts >= MAX_ATTEMPTS || (error instanceof ImportFailure && error.terminal);
-      if (terminal) {
-        await this.db.query(
-          `WITH claimed AS (DELETE FROM jobs WHERE id=$1 AND lease_token=$2 RETURNING id)
-           UPDATE items SET status='bookmark',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) AND deleted=false`,
-          [row.id, lease, message],
-        );
-      } else {
-        await this.db.query(
-          `WITH released AS (UPDATE jobs SET lease_until=NULL,lease_token=NULL,available_at=now()+interval '30 seconds' WHERE id=$1 AND lease_token=$2 RETURNING id)
-           UPDATE items SET status='queued',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM released) AND deleted=false`,
-          [row.id, lease, message],
-        );
-      }
+      const message = outcome.message;
+      const recorded =
+        delay === null
+          ? await this.db.query(
+              `WITH claimed AS (DELETE FROM jobs WHERE id=$1 AND lease_token=$2 RETURNING id)
+           UPDATE items SET status='bookmark',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) AND deleted=false RETURNING id`,
+              [row.id, lease, message],
+            )
+          : await this.db.query(
+              `WITH released AS (UPDATE jobs SET lease_until=NULL,lease_token=NULL,available_at=now()+$4::integer*interval '1 second' WHERE id=$1 AND lease_token=$2 RETURNING id)
+           UPDATE items SET status='queued',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM released) AND deleted=false RETURNING id`,
+              [row.id, lease, message, delay],
+            );
+      // Logged after the lease-guarded update, so the line says what was actually recorded. With
+      // no row changed, another claim owns the job or the item was deleted meanwhile.
+      logImport(
+        {
+          item: row.id,
+          kind,
+          attempt: row.attempts,
+          outcome: !recorded.rows.length ? "superseded" : delay === null ? "failed" : "retry",
+          code: outcome.code,
+          error,
+          retryIn: recorded.rows.length ? delay : undefined,
+          startedAt,
+        },
+        trace,
+      );
     }
     return true;
   }
