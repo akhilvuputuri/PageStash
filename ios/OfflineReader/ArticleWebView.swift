@@ -41,6 +41,22 @@ struct ArticleHeader: Equatable {
   /// Bars recede while reading down and return on scrolling up, a tap, or at either end.
   @Published var barsHidden = false
 }
+/// How far through the article the reader is, for the bottom bar's progress and time left. Kept
+/// apart from `ArticleScrollState` so scrolling re-renders only the views that show it.
+@MainActor final class ReadingProgress: ObservableObject {
+  @Published private(set) var fraction: Double
+  init(_ fraction: Double = 0) { self.fraction = Self.clamp(fraction) }
+  /// Publishes in whole-percent steps, so scrolling doesn't redraw on every frame.
+  func update(_ value: Double) {
+    let next = Self.clamp(value)
+    if abs(next - fraction) >= 0.01 || (next != fraction && (next == 0 || next == 1)) {
+      fraction = next
+    }
+  }
+  private static func clamp(_ value: Double) -> Double {
+    value.isFinite ? min(1, max(0, value)) : 0
+  }
+}
 struct ArticleWebView: UIViewRepresentable {
   /// Links with this scheme come from controls the reader injects, never from article content.
   static let actionScheme = "offline-reader-action"
@@ -74,6 +90,8 @@ struct ArticleWebView: UIViewRepresentable {
   var onContext: (() -> Void)? = nil
   /// Saves a web link from the article to the library; offered when a link is held.
   var onSaveLink: ((URL) -> Void)? = nil
+  /// Receives the live scroll position for the reader's progress display.
+  var readingProgress: ReadingProgress? = nil
   let onProgress: (Double) -> Void
   private var tokens: ThemeTokens { ThemeTokens.resolve(selectedAppearance, colorScheme) }
   var appearance: String { tokens.name }
@@ -326,6 +344,7 @@ struct ArticleWebView: UIViewRepresentable {
       position = progress
       lastSaved = Date()
       restoring = false
+      parent.readingProgress?.update(progress)
     }
 
     /// The document can lay out again after it was measured, for example after a late viewport
@@ -413,6 +432,9 @@ struct ArticleWebView: UIViewRepresentable {
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
       if Date().timeIntervalSince(lastSaved) > 2 { save(scrollView) }
+      if !restoring, scrollView.contentSize.height > scrollView.bounds.height {
+        parent.readingProgress?.update(currentProgress(scrollView))
+      }
       updateBars(scrollView)
     }
     private var lastOffset: CGFloat = 0

@@ -20,6 +20,8 @@ Server states retain the existing wire values: queued → processing → ready, 
 
 Phone states: not downloaded, partial/downloading, text available with incomplete images, or available offline. Presence of server metadata never implies offline readiness. Every file is checked against the manifest's size/hash before commit. Text can be read when images are incomplete. Old content remains installed until replacement text is verified. Local state is independent of connectivity.
 
+Update (13 November 2026): downloads stay within the storage limit by removing the files of archived and finished articles, oldest saved first, before skipping new ones (`StorageEviction`, `LocalStore.evictDownload`). That removal keeps the item and its title search and, unlike a reader's Remove Download, sets no pause flag, so the normal enqueue rule fetches it again once it is unarchived and unfinished. The article in the reader and items with transfers in flight are protected. Items still skipped for space are held in memory by the download manager for the "Storage full" state, rebuilt on every enqueue. Local search builds an FTS5 expression of quoted prefix terms (`LocalStore.searchExpression`), so typed text is never parsed as query syntax.
+
 ## Sync
 
 Each item has a monotonic revision. The phone persists its sync cursor and items in one SQLite transaction. Server tombstones remain visible in sync; offline deletes cannot be resurrected by stale responses. The phone overlays pending edits while applying server metadata. Edit acknowledgements use a local revision so a completed request cannot erase a newer local change. The current app serializes foreground and background sync in one task.

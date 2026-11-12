@@ -100,7 +100,10 @@ struct LibraryView: View {
   private var trashCount: Int { state.items.filter(\.isTrashed).count }
   var body: some View {
     NavigationStack {
-      LibraryList(archived: false, showImports: $showImports, transition: transition)
+      LibraryList(
+        archived: false, showImports: $showImports, showSettings: $showSettings,
+        transition: transition
+      )
         .toolbar {
           ToolbarItem(placement: .topBarLeading) {
             Button {
@@ -146,7 +149,9 @@ struct LibraryView: View {
         }
         // A pushed Archive gets the standard Back button.
         .navigationDestination(isPresented: $showArchive) {
-          LibraryList(archived: true, showImports: $showImports, transition: transition)
+          LibraryList(
+            archived: true, showImports: $showImports, showSettings: $showSettings,
+            transition: transition)
         }
         .navigationDestination(isPresented: $showTrash) { TrashList() }
         .sheet(isPresented: $showSave) { SaveView() }
@@ -182,13 +187,38 @@ struct LibraryView: View {
     }
   }
 }
+/// Where a Library or Archive search looks. Without a query, each list shows its own items.
+enum LibrarySearchScope: String, CaseIterable, Identifiable {
+  case library = "Library", archive = "Archive", all = "All"
+  var id: String { rawValue }
+  /// Whether an article with this archived state belongs in the scope.
+  func includes(archived: Bool) -> Bool {
+    switch self {
+    case .library: return !archived
+    case .archive: return archived
+    case .all: return true
+    }
+  }
+}
 struct LibraryList: View {
   @EnvironmentObject var state: AppState
   @Environment(\.themeTokens) private var tokens
   let archived: Bool
   @Binding var showImports: Bool
+  @Binding var showSettings: Bool
   let transition: Namespace.ID
   @State private var query = ""
+  /// The search scope; it applies only while there is a query.
+  @State private var scope: LibrarySearchScope?
+  /// Item IDs whose title or downloaded text matched `query`, worked out once per change of query
+  /// or index rather than on every render. Nil before the first lookup.
+  @State private var matches: Set<String>?
+  /// The last item archived or moved back to the Library from a row, offered for Undo.
+  @State private var archiveUndo: (item: ReadingItem, archived: Bool)?
+  private var showArchiveUndo: Bool {
+    guard let undo = archiveUndo else { return false }
+    return state.items.contains { $0.id == undo.item.id && $0.archived == undo.archived }
+  }
   @State private var collection = "All"
   @ObservedObject private var search = LibrarySearch.shared
   /// The last item moved to Trash, offered for Undo until the next action or dismissal.
@@ -221,18 +251,33 @@ struct LibraryList: View {
           \.collections))
     ).sorted()
   }
-  private var filtered: [ReadingItem] {
-    let matches = query.isEmpty ? nil : (try? state.store?.search(query))
+  private var ownScope: LibrarySearchScope { archived ? .archive : .library }
+  private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
+  /// The scope in effect: the chosen one while searching, otherwise this list's own.
+  private var effectiveScope: LibrarySearchScope { searching ? (scope ?? ownScope) : ownScope }
+  /// Changes that need the search run again: the query, and the index (downloads add text).
+  private struct SearchKey: Equatable {
+    let query: String
+    let items: Int
+    let downloaded: Int
+  }
+  private var searchKey: SearchKey {
+    SearchKey(query: query, items: state.items.count, downloaded: state.wordCounts.count)
+  }
+  private func visibleItems() -> [ReadingItem] {
+    let scope = effectiveScope
     return state.items.filter {
-      $0.hasPreparedContent && !$0.isTrashed && $0.archived == archived
+      $0.hasPreparedContent && !$0.isTrashed && scope.includes(archived: $0.archived)
         && (collection == "All" || $0.collections.contains(collection))
-        && (query.isEmpty || matches?.contains($0.id) == true)
+        // Until the first lookup for a new search finishes, the list stays as it was.
+        && (!searching || matches?.contains($0.id) ?? true)
     }
   }
   private func toggleArchive(_ item: ReadingItem) {
     let archived = !item.archived
     state.edit(item, ItemPatch(archived: archived))
     trashedUndo = nil
+    archiveUndo = (item, archived)
     archiveCommits += 1
     // Shake to undo, named after the action.
     undoManager?.registerUndo(withTarget: state) { state in
@@ -246,6 +291,7 @@ struct LibraryList: View {
   private func moveToTrash(_ item: ReadingItem) {
     state.edit(item, ItemPatch(trashed: true))
     trashedUndo = item
+    archiveUndo = nil
     archiveCommits += 1
     undoManager?.registerUndo(withTarget: state) { state in
       if let current = state.items.first(where: { $0.id == item.id }) {
@@ -264,6 +310,19 @@ struct LibraryList: View {
     state.edit(current, ItemPatch(trashed: false))
     trashedUndo = nil
   }
+  /// Restores the archive state from before the row's Archive or Move to Library.
+  private func undoArchive() {
+    guard let undo = archiveUndo,
+      let current = state.items.first(where: {
+        $0.id == undo.item.id && $0.archived == undo.archived
+      })
+    else {
+      archiveUndo = nil
+      return
+    }
+    state.edit(current, ItemPatch(archived: !undo.archived))
+    archiveUndo = nil
+  }
   @ViewBuilder private func archiveButton(_ item: ReadingItem) -> some View {
     Button {
       toggleArchive(item)
@@ -274,6 +333,7 @@ struct LibraryList: View {
     }
   }
   var body: some View {
+    let filtered = visibleItems()
     List {
       if filtered.isEmpty {
         ContentUnavailableView(
@@ -285,7 +345,9 @@ struct LibraryList: View {
               ? (archived
                 ? "Finished articles remain available here."
                 : "Save a link here or send one through your assistant.")
-              : "Try a title or words from a downloaded article.")
+              : effectiveScope == .all
+                ? "Try a title or the start of words from a downloaded article."
+                : "Try the start of a word, or search All.")
         ).listRowSeparator(.hidden).listRowBackground(tokens.nativePage)
       }
       ForEach(filtered) { item in
@@ -331,6 +393,17 @@ struct LibraryList: View {
               Label("Remove Download", systemImage: "arrow.down.circle.dotted")
             }
           }
+          if Downloads.shared.isStorageFull(itemID: item.id) {
+            Button {
+              showSettings = true
+            } label: {
+              Label("Manage Storage", systemImage: "externaldrive")
+            }
+          }
+          if let link = item.webURL {
+            Divider()
+            SourceLinkActions(url: link)
+          }
           Divider()
           Button(role: .destructive) {
             moveToTrash(item)
@@ -362,9 +435,24 @@ struct LibraryList: View {
     .refreshable { try? await state.sync(forceManifest: true) }
     .navigationTitle(archived ? "Archive" : "Library")
     .searchable(text: $query, prompt: "Search \(archived ? "archive" : "library")")
+    .searchScopes(
+      Binding(get: { scope ?? ownScope }, set: { scope = $0 }), activation: .onSearchPresentation
+    ) {
+      ForEach(LibrarySearchScope.allCases) { Text($0.rawValue).tag($0) }
+    }
+    .task(id: searchKey) {
+      guard searching else {
+        matches = nil
+        return
+      }
+      // A short pause while typing, so fast typing runs one search instead of one per letter.
+      try? await Task.sleep(for: .milliseconds(150))
+      guard !Task.isCancelled else { return }
+      matches = (try? state.store?.search(query)) ?? []
+    }
     .onChange(of: search.request, initial: true) {
       guard !archived, let request = search.take(.fill) else { return }
-      (query, collection) = (request.term, "All")
+      (query, collection, scope) = (request.term, "All", nil)
     }
     .toolbar {
       if !collections.isEmpty {
@@ -385,8 +473,23 @@ struct LibraryList: View {
       }
     }
     .libraryStatusBar {
-      if state.readingUndo != nil || state.message != nil || showTrashUndo {
+      if state.readingUndo != nil || state.message != nil || showTrashUndo || showArchiveUndo {
         VStack(spacing: 8) {
+          if showArchiveUndo, let undo = archiveUndo {
+            HStack {
+              Text(undo.archived ? "Moved to Archive" : "Moved to Library").font(.callout)
+              Spacer()
+              Button("Undo") { undoArchive() }
+                .font(.callout.weight(.semibold))
+                .accessibilityLabel(undo.archived ? "Undo Archive" : "Undo Move to Library")
+              Button {
+                archiveUndo = nil
+              } label: {
+                Image(systemName: "xmark").frame(minWidth: 44, minHeight: 44)
+              }
+              .accessibilityLabel("Dismiss undo")
+            }
+          }
           if showTrashUndo {
             HStack {
               Text("Moved to Trash").font(.callout)
@@ -420,9 +523,10 @@ struct LibraryList: View {
               Text(message).font(.footnote).foregroundStyle(tokens.secondaryInk.color)
                 .lineLimit(2)
               Spacer()
+              // Retry runs a full sync, so it's offered only for sync and download failures.
               if retrying {
                 ProgressView().accessibilityLabel("Syncing")
-              } else {
+              } else if state.messageRetryable {
                 Button("Retry") {
                   retrying = true
                   Task {
@@ -432,6 +536,12 @@ struct LibraryList: View {
                 }
                 .font(.footnote.weight(.semibold))
               }
+              Button {
+                state.dismissMessage()
+              } label: {
+                Image(systemName: "xmark").frame(minWidth: 44, minHeight: 44)
+              }
+              .accessibilityLabel("Dismiss message")
             }
           }
         }
@@ -476,6 +586,15 @@ struct ArticleRow: View {
     guard position > 0 && position < 1 else { return "\(minutes) min" }
     return "\(max(1, Int((Double(minutes) * (1 - position)).rounded(.up)))) min left"
   }
+  /// The reader's bottom bar: minutes left at the current position, "End of article" at the end.
+  static func timeLeft(words: Int?, position: Double) -> String? {
+    guard let words, words > 0 else { return nil }
+    let position = position.isFinite ? min(1, max(0, position)) : 0
+    guard position < 0.995 else { return "End of article" }
+    // The same estimate as the Library row, so both show the same time left.
+    let minutes = max(1, Int((Double(words) / 230).rounded()))
+    return "\(max(1, Int((Double(minutes) * (1 - position)).rounded(.up)))) min left"
+  }
   private var position: Double { (try? state.store?.readingPosition(item.id)) ?? item.progress }
   private var metadata: String {
     [
@@ -513,12 +632,25 @@ struct DownloadIndicator: View {
     if item.status == "bookmark" {
       return ("Couldn't prepare the update", "exclamationmark.triangle", true)
     }
+    let storageFull = Downloads.shared.isStorageFull(itemID: item.id)
     switch offline {
     case .ready: return nil
     case .textOnly:
+      if storageFull {
+        return (
+          "Storage full · images not downloaded", "externaldrive.badge.exclamationmark", true
+        )
+      }
       return (item.error ?? "Text only · images incomplete", "exclamationmark.triangle", true)
-    case .downloading: return ("Downloading", "arrow.down.circle", false)
+    case .downloading:
+      if storageFull {
+        return ("Storage full · download incomplete", "externaldrive.badge.exclamationmark", true)
+      }
+      return ("Downloading", "arrow.down.circle", false)
     case .notDownloaded:
+      if storageFull {
+        return ("Storage full · not downloaded", "externaldrive.badge.exclamationmark", true)
+      }
       return Downloads.shared.progress(itemID: item.id) == nil
         ? ("Not downloaded", "icloud.and.arrow.down", false)
         : ("Downloading", "arrow.down.circle", false)
@@ -580,6 +712,27 @@ extension View {
     #endif
   }
 }
+/// Share, Copy Link and Open Original for an article's web page, in menus. Agent briefs have no
+/// web page, so callers show these only when `ReadingItem.webURL` exists.
+struct SourceLinkActions: View {
+  let url: URL
+  @Environment(\.openURL) private var openURL
+  var body: some View {
+    ShareLink(item: url) {
+      Label("Share Link", systemImage: "square.and.arrow.up")
+    }
+    Button {
+      UIPasteboard.general.url = url
+    } label: {
+      Label("Copy Link", systemImage: "link")
+    }
+    Button {
+      openURL(url)
+    } label: {
+      Label("Open Original", systemImage: "safari")
+    }
+  }
+}
 /// The standard Close button on iOS 26; Done before it.
 struct CloseButton: View {
   let action: () -> Void
@@ -603,12 +756,57 @@ struct SaveView: View {
   @State private var key = UUID().uuidString
   @State private var busy = false
   @State private var error: String?
+  @FocusState private var focused: Bool
+  /// The link to submit: a web address with a host, as the share sheet accepts it. Nil while the
+  /// field holds anything else, which keeps Save disabled.
+  private var link: URL? { try? SharedLink.validate(url) }
+  private var showsHint: Bool {
+    !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && link == nil
+  }
+  private func save() {
+    guard let link, !busy else { return }
+    busy = true
+    error = nil
+    Task {
+      do {
+        // Returns once the server accepts the link; the library refreshes in the background.
+        try await state.save(link.absoluteString, key: key)
+        ArticleDonation.saved(link)
+        dismiss()
+      } catch { self.error = error.localizedDescription }
+      busy = false
+    }
+  }
+  /// The first web link in pasted text, or the text itself for the field to check.
+  private func paste(_ texts: [String]) {
+    guard let text = texts.first else { return }
+    url =
+      SharedLink.candidates(urls: [], texts: [text]).first?.absoluteString
+      ?? text.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
   var body: some View {
     NavigationStack {
       Form {
-        Section("Article URL") {
-          TextField("https://…", text: $url).keyboardType(.URL).textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
+        Section {
+          HStack(spacing: 8) {
+            TextField("https://…", text: $url).keyboardType(.URL).textInputAutocapitalization(.never)
+              .autocorrectionDisabled().textContentType(.URL).submitLabel(.go)
+              .focused($focused)
+              .onSubmit(save)
+              .accessibilityLabel("Article URL")
+            // The system Paste button reads the clipboard only when tapped, so iOS doesn't ask.
+            PasteButton(payloadType: String.self) { texts in
+              DispatchQueue.main.async { paste(texts) }
+            }
+            .labelStyle(.iconOnly).buttonBorderShape(.capsule)
+          }
+        } header: {
+          Text("Article URL")
+        } footer: {
+          if showsHint {
+            Text("Enter a full web address, such as https://example.com/article.")
+              .foregroundStyle(tokens.secondaryInk.color)
+          }
         }.readerRowBackground()
         Section {
           Text(
@@ -619,19 +817,10 @@ struct SaveView: View {
       }.readerFormBackground().navigationTitle("Save an article").toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         ToolbarItem(placement: .confirmationAction) {
-          Button(busy ? "Submitting…" : "Save") {
-            busy = true
-            Task {
-              do {
-                try await state.save(url, key: key)
-                if let link = URL(string: url) { ArticleDonation.saved(link) }
-                dismiss()
-              } catch { self.error = error.localizedDescription }
-              busy = false
-            }
-          }.disabled(busy || url.isEmpty)
+          Button(busy ? "Submitting…" : "Save", action: save).disabled(busy || link == nil)
         }
       }
+      .onAppear { focused = true }
     }.readerTheme()
   }
 }
@@ -643,6 +832,8 @@ struct ReaderScreen: View {
   @State private var showDisplay = false
   @State private var finished = false
   @StateObject private var scrollState = ArticleScrollState()
+  @StateObject private var readingProgress = ReadingProgress()
+  @State private var showSettings = false
   let itemID: String
   @AppStorage("readerFontSize") private var fontSize = 20.0
   @AppStorage("readerPaging") private var paging = false
@@ -717,7 +908,11 @@ struct ReaderScreen: View {
               header: ArticleHeader(
                 title: item.title, kind: item.kind, author: item.author,
                 source: URL(string: item.sourceUrl ?? ""),
-                status: offline == .ready ? nil : offline.rawValue,
+                status: offline == .ready
+                  ? nil
+                  : Downloads.shared.isStorageFull(itemID: item.id)
+                    ? "Storage full · images not downloaded. Free up space in Settings."
+                    : offline.rawValue,
                 error: item.error, finishLabel: canFinish(item) ? "Done Reading" : nil,
                 sources: item.sources.compactMap(URL.init(string:)),
                 contextLabel: state.showsReadingContext(item) ? "Reading Context" : nil),
@@ -728,7 +923,8 @@ struct ReaderScreen: View {
               paging: paging,
               onFinish: { finish(item) },
               onContext: { showContext = true },
-              onSaveLink: { saveLink($0) }
+              onSaveLink: { saveLink($0) },
+              readingProgress: readingProgress
             ) { progress in
               if !finished { try? state.store?.recordReadingPosition(item.id, progress) }
             }
@@ -785,16 +981,33 @@ struct ReaderScreen: View {
             ScrollView {
               VStack(alignment: .leading, spacing: 16) {
                 ReaderMetadata(item: item)
-                ContentUnavailableView(
-                  item.status == "bookmark" ? "Bookmark saved" : "Download to read",
-                  systemImage: "arrow.down.circle",
-                  description: Text(
-                    item.error
-                      ?? "This article is saved on the server. Download it to read offline."))
+                let storageFull =
+                  item.status == "ready" && Downloads.shared.isStorageFull(itemID: item.id)
+                if storageFull {
+                  ContentUnavailableView(
+                    "Storage full", systemImage: "externaldrive.badge.exclamationmark",
+                    description: Text(
+                      "This article doesn't fit under your storage limit. Remove downloads of archived articles or choose a larger limit in Settings."
+                    ))
+                } else {
+                  ContentUnavailableView(
+                    item.status == "bookmark" ? "Bookmark saved" : "Download to read",
+                    systemImage: "arrow.down.circle",
+                    description: Text(
+                      item.error
+                        ?? "This article is saved on the server. Download it to read offline."))
+                }
                 if item.status == "ready" {
-                  Button("Download now") { Task { await state.download(item) } }.buttonStyle(
-                    .borderedProminent
-                  ).frame(maxWidth: .infinity)
+                  if storageFull {
+                    Button("Manage Storage") { showSettings = true }.buttonStyle(.borderedProminent)
+                      .frame(maxWidth: .infinity)
+                    Button("Try Again") { Task { await state.download(item) } }
+                      .frame(maxWidth: .infinity, minHeight: 44)
+                  } else {
+                    Button("Download now") { Task { await state.download(item) } }.buttonStyle(
+                      .borderedProminent
+                    ).frame(maxWidth: .infinity)
+                  }
                 } else if item.status == "bookmark" {
                   Button("Retry extraction") { Task { await state.retryImport(item) } }.buttonStyle(
                     .borderedProminent
@@ -837,6 +1050,16 @@ struct ReaderScreen: View {
                     systemImage: "arrow.down.circle")
                 }
               }
+              if Downloads.shared.isStorageFull(itemID: item.id) {
+                Button {
+                  showSettings = true
+                } label: {
+                  Label("Manage Storage", systemImage: "externaldrive")
+                }
+              }
+              if let link = item.webURL {
+                Section { SourceLinkActions(url: link) }
+              }
               if isReadable(item) || offline == .downloading {
                 Button(role: .destructive) {
                   state.removeDownload(item)
@@ -856,6 +1079,25 @@ struct ReaderScreen: View {
             }.accessibilityLabel("Text and theme")
           }
           ToolbarItem(placement: .bottomBar) { Spacer() }
+          if isReadable(item) {
+            // Status, not a control, so it doesn't get a glass button background on iOS 26.
+            #if compiler(>=6.2)
+              if #available(iOS 26.0, *) {
+                ToolbarItem(placement: .bottomBar) {
+                  ReaderProgressStatus(progress: readingProgress, words: state.wordCounts[item.id])
+                }.sharedBackgroundVisibility(.hidden)
+              } else {
+                ToolbarItem(placement: .bottomBar) {
+                  ReaderProgressStatus(progress: readingProgress, words: state.wordCounts[item.id])
+                }
+              }
+            #else
+              ToolbarItem(placement: .bottomBar) {
+                ReaderProgressStatus(progress: readingProgress, words: state.wordCounts[item.id])
+              }
+            #endif
+            ToolbarItem(placement: .bottomBar) { Spacer() }
+          }
           ToolbarItem(placement: .bottomBar) {
             if canFinish(item) {
               Button("Done Reading") { finish(item) }.fontWeight(.semibold)
@@ -871,6 +1113,8 @@ struct ReaderScreen: View {
           ReaderDisplaySheet(fontSize: $fontSize)
         }.sheet(isPresented: $showContext) {
           ReadingContextSheet(item: item)
+        }.sheet(isPresented: $showSettings) {
+          SettingsView()
         }.task(id: "\(item.id) \(isReadable(item))") {
           // Writes the note on the device ahead of the tap, when the model is available.
           state.prepareReadingContext(item.id)
@@ -899,6 +1143,7 @@ struct ReaderScreen: View {
       .articleEntity(item == nil ? nil : itemID)
       .onAppear {
         finished = false
+        readingProgress.update((try? state.store?.readingPosition(itemID)) ?? item?.progress ?? 0)
         SystemIntegration.didOpen(itemID)
       }.onDisappear {
         if !finished { scrollState.flush?() }
@@ -906,6 +1151,29 @@ struct ReaderScreen: View {
         state.reload()
         Task { try? await state.sync() }
       }
+  }
+}
+/// Reading progress and time left in the reader's bottom bar. It hides with the bars.
+struct ReaderProgressStatus: View {
+  @ObservedObject var progress: ReadingProgress
+  let words: Int?
+  @Environment(\.themeTokens) private var tokens
+  @Environment(\.dynamicTypeSize) private var typeSize
+  private var percent: Int { Int((progress.fraction * 100).rounded()) }
+  private var timeLeft: String? { ArticleRow.timeLeft(words: words, position: progress.fraction) }
+  var body: some View {
+    VStack(spacing: 4) {
+      if let timeLeft {
+        Text(timeLeft).font(.caption).monospacedDigit()
+          .foregroundStyle(tokens.secondaryInk.color).lineLimit(1)
+          .minimumScaleFactor(typeSize.isAccessibilitySize ? 0.7 : 1)
+      }
+      ProgressView(value: progress.fraction).tint(tokens.secondaryInk.color)
+        .frame(width: 72)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Reading progress")
+    .accessibilityValue([("\(percent) percent"), timeLeft].compactMap { $0 }.joined(separator: ", "))
   }
 }
 /// Text size and theme for reading, kept on the reading screen. Changes apply live.
@@ -1008,6 +1276,14 @@ struct SettingsView: View {
   @AppStorage("appearance") private var appearance = ThemeTokens.defaultAppearance
   @Environment(\.themeTokens) private var tokens
   @State private var syncing = false
+  @State private var confirmRemoveArchived = false
+  /// Archived and finished articles with downloads, counted when Settings opens and after removal.
+  @State private var archivedDownloads = 0
+  @State private var diskUsage: Int64 = 0
+  private func measureStorage() {
+    archivedDownloads = state.archivedDownloads.count
+    diskUsage = state.store?.diskUsage ?? 0
+  }
   var body: some View {
     NavigationStack {
       Form {
@@ -1038,10 +1314,19 @@ struct SettingsView: View {
             Text("1 GB").tag(1_000_000_000)
             Text("2 GB").tag(2_000_000_000)
           }
+          Text("Used: \(ByteCountFormatter.string(fromByteCount: diskUsage, countStyle: .file))")
+          Button("Remove Downloads of Archived Articles", role: .destructive) {
+            confirmRemoveArchived = true
+          }
+          .disabled(archivedDownloads == 0)
           Text(
-            "Used: \(ByteCountFormatter.string(fromByteCount:state.store?.diskUsage ?? 0,countStyle:.file))"
-          )
+            "When storage is full, PageStash removes downloads of archived and finished articles, oldest first, before skipping new ones. Articles stay in your library and can download again."
+          ).font(.footnote).foregroundStyle(tokens.secondaryInk.color)
         }.readerRowBackground()
+        .onChange(of: storageLimit) { _, _ in
+          // A larger limit may let waiting articles download now.
+          Task { try? await state.sync(forceManifest: true) }
+        }
         if state.localAI.availability.deviceSupportsModel { PrivateCloudSetting() }
         Section("Background Refresh") {
           Text(
@@ -1073,6 +1358,20 @@ struct SettingsView: View {
         }.readerRowBackground()
       }.readerFormBackground().navigationTitle("Settings").toolbar {
         ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } }
+      }
+      .onAppear(perform: measureStorage)
+      .confirmationDialog(
+        "Remove downloads of \(archivedDownloads) archived \(archivedDownloads == 1 ? "article" : "articles")?",
+        isPresented: $confirmRemoveArchived, titleVisibility: .visible
+      ) {
+        Button("Remove Downloads", role: .destructive) {
+          state.removeArchivedDownloads()
+          measureStorage()
+        }
+      } message: {
+        Text(
+          "They stay in your Archive and read again after downloading. Articles you move back to the Library download again automatically."
+        )
       }
     }.readerTheme()
   }
@@ -1375,6 +1674,7 @@ struct ImportsView: View {
   @Environment(\.themeTokens) private var tokens
   @Environment(\.dismiss) private var dismiss
   @State private var retrying: Set<String> = []
+  @Environment(\.openURL) private var openURL
   private var imports: [ReadingItem] { state.items.filter(\.needsImportReview) }
   private func sharedStatus(_ item: SharedSave) -> String {
     switch item.state {
@@ -1403,7 +1703,9 @@ struct ImportsView: View {
             Text(sharedStatus(item)).font(.subheadline).foregroundStyle(tokens.secondaryInk.color)
             if let error = item.error { Text(error).font(.callout) }
             if item.state != .accepted && item.state != .sending {
+              // Borderless, so only the button retries, not a tap anywhere in the row.
               Button("Retry with current sign-in") { Task { await state.retrySharedSave(item) } }
+                .buttonStyle(.borderless)
             }
             if item.state == .authenticationRequired {
               Text(
@@ -1431,13 +1733,23 @@ struct ImportsView: View {
               Text("Your earlier readable copy is still in Library.").font(.caption)
             }
             if item.status == "bookmark", item.sourceUrl != nil {
-              Button(retrying.contains(item.id) ? "Retrying…" : "Retry") {
-                retrying.insert(item.id)
-                Task {
-                  await state.retryImport(item)
-                  retrying.remove(item.id)
+              HStack(spacing: 20) {
+                if item.sourceUrl != nil {
+                  Button(retrying.contains(item.id) ? "Retrying…" : "Retry") {
+                    retrying.insert(item.id)
+                    Task {
+                      await state.retryImport(item)
+                      retrying.remove(item.id)
+                    }
+                  }.disabled(retrying.contains(item.id))
                 }
-              }.disabled(retrying.contains(item.id))
+                // The page may still read fine in Safari when preparation failed.
+                if let link = item.webURL {
+                  Button("Open Original") { openURL(link) }
+                    .accessibilityLabel("Open original page for \(item.title)")
+                }
+              }
+              .buttonStyle(.borderless).frame(minHeight: 44)
             }
           }.padding(.vertical, 8).readerRowBackground()
             .swipeActions {

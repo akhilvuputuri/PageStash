@@ -68,6 +68,35 @@ final class ThemeTokensTests: XCTestCase {
     XCTAssertEqual(ArticleRow.readingTime(words: 2300, position: 0.99), "1 min left")
     XCTAssertEqual(ArticleRow.readingTime(words: 2300, position: 1), "10 min")
   }
+  func testReaderTimeLeftMatchesTheRowAndEnds() {
+    XCTAssertNil(ArticleRow.timeLeft(words: nil, position: 0.5))
+    XCTAssertEqual(ArticleRow.timeLeft(words: 2300, position: 0), "10 min left")
+    XCTAssertEqual(
+      ArticleRow.timeLeft(words: 2300, position: 0.35),
+      ArticleRow.readingTime(words: 2300, position: 0.35))
+    XCTAssertEqual(ArticleRow.timeLeft(words: 2300, position: 0.99), "1 min left")
+    XCTAssertEqual(ArticleRow.timeLeft(words: 2300, position: 1), "End of article")
+    XCTAssertEqual(ArticleRow.timeLeft(words: 2300, position: .nan), "10 min left")
+  }
+  @MainActor func testReadingProgressPublishesWholePercentSteps() {
+    let progress = ReadingProgress(0.2)
+    progress.update(0.205)
+    XCTAssertEqual(progress.fraction, 0.2)
+    progress.update(0.25)
+    XCTAssertEqual(progress.fraction, 0.25)
+    progress.update(1.4)
+    XCTAssertEqual(progress.fraction, 1)
+    progress.update(-1)
+    XCTAssertEqual(progress.fraction, 0)
+  }
+  func testSearchScopesCoverLibraryArchiveAndAll() {
+    XCTAssertTrue(LibrarySearchScope.library.includes(archived: false))
+    XCTAssertFalse(LibrarySearchScope.library.includes(archived: true))
+    XCTAssertTrue(LibrarySearchScope.archive.includes(archived: true))
+    XCTAssertFalse(LibrarySearchScope.archive.includes(archived: false))
+    XCTAssertTrue(LibrarySearchScope.all.includes(archived: true))
+    XCTAssertTrue(LibrarySearchScope.all.includes(archived: false))
+  }
   func testOnlyTheShownFinishLinkFinishesReading() {
     let finish = ArticleWebView.finishAction
     XCTAssertTrue(ArticleWebView.isFinishAction(finish, finishShown: true))

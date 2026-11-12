@@ -859,6 +859,29 @@ Requested by the owner after using 0.4.0 on the iPhone.
   - **Not yet verified.** The TestFlight build record (0.6.0, build 15, processed, in the "Owner" group) and the install on the owner's iPhone. The GitHub Release for `v0.6.0` waits for those. The warnings were not reviewed.
   - Since the upload was accepted with the counter and `BUILD` both at 15, this run does not show whether Xcode Cloud applies its number to the Share and Widget extensions.
 
+### App fixes from the design and correctness audit (13 November 2026)
+
+Branch `fix/app-fixes` from `main` at `06f91c9`. App and ReaderCore only; the share extension and backend are unchanged.
+
+- **What changed.**
+  - **Search.** Every typed word now matches the start of a word, so "progr" finds "programming". `LocalStore.searchExpression` quotes each word as an FTS5 string with a prefix marker, so quotes, `*`, `OR` and `NOT` are searched as text and never run as query syntax; words without letters or digits are skipped. The Library and Archive lists run the search once per change of query or index (after a 150 ms typing pause), not on every render, and gain search scopes (Library, Archive, All) shown while searching, so a Library search can reach archived articles. Without a query each list shows its own items.
+  - **Storage full.** When new files would pass the storage limit, the app first removes downloads of archived or finished articles, oldest saved first (`StorageEviction` in ReaderCore). It never removes the article open in the reader, anything still transferring, or an article being downloaded in the same pass. This removal (`LocalStore.evictDownload`) doesn't pause automatic downloading, unlike Remove Download, so an article moved back to the Library unfinished downloads again. Articles that still don't fit show "Storage full" on the row and in the reader, with Manage Storage opening Settings. Settings adds Remove Downloads of Archived Articles, with a confirmation, and changing the storage limit now syncs so waiting articles can start.
+  - **Save sheet.** Save returns once the server accepts the link and the library refreshes in the background, so a sync error no longer shows as a failed save. Save is enabled only for a valid web address (the same check as the share sheet, `SharedLink.validate`, whose normalized link is what is sent), Return submits, the field is focused on opening, and a system Paste button fills the first link from the clipboard without the paste prompt.
+  - **Share and links.** The reader's options menu and the Library row's context menu have Share Link, Copy Link and Open Original, for articles with an http(s) source (`ReadingItem.webURL`). Agent briefs without one don't show them.
+  - **Reader progress.** The reader's bottom bar shows time left ("N min left", "End of article") over a thin progress bar, fed by the web view's scroll position in whole-percent steps and the existing reading-time estimate. VoiceOver reads it as "Reading progress" with the percentage and time left. It hides with the bars.
+  - **Status line.** Retry shows only for sync and download failures, and every message has a dismiss button (which also forgets a remembered download error). Archive or Move to Library from a row (swipe or context menu) shows an Undo banner like Move to Trash.
+  - **Imports.** Retry buttons are borderless, so only the button retries, not a tap anywhere in the row. Failed imports with a source add Open Original.
+- **Tested (Xcode 27.2, iOS 27.2 SDK, this Mac).**
+  - ReaderCore `swift test`: 104 tests pass (99 before), including the FTS expression builder, prefix matching against a real SQLite index, the eviction order and protection rules, eviction not pausing while Remove Download still pauses, and `webURL`.
+  - Unsigned generic iOS device build and generic simulator build (`CODE_SIGNING_ALLOWED=NO`) succeed with no new warnings.
+  - The OfflineReader test target on the iPhone 18 Pro / iOS 27.2 simulator (headless `xcodebuild test`): 24 tests pass, including new checks for the reader's time left, progress steps and search scopes.
+  - `PATH=/usr/bin:/bin:/usr/sbin:/sbin sh ios/ci_scripts/ci_post_clone.sh`: the project matches the generator.
+- **Not verified.**
+  - Compilation with CI's Xcode 16.4 (Swift 6.1, iOS 18.5 SDK); only Xcode 27.2 is installed here. CI on the PR is the check. The iOS 26 toolbar background call is behind `#if compiler(>=6.2)`.
+  - Nothing was checked visually or interactively: the search scope bar, the Paste button, the bottom bar's layout at large text sizes and on iOS 17, the storage full states, the Undo banners and VoiceOver reading.
+  - Automatic removal with real background transfers and a real full limit, on a simulator or device.
+- **Behaviour decisions.** "Oldest" means oldest saved (`captured_at`): the phone keeps no archive date. Finished articles moved back to the Library count as finished. The search scope applies only while there is a query. A sync failure inside Download or Retry Extraction still shows without Retry, because those actions overwrite the message.
+
 ## Not yet tested
 
 - On-device Reading Context against Apple's real on-device model: prompt fit, part sizes, parse success, output quality, guardrail refusals, injection resistance, latency per note and question answers. The development Mac reported `modelNotReady` throughout 12 November 2026.

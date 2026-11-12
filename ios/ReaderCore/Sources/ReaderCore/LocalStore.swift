@@ -489,19 +489,49 @@ public final class LocalStore: @unchecked Sendable {
     }
     return count
   }
+  /// Removes an article's files at the reader's request. Its automatic download pauses until the
+  /// reader asks for it again, so it isn't fetched straight back.
   public func removeDownload(_ id: String) throws {
     try synchronized {
-      try? FileManager.default.removeItem(at: root.appendingPathComponent(id))
-      try execute("UPDATE items SET installed=0 WHERE id=?", [id])
-      try execute("DELETE FROM verified WHERE item=?", [id])
-      try execute("DELETE FROM search WHERE id=?", [id])
-      try execute("DELETE FROM lengths WHERE id=?", [id])
-      if let item = try item(id) {
-        try execute("INSERT INTO search(id,title,body) VALUES(?,?,'')", [id, item.title])
-      }
+      try deleteFiles(id)
       try execute(
         "INSERT INTO meta(key,value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value='1'",
         ["paused:\(id)"])
+    }
+  }
+  /// Removes an article's files to free space (see `StorageEviction`). Unlike `removeDownload`,
+  /// nothing is paused: if the article returns to the Library unfinished, it downloads again.
+  public func evictDownload(_ id: String) throws {
+    try synchronized { try deleteFiles(id) }
+  }
+  private func deleteFiles(_ id: String) throws {
+    try? FileManager.default.removeItem(at: root.appendingPathComponent(id))
+    try execute("UPDATE items SET installed=0 WHERE id=?", [id])
+    try execute("DELETE FROM verified WHERE item=?", [id])
+    try execute("DELETE FROM search WHERE id=?", [id])
+    try execute("DELETE FROM lengths WHERE id=?", [id])
+    if let item = try item(id) {
+      try execute("INSERT INTO search(id,title,body) VALUES(?,?,'')", [id, item.title])
+    }
+  }
+  /// Bytes each article's downloaded files take on this device, keyed by item ID. Articles with
+  /// no files are absent.
+  public func downloadSizes() -> [String: Int64] {
+    synchronized {
+      var sizes: [String: Int64] = [:]
+      let folders =
+        (try? FileManager.default.contentsOfDirectory(
+          at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+      for folder in folders where UUID(uuidString: folder.lastPathComponent) != nil {
+        let enumerator = FileManager.default.enumerator(
+          at: folder, includingPropertiesForKeys: [.fileSizeKey])
+        var total: Int64 = 0
+        while let url = enumerator?.nextObject() as? URL {
+          total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        if total > 0 { sizes[folder.lastPathComponent] = total }
+      }
+      return sizes
     }
   }
   public func resumeDownload(_ id: String) throws {
@@ -513,15 +543,20 @@ public final class LocalStore: @unchecked Sendable {
     }) ?? false
   }
   public func search(_ query: String) throws -> Set<String> {
-    try synchronized {
-      let words = query.split(whereSeparator: { $0.isWhitespace }).map {
-        "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-      }
-      guard !words.isEmpty else { return [] }
-      return Set(
-        try rows("SELECT id FROM search WHERE search MATCH ?", [words.joined(separator: " AND ")])
-          .map { $0[0] })
+    guard let match = Self.searchExpression(query) else { return [] }
+    return try synchronized {
+      Set(try rows("SELECT id FROM search WHERE search MATCH ?", [match]).map { $0[0] })
     }
+  }
+  /// The FTS5 expression for a typed query: every word must match the start of a word in the
+  /// title or text, so "progr" finds "programming". Each word is a quoted string, so the reader's
+  /// quotes, operators and asterisks are searched for, never run as query syntax. Words without
+  /// letters or digits are skipped (the index ignores them). Nil when nothing is left to search.
+  public static func searchExpression(_ query: String) -> String? {
+    let words = query.split(whereSeparator: { $0.isWhitespace })
+      .filter { $0.contains { $0.isLetter || $0.isNumber } }
+      .map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }
+    return words.isEmpty ? nil : words.joined(separator: " AND ")
   }
   /// The opening of downloaded articles' text, for the on-device Spotlight index: all of them, or
   /// only `ids`. SQLite clips it, so indexing doesn't copy whole articles; `LibraryQueries.excerpt`
