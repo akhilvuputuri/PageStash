@@ -7,38 +7,77 @@ import UniformTypeIdentifiers
   @Published var selected: URL?
   @Published var loading = true
   @Published var busy = false
-  @Published var message: String?
+  /// The page title, when the share supplies one.
+  @Published var title: String?
+  /// Sign-in, unreadable-share and choose-a-link prompts, shown while nothing is being saved.
+  @Published var notice: String? {
+    didSet { if notice != oldValue { announce(notice) } }
+  }
+  /// The one status line for the save, from "Saving…" to its result.
+  @Published var status: ShareStatus? {
+    didSet { if status != oldValue { announce(status?.announcement) } }
+  }
   @Published var record: SharedSave?
-  @Published var destination: String?
+  /// What the sheet decided to do after reading the share.
+  private(set) var start: ShareStart?
   private let credentialSource: () -> ShareCredentials?
   private let storeSource: () throws -> SharedSaveStore
   private let submit: ((URL, String) async throws -> SaveResponse)?
+  private let grace: Duration
+  /// - Parameter grace: how long an automatic save waits, showing "Saving…", before it queues the
+  ///   link. Cancel during this time leaves nothing behind.
   init(
     snapshot: @escaping () -> ShareCredentials? = ShareVault.load,
     store: @escaping () throws -> SharedSaveStore = ShareContainer.store,
-    submit: ((URL, String) async throws -> SaveResponse)? = nil
+    submit: ((URL, String) async throws -> SaveResponse)? = nil,
+    grace: Duration = .milliseconds(600)
   ) {
     credentialSource = snapshot
     storeSource = store
     self.submit = submit
+    self.grace = grace
   }
+  // One operation key per share: the automatic save and every Retry reuse it, so the server
+  // can't create a duplicate.
   private let requestID = UUID().uuidString
   private var store: SharedSaveStore?
   private var credentials: ShareCredentials?
   private var providers: [NSItemProvider] = []
-  var canSave: Bool {
-    !loading && !busy && selected != nil && credentials != nil && record?.state != .accepted
+  var canRetry: Bool { !busy && credentials != nil && status?.canRetry == true }
+  var canChoose: Bool { !loading && !busy && credentials != nil && record == nil }
+
+  /// Reads the share, then saves at once when it holds exactly one link and the session is usable.
+  func run(_ items: [NSExtensionItem]) async {
+    await load(items)
+    guard case .save = start else { return }
+    status = ShareFlow.saving
+    // Cancel cancels this task. Both run on the main actor, so a cancelled sheet never queues.
+    do { try await Task.sleep(for: grace) } catch { return }
+    guard !Task.isCancelled else { return }
+    await save()
+  }
+  /// Saves a link picked from several shared links.
+  func choose(_ url: URL) async {
+    guard canChoose, candidates.contains(url) else { return }
+    selected = url
+    notice = nil
+    await save()
   }
   func load(_ items: [NSExtensionItem]) async {
+    defer { loading = false }
+    credentials = credentialSource()
+    guard let credentials else {
+      decide(.signIn)
+      return
+    }
     do {
-      credentials = credentialSource()
-      guard let credentials else {
-        message = "Open PageStash and sign in before sharing."
-        loading = false
+      let store = try storeSource()
+      self.store = store
+      // The queue refuses a session the app has replaced or signed out.
+      guard (try? store.records(credentials.account)) != nil else {
+        decide(.signIn)
         return
       }
-      destination = credentials.account.server.absoluteString
-      store = try storeSource()
       providers = items.flatMap { $0.attachments ?? [] }
       guard providers.count <= 12 else { throw ShareError.invalidURL }
       var urls: [String] = []
@@ -71,19 +110,31 @@ import UniformTypeIdentifiers
         }
       }
       candidates = SharedLink.candidates(urls: urls, texts: texts)
-      guard !candidates.isEmpty, candidates.count <= 5 else { throw ShareError.invalidURL }
-      if candidates.count == 1 {
-        selected = candidates[0]
-      } else {
-        message = "Choose the webpage link to save."
-      }
+      // Text that came with a link may be the page title; text without one was the link itself.
+      let titles = items.flatMap { [$0.attributedTitle?.string, $0.attributedContentText?.string] }
+      title = ShareFlow.title(from: titles + (urls.isEmpty ? [] : texts))
+      decide(
+        ShareFlow.start(
+          signedIn: true, sessionUsable: true, candidates: candidates, fromText: urls.isEmpty))
+    } catch ShareError.unavailable {
+      notice = ShareError.unavailable.localizedDescription
+    } catch ShareError.invalidURL {
+      decide(.unreadable)
     } catch {
-      message =
-        error is ShareError
-        ? error.localizedDescription
-        : "The shared link could not be read. Try sharing the webpage URL."
+      candidates = []
+      notice = ShareFlow.unreadableItemsNotice
     }
-    loading = false
+  }
+  private func decide(_ decision: ShareStart) {
+    start = decision
+    switch decision {
+    case .signIn: notice = ShareFlow.signInNotice
+    case .unreadable:
+      candidates = []
+      notice = ShareFlow.unreadableNotice
+    case .choose: notice = ShareFlow.chooseNotice(count: candidates.count)
+    case .save(let url): selected = url
+    }
   }
   private func loadURL(_ provider: NSItemProvider) async throws -> String? {
     try await withCheckedThrowingContinuation { continuation in
@@ -107,32 +158,28 @@ import UniformTypeIdentifiers
       }
     }
   }
+  /// Queues the selected link on this device, then sends it. Also the Retry action.
   func save() async {
     guard let store, let credentials, let selected, !busy else { return }
     busy = true
     defer { busy = false }
+    status = ShareFlow.saving
     do {
       if record == nil {
         record = try store.enqueue(selected, id: requestID, account: credentials.account)
+      } else if record?.state == .rejected {
+        // Retry resends the same operation key.
+        try store.retry(requestID, account: credentials.account)
       }
       try await ShareServices.deliver(
         store, credentials: credentials, id: requestID, snapshot: credentialSource, submit: submit)
       record = try store.records(credentials.account).first { $0.id == requestID }
-      switch record?.state {
-      case .accepted:
-        message =
-          record?.serverStatus == "already_saved"
-          ? "A matching request exists. Preparation and offline availability are unverified; check the app."
-          : record?.serverStatus == "bookmark"
-            ? "Preparation failed. Check Imports in PageStash."
-            : record?.serverStatus == "ready"
-              ? "Prepared on the server. Open PageStash to download it."
-              : "Submitted for preparation. This does not mean downloaded on your phone."
-      case .authenticationRequired: message = ShareError.authenticationRequired.localizedDescription
-      case .rejected: message = record?.error ?? "The request could not be accepted."
-      default: message = "Queued on this device. Open PageStash when online to submit."
-      }
-    } catch { message = error.localizedDescription }
+      status = ShareFlow.status(for: record)
+    } catch { status = ShareFlow.status(for: error) }
+  }
+  private func announce(_ text: String?) {
+    guard let text, !text.isEmpty else { return }
+    AccessibilityNotification.Announcement(text).post()
   }
 }
 struct ShareSaveView: View {
@@ -140,51 +187,111 @@ struct ShareSaveView: View {
   let finish: () -> Void
   var body: some View {
     NavigationStack {
-      Form {
-        Section("Destination") {
-          Text("PageStash").font(.headline)
-          if let destination = model.destination {
-            Text(destination).font(.caption).foregroundStyle(.secondary)
-          }
-        }
-        if model.loading { ProgressView("Reading shared link…") }
-        if model.candidates.count > 1 {
-          Section("Choose One Webpage") {
-            ForEach(model.candidates, id: \.self) { url in
-              Button {
-                model.selected = url
-                model.message = nil
-              } label: {
-                HStack {
-                  Text(url.absoluteString).lineLimit(3)
-                  Spacer()
-                  if model.selected == url { Image(systemName: "checkmark") }
+      ShareSaveForm(model: model, finish: finish)
+    }.readerTheme()
+  }
+}
+private struct ShareSaveForm: View {
+  @ObservedObject var model: ShareSaveModel
+  let finish: () -> Void
+  @Environment(\.themeTokens) private var tokens
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  /// Let long text wrap fully at accessibility text sizes.
+  private func lines(_ limit: Int) -> Int? { dynamicTypeSize.isAccessibilitySize ? nil : limit }
+  var body: some View {
+    Form {
+      if model.loading {
+        Section { ProgressView("Reading link…") }
+      } else if model.start == .choose {
+        Section(model.candidates.count == 1 ? "Link" : "Choose a Link") {
+          ForEach(model.candidates, id: \.self) { url in
+            Button {
+              Task { await model.choose(url) }
+            } label: {
+              HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(ShareFlow.host(url)).foregroundStyle(.primary)
+                  // Middle truncation keeps two long links on one site distinguishable.
+                  Text(url.absoluteString).font(.footnote).foregroundStyle(.secondary)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
+                    .truncationMode(.middle)
                 }
-              }.disabled(model.record != nil || model.busy)
+                Spacer(minLength: 8)
+                if model.selected == url {
+                  Image(systemName: "checkmark").foregroundStyle(.tint).accessibilityHidden(true)
+                }
+              }
             }
+            .disabled(!model.canChoose)
+            .accessibilityAddTraits(model.selected == url ? .isSelected : [])
           }
-        } else if let url = model.selected {
-          Section("Webpage") { Text(url.absoluteString).textSelection(.enabled) }
         }
-        if let message = model.message { Section { Text(message) } }
+      } else if let url = model.selected {
         Section {
-          Text(
-            "Only readable prepared content enters Library. Offline availability is verified in the app. Queued links belong to this sign-in and are cleared on logout."
-          ).font(.footnote).foregroundStyle(.secondary)
-        }
-      }.navigationTitle("Save article").navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-          ToolbarItem(placement: .cancellationAction) {
-            Button(model.record == nil ? "Cancel" : "Done", action: finish)
-          }
-          ToolbarItem(placement: .confirmationAction) {
-            if model.record?.state != .accepted {
-              Button(model.busy ? "Submitting…" : model.record == nil ? "Save" : "Retry") {
-                Task { await model.save() }
-              }.disabled(!model.canSave)
+          VStack(alignment: .leading, spacing: 4) {
+            if let title = model.title {
+              Text(title).font(.headline).lineLimit(lines(3))
             }
+            Text(ShareFlow.host(url))
+              .font(model.title == nil ? .headline : .subheadline)
+              .foregroundStyle(model.title == nil ? .primary : .secondary)
+          }
+          .padding(.vertical, 2)
+          .accessibilityElement(children: .combine)
+        }
+      }
+      if let status = model.status {
+        Section {
+          statusRow(status)
+          if status.canRetry {
+            Button("Retry") { Task { await model.save() } }.disabled(!model.canRetry)
           }
         }
-    }.tint(Color(red: 0.78, green: 0.30, blue: 0.15))
+      } else if let notice = model.notice {
+        Section { Text(notice) }
+      }
+    }
+    .readerFormBackground()
+    .navigationTitle("Save to PageStash").navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) {
+        // Before the link is queued, Cancel leaves nothing behind. Once it is queued, closing the
+        // sheet keeps it, so the button says Done.
+        Button(model.record == nil ? "Cancel" : "Done", action: finish)
+      }
+    }
+    .task(id: model.status) {
+      guard let status = model.status,
+        let delay = ShareFlow.dismissDelay(
+          for: status, voiceOver: UIAccessibility.isVoiceOverRunning)
+      else { return }
+      do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+      finish()
+    }
+  }
+  private func statusRow(_ status: ShareStatus) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 10) {
+        if status.tone == .progress {
+          ProgressView().accessibilityHidden(true)
+        } else {
+          Image(systemName: status.symbol).imageScale(.large)
+            .foregroundStyle(color(status.tone)).accessibilityHidden(true)
+        }
+        Text(status.text).font(.body.weight(.semibold))
+      }
+      if let detail = status.detail {
+        Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(lines(3))
+      }
+    }
+    .padding(.vertical, 2)
+    .accessibilityElement(children: .combine)
+  }
+  private func color(_ tone: ShareStatus.Tone) -> Color {
+    switch tone {
+    case .progress, .success: return tokens.accent.color
+    case .pending: return tokens.secondaryInk.color
+    case .problem: return tokens.warning.color
+    }
   }
 }
