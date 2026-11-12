@@ -52,6 +52,8 @@ for source in sorted((ios/'ReaderWidget').glob('*.swift')):
 widgetProduct = obj('widget-product','isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ReaderWidget.appex; sourceTree = BUILT_PRODUCTS_DIR;')
 # The HTTP/session model is extension-safe and uses the same save contract.
 extensionBuilds.append(obj('extension-api',f'isa = PBXBuildFile; fileRef = {uid("ref:API.swift")};'))
+# The share sheet uses the app's theme tokens (accent, warning) instead of its own colours.
+extensionBuilds.append(obj('extension-theme',f'isa = PBXBuildFile; fileRef = {uid("ref:ReaderTheme.swift")};'))
 extensionProduct = obj('extension-product','isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ReaderShare.appex; sourceTree = BUILT_PRODUCTS_DIR;')
 products = obj('products', f'isa = PBXGroup; children = ({product},{testProduct},{extensionProduct},{widgetProduct}); name = Products; sourceTree = "<group>";')
 group = obj('group', f'isa = PBXGroup; children = ({",".join(refs+testRefs+sharedRefs+extensionRefs+widgetRefs+[asset,privacy,products])}); sourceTree = "<group>";')

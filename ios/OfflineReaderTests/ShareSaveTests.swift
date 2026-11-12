@@ -30,13 +30,14 @@ import XCTest
         if offline { throw URLError(.notConnectedToInternet) }
         return SaveResponse(
           submissionId: "synthetic-submission", status: "queued", duplicate: false)
-      })
-    await model.load([input])
+      }, grace: .zero)
+    // One shared link and a usable session: the sheet saves without a Save tap.
+    await model.run([input])
     XCTAssertEqual(model.selected?.host, "example.com")
-    XCTAssertTrue(model.canSave)
-    await model.save()
+    XCTAssertEqual(model.start, .save(URL(string: "https://example.com/article")!))
+    XCTAssertEqual(requests.count, 1)
     XCTAssertEqual(model.record?.state, .queued)
-    XCTAssertTrue(model.message?.contains("Queued on this device") == true)
+    XCTAssertEqual(model.status, ShareFlow.savedOffline)
     let reopened = try SharedSaveStore(root: directory)
     XCTAssertEqual(try reopened.records(account).count, 1)
     let scene = try XCTUnwrap(
@@ -57,7 +58,7 @@ import XCTest
     XCTAssertEqual(requests.count, 2)
     XCTAssertEqual(requests[0], requests[1])
     XCTAssertEqual(model.record?.state, .accepted)
-    XCTAssertTrue(model.message?.contains("does not mean downloaded") == true)
+    XCTAssertEqual(model.status, ShareFlow.saved)
     try await Task.sleep(nanoseconds: 300_000_000)
     attach(window, name: "Synthetic browser share submitted for preparation")
   }
@@ -85,12 +86,31 @@ import XCTest
       NSItemProvider(object: URL(string: "https://example.com/one")! as NSURL),
       NSItemProvider(object: URL(string: "https://example.com/two")! as NSURL),
     ]
-    let model = ShareSaveModel(snapshot: { credentials }, store: { store })
-    await model.load([input])
+    var requests: [String] = []
+    let model = ShareSaveModel(
+      snapshot: { credentials }, store: { store },
+      submit: { url, key in
+        XCTAssertEqual(url.absoluteString, "https://example.com/two")
+        requests.append(key)
+        return SaveResponse(submissionId: "synthetic", status: "queued", duplicate: false)
+      }, grace: .zero)
+    await model.run([input])
     XCTAssertEqual(model.candidates.count, 2)
+    XCTAssertEqual(model.start, .choose)
     XCTAssertNil(model.selected)
-    XCTAssertFalse(model.canSave)
+    XCTAssertNil(model.status)
+    XCTAssertTrue(model.canChoose)
     XCTAssertTrue(try store.records(account).isEmpty)
+    XCTAssertTrue(requests.isEmpty)
+    // Choosing a link saves it at once; the other links can't be chosen afterwards.
+    await model.choose(URL(string: "https://example.com/two")!)
+    XCTAssertEqual(requests.count, 1)
+    XCTAssertEqual(model.status, ShareFlow.saved)
+    XCTAssertFalse(model.canChoose)
+    await model.choose(URL(string: "https://example.com/one")!)
+    XCTAssertEqual(requests.count, 1)
+    XCTAssertEqual(
+      try store.records(account).map(\.url.absoluteString), ["https://example.com/two"])
   }
   func testCredentialRevocationStopsQueueAndStaleCompletionCannotCrossLogout() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
