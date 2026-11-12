@@ -7,9 +7,9 @@ enum ShareStart: Equatable {
   case signIn
   /// Nothing PageStash can save was shared.
   case unreadable
-  /// Several links: wait for the reader to choose one, then save it.
+  /// Several links, or one found inside shared text: wait for a tap on a link, then save it.
   case choose
-  /// Exactly one link and a usable session: save it without asking.
+  /// Exactly one link from a URL attachment and a usable session: save it without asking.
   case save(URL)
 }
 
@@ -31,10 +31,14 @@ struct ShareStatus: Equatable {
 enum ShareFlow {
   static let maximumCandidates = 5
 
-  static func start(signedIn: Bool, sessionUsable: Bool, candidates: [URL]) -> ShareStart {
+  /// - Parameter fromText: the links were detected inside shared text rather than shared as URLs.
+  ///   Such a link may not be the page the reader meant, so it is shown for one tap instead.
+  static func start(
+    signedIn: Bool, sessionUsable: Bool, candidates: [URL], fromText: Bool = false
+  ) -> ShareStart {
     guard signedIn, sessionUsable else { return .signIn }
     guard !candidates.isEmpty, candidates.count <= maximumCandidates else { return .unreadable }
-    return candidates.count == 1 ? .save(candidates[0]) : .choose
+    return candidates.count == 1 && !fromText ? .save(candidates[0]) : .choose
   }
 
   // Wording. "Saved" means the server accepted the link; "Saved offline" means it is only queued
@@ -67,6 +71,8 @@ enum ShareFlow {
   static let unreadableNotice = "This share has no webpage link PageStash can save."
   static let unreadableItemsNotice = "Couldn't read the shared link. Try sharing the page again."
   static let chooseNotice = "Choose the link to save."
+  static let confirmNotice = "Tap the link to save it."
+  static func chooseNotice(count: Int) -> String { count == 1 ? confirmNotice : chooseNotice }
 
   /// The status for a save record after a delivery attempt.
   static func status(for record: SharedSave?) -> ShareStatus {

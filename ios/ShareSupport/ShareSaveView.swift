@@ -113,7 +113,9 @@ import UniformTypeIdentifiers
       // Text that came with a link may be the page title; text without one was the link itself.
       let titles = items.flatMap { [$0.attributedTitle?.string, $0.attributedContentText?.string] }
       title = ShareFlow.title(from: titles + (urls.isEmpty ? [] : texts))
-      decide(ShareFlow.start(signedIn: true, sessionUsable: true, candidates: candidates))
+      decide(
+        ShareFlow.start(
+          signedIn: true, sessionUsable: true, candidates: candidates, fromText: urls.isEmpty))
     } catch ShareError.unavailable {
       notice = ShareError.unavailable.localizedDescription
     } catch ShareError.invalidURL {
@@ -130,7 +132,7 @@ import UniformTypeIdentifiers
     case .unreadable:
       candidates = []
       notice = ShareFlow.unreadableNotice
-    case .choose: notice = ShareFlow.chooseNotice
+    case .choose: notice = ShareFlow.chooseNotice(count: candidates.count)
     case .save(let url): selected = url
     }
   }
@@ -193,12 +195,15 @@ private struct ShareSaveForm: View {
   @ObservedObject var model: ShareSaveModel
   let finish: () -> Void
   @Environment(\.themeTokens) private var tokens
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  /// Let long text wrap fully at accessibility text sizes.
+  private func lines(_ limit: Int) -> Int? { dynamicTypeSize.isAccessibilitySize ? nil : limit }
   var body: some View {
     Form {
       if model.loading {
         Section { ProgressView("Reading link…") }
-      } else if model.candidates.count > 1 {
-        Section("Choose a Link") {
+      } else if model.start == .choose {
+        Section(model.candidates.count == 1 ? "Link" : "Choose a Link") {
           ForEach(model.candidates, id: \.self) { url in
             Button {
               Task { await model.choose(url) }
@@ -206,8 +211,10 @@ private struct ShareSaveForm: View {
               HStack {
                 VStack(alignment: .leading, spacing: 2) {
                   Text(ShareFlow.host(url)).foregroundStyle(.primary)
+                  // Middle truncation keeps two long links on one site distinguishable.
                   Text(url.absoluteString).font(.footnote).foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2)
+                    .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
                 if model.selected == url {
@@ -223,7 +230,7 @@ private struct ShareSaveForm: View {
         Section {
           VStack(alignment: .leading, spacing: 4) {
             if let title = model.title {
-              Text(title).font(.headline).lineLimit(3)
+              Text(title).font(.headline).lineLimit(lines(3))
             }
             Text(ShareFlow.host(url))
               .font(model.title == nil ? .headline : .subheadline)
@@ -274,7 +281,7 @@ private struct ShareSaveForm: View {
         Text(status.text).font(.body.weight(.semibold))
       }
       if let detail = status.detail {
-        Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(3)
+        Text(detail).font(.footnote).foregroundStyle(.secondary).lineLimit(lines(3))
       }
     }
     .padding(.vertical, 2)

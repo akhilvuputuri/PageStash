@@ -1,4 +1,5 @@
 import ReaderCore
+import UniformTypeIdentifiers
 import XCTest
 
 @testable import OfflineReader
@@ -22,6 +23,49 @@ import XCTest
     let six = (1...6).map { URL(string: "https://example.com/\($0)")! }
     XCTAssertEqual(
       ShareFlow.start(signedIn: true, sessionUsable: true, candidates: six), .unreadable)
+  }
+
+  func testALinkFoundInSharedTextWaitsForATap() {
+    XCTAssertEqual(
+      ShareFlow.start(signedIn: true, sessionUsable: true, candidates: [one], fromText: true),
+      .choose)
+    XCTAssertEqual(
+      ShareFlow.start(signedIn: true, sessionUsable: true, candidates: [one], fromText: false),
+      .save(one))
+    XCTAssertEqual(
+      ShareFlow.start(signedIn: false, sessionUsable: true, candidates: [one], fromText: true),
+      .signIn)
+    XCTAssertEqual(ShareFlow.chooseNotice(count: 1), ShareFlow.confirmNotice)
+    XCTAssertEqual(ShareFlow.chooseNotice(count: 2), ShareFlow.chooseNotice)
+  }
+
+  func testTextShareWithOneLinkSavesOnlyAfterATap() async throws {
+    let (store, credentials, directory) = try fixture()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    var keys: [String] = []
+    let model = ShareSaveModel(
+      snapshot: { credentials }, store: { store },
+      submit: { url, key in
+        XCTAssertEqual(url, self.one)
+        keys.append(key)
+        return SaveResponse(submissionId: "s", status: "queued", duplicate: false)
+      }, grace: .zero)
+    let input = NSExtensionItem()
+    input.attachments = [
+      NSItemProvider(
+        item: "Worth reading: https://example.com/one" as NSString,
+        typeIdentifier: UTType.plainText.identifier)
+    ]
+    await model.run([input])
+    XCTAssertEqual(model.candidates, [one])
+    XCTAssertEqual(model.start, .choose)
+    XCTAssertEqual(model.notice, ShareFlow.confirmNotice)
+    XCTAssertNil(model.status)
+    XCTAssertTrue(keys.isEmpty)
+    XCTAssertTrue(try store.records(credentials.account).isEmpty)
+    await model.choose(one)
+    XCTAssertEqual(keys.count, 1)
+    XCTAssertEqual(model.status, ShareFlow.saved)
   }
 
   func testStatusSeparatesSentFromQueuedAndNeverClaimsADownload() {
