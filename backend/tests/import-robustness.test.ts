@@ -16,6 +16,7 @@ import {
   decodePage,
   elementCounts,
   extract,
+  TAG_LIMIT,
   pageCharset,
   readerHTML,
   type Prepared,
@@ -93,6 +94,17 @@ test("gzip and Brotli bodies decode, and the cap applies to decompressed bytes",
     (error) => error,
   );
   assert.equal(importOutcome(corrupt, "fetch").code, "bad_encoding");
+  const corruptBrotli = await readBody(
+    Readable.from([Buffer.from("not brotli at all, definitely")]),
+    "br",
+    MB,
+  ).catch((error) => error);
+  assert.match(String(corruptBrotli.code), /^ERR__ERROR_/);
+  assert.deepEqual(importOutcome(corruptBrotli, "fetch"), {
+    message: "The site sent a response that couldn't be decoded.",
+    code: "bad_encoding",
+    terminal: false,
+  });
 });
 
 test("a gzip bomb streamed over HTTP is abandoned at the cap without unhandled errors", async () => {
@@ -228,17 +240,21 @@ class TextEncoderShiftJIS {
 
 // --- Element counting ------------------------------------------------------------------------
 
-test("element counting skips script and style text and counts SVG drawings separately", async () => {
-  const script = `<script>${"if (a<b && c<d) x = '<div>';".repeat(5000)}</script>`;
+test("element counting skips script and style text and does not count SVG as readable", async () => {
+  const script = `<script>${"if (a<b && c<d) x = '<div>';".repeat(500)}</script>`;
   const style = `<style>${"a>b{}".repeat(1000)}</style>`;
-  assert.deepEqual(elementCounts(`<html><body>${script}${style}<p>x</p></body></html>`), {
-    elements: 5,
-    svg: 0,
-  });
+  const plain = elementCounts(`<html><body>${script}${style}<p>x</p></body></html>`);
+  assert.equal(plain.elements, 5);
+  // The context-free count includes the script's "<b", "<d" and "<div>" text: it is deliberately
+  // conservative.
+  assert.equal(plain.tags, 5 + 3 * 500);
   const icons = `<svg viewBox="0 0 1 1">${"<path d='M0 0'/>".repeat(30_000)}</svg>`;
-  assert.deepEqual(elementCounts(`<div>${icons}</div>`), { elements: 2, svg: 30_000 });
-  // An unclosed script swallows the rest of the page, as a browser parser would.
-  assert.equal(elementCounts(`<p></p><script>${"<div>".repeat(30_000)}`).elements, 2);
+  assert.deepEqual(elementCounts(`<div>${icons}</div>`), { elements: 2, tags: 30_002 });
+  // An unclosed script swallows the rest of the page for the readable count, as a parser would,
+  // but every tag still counts toward the hard cap.
+  const unclosed = elementCounts(`<p></p><script>${"<div>".repeat(30_000)}`);
+  assert.equal(unclosed.elements, 2);
+  assert.equal(unclosed.tags, 30_002);
   // Too many real elements is still rejected.
   await assert.rejects(
     () =>
@@ -249,15 +265,80 @@ test("element counting skips script and style text and counts SVG drawings separ
       })),
     /element limit/,
   );
-  // A page with a large inline icon sprite and a long script still extracts.
+  // A page with an inline icon sprite and a long script still extracts.
+  const sprite = `<svg viewBox="0 0 1 1">${"<path d='M0 0'/>".repeat(10_000)}</svg>`;
   const article = await extract("https://example.com/icons", async (url) => ({
     url,
     mime: "text/html",
     bytes: Buffer.from(
-      `<html><head><title>Story</title>${script}</head><body>${icons}<article><h1>Story</h1><p>${prose}</p></article></body></html>`,
+      `<html><head><title>Story</title>${script}</head><body>${sprite}<article><h1>Story</h1><p>${prose}</p></article></body></html>`,
     ),
   }));
   assert.match(article.html, /reporting explains/);
+});
+
+test("markup hidden from the readable count still hits the hard tag cap", async () => {
+  const many = "<p>".repeat(TAG_LIMIT + 10);
+  const bypasses = {
+    // A script opened inside a comment: the comment is skipped, so the paragraphs are counted.
+    comment: `<!--<script>-->${many}<!--</script>-->`,
+    // A script tag inside a quoted attribute value is not a script.
+    attribute: `<a title="><script>">x</a>${many}<a title="</script>">y</a>`,
+    // Inside SVG, style and script are ordinary elements, not raw text.
+    svgStyle: `<svg><style>${many}</style></svg>`,
+    svgScript: `<svg><script>${many}</script></svg>`,
+    // An unclosed SVG doesn't hide the rest of the page.
+    unclosedSvg: `<svg>${many}`,
+  };
+  for (const [name, body] of Object.entries(bypasses)) {
+    const counts = elementCounts(body);
+    assert.ok(counts.tags > TAG_LIMIT, `${name}: hard cap counts every tag`);
+    const failure = await extract("https://example.com/bypass", async (url) => ({
+      url,
+      mime: "text/html",
+      bytes: Buffer.from(`<html><body>${body}</body></html>`),
+    })).catch((error) => error);
+    assert.ok(failure instanceof ImportFailure, name);
+    assert.equal(failure.code, "too_many_elements", name);
+    assert.equal(failure.terminal, true, name);
+  }
+  // The comment and attribute cases are also caught by the readable count itself.
+  assert.ok(elementCounts(`<!--<script>-->${"<p>".repeat(20_001)}<!--</script>-->`).elements > 20_000);
+  assert.ok(elementCounts(`<a title="><script>">x</a>${"<p>".repeat(20_001)}`).elements > 20_000);
+  // Abrupt comments end immediately, as in a browser.
+  assert.equal(elementCounts(`<!--><p><!---><p>`).elements, 2);
+});
+
+test("element counting is linear on input with no closing bracket", () => {
+  for (const input of ["<a".repeat(1_500_000), "<a-" + "a-".repeat(1_500_000), `<a title="${"x".repeat(3_000_000)}`]) {
+    const start = performance.now();
+    elementCounts(input);
+    const ms = performance.now() - start;
+    assert.ok(ms < 2000, `scanned ${input.length} characters in ${Math.round(ms)} ms`);
+  }
+});
+
+test("Readability's own element limit is a permanent failure", async () => {
+  // A crafted count mismatch: elements our scanner can't see but the parser builds. Simulated by
+  // injecting a fetcher whose page passes our scan and then a Readability that throws.
+  const { Readability } = await import("@mozilla/readability");
+  const parse = Readability.prototype.parse;
+  Readability.prototype.parse = function () {
+    throw new Error("Aborting parsing document; 20200 elements found");
+  };
+  try {
+    const failure = await extract("https://example.com/many", async (url) => ({
+      url,
+      mime: "text/html",
+      bytes: Buffer.from(`<html><body><article><p>${prose}</p></article></body></html>`),
+    })).catch((error) => error);
+    assert.ok(failure instanceof ImportFailure);
+    assert.equal(failure.code, "too_many_elements");
+    assert.equal(failure.terminal, true);
+    assert.equal(importOutcome(failure, "extract").terminal, true);
+  } finally {
+    Readability.prototype.parse = parse;
+  }
 });
 
 // --- Direction -------------------------------------------------------------------------------

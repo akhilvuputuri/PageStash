@@ -72,6 +72,8 @@ Fetches accept HTTP(S) without URL credentials or nonstandard ports. Every DNS r
 
 Update, 13 November 2026 (on branch `fix/backend-import-fixes`, not deployed): pages are decoded by byte-order mark, Content-Type charset, then `<meta>` declaration, else UTF-8. Requests send `Accept`, `Accept-Language` and a product User-Agent, accept gzip and Brotli with the byte cap on decompressed size, and time each hop within an overall ceiling (15 s per hop and 30 s in all for a page) instead of one total. The element count skips script and style text and counts SVG separately. Reader HTML carries the article's `dir`.
 
+Update after review, 13 November 2026 (same branch, not deployed): memory is bounded by a context-free cap of 40,000 tags (every `<` followed by a letter); the 20,000 readable-element count skips comments, quoted attributes and script or style text outside SVG, using a linear scanner. A failing import can stay queued about 35 minutes under the backoff and counts toward the 50-import queue cap meanwhile.
+
 Readability output passes through DOMPurify; the DOM parser runs neither scripts nor resource loading. Markdown escapes raw HTML. The reader disables content JavaScript, isolates website data, uses CSP, and allows file access only to that article version's directory. Reader-controlled typography/scroll restoration is separate from source content scripts. Links open only after an explicit user tap.
 
 ## Reading context

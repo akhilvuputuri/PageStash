@@ -166,7 +166,13 @@ export function importOutcome(
     };
   if (connectionCodes.has(code))
     return { message: "The connection to the site failed.", code: "connection", terminal: false };
-  if (decodeCodes.has(code) || code.startsWith("ERR_ZLIB") || code.startsWith("ERR_BROTLI"))
+  // Brotli reports decoder errors as ERR__ERROR_FORMAT_*, ERR__ERROR_DICTIONARY_* and so on.
+  if (
+    decodeCodes.has(code) ||
+    code.startsWith("ERR_ZLIB") ||
+    code.startsWith("ERR_BROTLI") ||
+    code.startsWith("ERR__ERROR_")
+  )
     return {
       message: "The site sent a response that couldn't be decoded.",
       code: "bad_encoding",

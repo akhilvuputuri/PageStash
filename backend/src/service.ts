@@ -67,6 +67,7 @@ function logImport(
     item: string;
     kind: "article" | "brief";
     attempt: number;
+    /** `superseded`: the lease was lost or the item deleted, so nothing was recorded. */
     outcome: "ready" | "retry" | "failed" | "abandoned" | "superseded";
     code?: string;
     error?: unknown;
@@ -1113,16 +1114,16 @@ export class Service {
     // Each claim counts an attempt, but only a failure the worker catches can end a job. A job
     // whose attempts ended the process instead (its lease expired) must not be retried forever.
     if (row.attempts > MAX_ATTEMPTS) {
-      await this.db.query(
+      const ended = await this.db.query(
         `WITH claimed AS (DELETE FROM jobs WHERE id=$1 AND lease_token=$2 RETURNING id)
-         UPDATE items SET status='bookmark',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) AND deleted=false`,
+         UPDATE items SET status='bookmark',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) AND deleted=false RETURNING id`,
         [row.id, lease, "Import could not complete. Retry from Imports."],
       );
       logImport({
         item: row.id,
         kind: row.payload.url ? "article" : "brief",
         attempt: row.attempts,
-        outcome: "abandoned",
+        outcome: ended.rows.length ? "abandoned" : "superseded",
         code: "attempts_exhausted",
         startedAt: performance.now(),
       });
@@ -1142,6 +1143,7 @@ export class Service {
           row.id,
           lease,
         ]);
+        logImport({ item: row.id, kind, attempt: row.attempts, outcome: "superseded", code: "deleted", startedAt });
         return true;
       }
       let prepared: Prepared;
@@ -1229,6 +1231,7 @@ export class Service {
           attempt: row.attempts,
           // Deleted or reclaimed while it ran: nothing was published.
           outcome: published.rows.length ? "ready" : "superseded",
+          code: published.rows.length ? undefined : "lease_lost_or_deleted",
           startedAt,
         },
         trace,
@@ -1236,34 +1239,35 @@ export class Service {
     } catch (error) {
       const outcome = importOutcome(error, trace.stage);
       const delay = outcome.terminal ? null : retryDelaySeconds(row.attempts);
+      await this.files.remove(uploaded);
+      const message = outcome.message;
+      const recorded =
+        delay === null
+          ? await this.db.query(
+              `WITH claimed AS (DELETE FROM jobs WHERE id=$1 AND lease_token=$2 RETURNING id)
+           UPDATE items SET status='bookmark',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) AND deleted=false RETURNING id`,
+              [row.id, lease, message],
+            )
+          : await this.db.query(
+              `WITH released AS (UPDATE jobs SET lease_until=NULL,lease_token=NULL,available_at=now()+$4::integer*interval '1 second' WHERE id=$1 AND lease_token=$2 RETURNING id)
+           UPDATE items SET status='queued',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM released) AND deleted=false RETURNING id`,
+              [row.id, lease, message, delay],
+            );
+      // Logged after the lease-guarded update, so the line says what was actually recorded. With
+      // no row changed, another claim owns the job or the item was deleted meanwhile.
       logImport(
         {
           item: row.id,
           kind,
           attempt: row.attempts,
-          outcome: delay === null ? "failed" : "retry",
+          outcome: !recorded.rows.length ? "superseded" : delay === null ? "failed" : "retry",
           code: outcome.code,
           error,
-          retryIn: delay,
+          retryIn: recorded.rows.length ? delay : undefined,
           startedAt,
         },
         trace,
       );
-      await this.files.remove(uploaded);
-      const message = outcome.message;
-      if (delay === null) {
-        await this.db.query(
-          `WITH claimed AS (DELETE FROM jobs WHERE id=$1 AND lease_token=$2 RETURNING id)
-           UPDATE items SET status='bookmark',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM claimed) AND deleted=false`,
-          [row.id, lease, message],
-        );
-      } else {
-        await this.db.query(
-          `WITH released AS (UPDATE jobs SET lease_until=NULL,lease_token=NULL,available_at=now()+$4::integer*interval '1 second' WHERE id=$1 AND lease_token=$2 RETURNING id)
-           UPDATE items SET status='queued',error=$3,revision=nextval('library_revision') WHERE id IN(SELECT id FROM released) AND deleted=false`,
-          [row.id, lease, message, delay],
-        );
-      }
     }
     return true;
   }

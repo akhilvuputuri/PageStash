@@ -139,9 +139,16 @@ export type Fetcher = (
   options?: FetchOptions,
 ) => Promise<Fetched>;
 
-/** Readable elements allowed in a page, and SVG drawing elements, which Readability never keeps. */
+/** Readable elements allowed in a page: outside `<svg>`, not counting script or style text. */
 export const ELEMENT_LIMIT = 20_000;
-export const SVG_ELEMENT_LIMIT = 60_000;
+/**
+ * Every `<` followed by a letter, counted without any context, so no comment, attribute or raw-text
+ * trick can hide markup from it. This is what bounds parser memory: measured on 13 November 2026,
+ * the parsed page plus Readability's copy cost about 4.5 KB of RSS per element (20,000 elements
+ * +93 MB, 50,000 +229 MB, 100,000 +460 MB), so 40,000 tags stay under about 200 MB on top of the
+ * process baseline in a 512 MB container.
+ */
+export const TAG_LIMIT = 40_000;
 /** Time for all of an article's images; any left over are marked unavailable. */
 const IMAGE_BUDGET_MS = 120_000;
 
@@ -182,35 +189,88 @@ export function decodePage(bytes: Buffer, headerCharset?: string): string {
   return new TextDecoder(charset, { fatal: false }).decode(bytes);
 }
 
+const isLetter = (code: number) =>
+  (code >= 97 && code <= 122) || (code >= 65 && code <= 90);
+const isNameChar = (code: number) =>
+  isLetter(code) || (code >= 48 && code <= 57) || code === 45 || code === 58;
+
 /**
- * Counts opening tags in one pass without collecting matches. Script and style content is raw
- * text, not elements, so it is skipped; elements inside `<svg>` are counted separately.
+ * Counts tags with a linear hand scanner (no regular expression can backtrack on input without
+ * `>`). `tags` counts every `<letter` anywhere, context-free. `elements` approximates the elements
+ * a parser would build outside `<svg>`: it skips comments, quoted attribute values, and the text of
+ * `<script>` and `<style>` outside SVG (inside SVG they are ordinary elements).
  */
-export function elementCounts(html: string): { elements: number; svg: number } {
+export function elementCounts(html: string): { elements: number; tags: number } {
+  let tags = 0;
+  for (let i = html.indexOf("<"); i >= 0; i = html.indexOf("<", i + 1))
+    if (isLetter(html.charCodeAt(i + 1)) && ++tags > TAG_LIMIT) break;
   const lower = html.toLowerCase();
-  const tag = /<(\/?)([a-z][a-z0-9-]*)\b[^>]*>/g;
   let elements = 0;
-  let svg = 0;
   let svgDepth = 0;
-  let match: RegExpExecArray | null;
-  while ((match = tag.exec(lower))) {
-    const [, closing, name] = match;
+  let i = 0;
+  scan: while (elements <= ELEMENT_LIMIT) {
+    const open = lower.indexOf("<", i);
+    if (open < 0) break;
+    if (lower.startsWith("<!--", open)) {
+      // "<!-->" and "<!--->" are complete (empty) comments to an HTML parser.
+      const abrupt = lower.startsWith("<!-->", open) ? 5 : lower.startsWith("<!--->", open) ? 6 : 0;
+      if (abrupt) {
+        i = open + abrupt;
+        continue;
+      }
+      const close = lower.indexOf("-->", open + 4);
+      if (close < 0) break;
+      i = close + 3;
+      continue;
+    }
+    const closing = lower.charCodeAt(open + 1) === 47; // "/"
+    let j = open + (closing ? 2 : 1);
+    if (!isLetter(lower.charCodeAt(j))) {
+      i = open + 1;
+      continue;
+    }
+    const nameStart = j;
+    while (j < lower.length && isNameChar(lower.charCodeAt(j))) j++;
+    const name = lower.slice(nameStart, j);
+    // Find the end of the tag, skipping quoted attribute values; every character is read once.
+    let previous = 0;
+    for (;;) {
+      if (j >= lower.length) break scan;
+      const code = lower.charCodeAt(j);
+      if (code === 62) break; // ">"
+      if ((code === 34 || code === 39) && previous === 61) {
+        const quote = lower.indexOf(code === 34 ? '"' : "'", j + 1);
+        if (quote < 0) break scan;
+        j = quote + 1;
+        previous = 0;
+        continue;
+      }
+      if (code !== 32 && code !== 9 && code !== 10 && code !== 12 && code !== 13) previous = code;
+      j++;
+    }
+    const selfClosing = lower.charCodeAt(j - 1) === 47;
+    i = j + 1;
     if (closing) {
       if (name === "svg" && svgDepth > 0) svgDepth--;
       continue;
     }
-    if (svgDepth > 0) svg++;
-    else elements++;
-    if (name === "svg" && !match[0].endsWith("/>")) svgDepth++;
-    else if (name === "script" || name === "style") {
-      const end = lower.indexOf(`</${name}`, tag.lastIndex);
-      if (end < 0) break; // The rest of the page is that element's text.
-      tag.lastIndex = end;
+    if (svgDepth > 0) {
+      if (name === "svg" && !selfClosing) svgDepth++;
+      continue;
     }
-    if (elements > ELEMENT_LIMIT || svg > SVG_ELEMENT_LIMIT) break;
+    elements++;
+    if (name === "svg" && !selfClosing) svgDepth++;
+    else if (name === "script" || name === "style") {
+      const end = lower.indexOf(`</${name}`, i);
+      if (end < 0) break; // The rest of the page is that element's text.
+      i = end;
+    }
   }
-  return { elements, svg };
+  return { elements, tags };
 }
+
+const elementFailure = () =>
+  new ImportFailure("Source HTML exceeds the element limit.", true, "too_many_elements");
 
 function direction(...values: (string | null | undefined)[]): "rtl" | "ltr" | undefined {
   for (const value of values) {
@@ -234,16 +294,22 @@ export async function extract(
     const html = decodePage(page.bytes, page.charset);
     const counts = elementCounts(html);
     if (trace) trace.elements = counts.elements;
-    if (counts.elements > ELEMENT_LIMIT || counts.svg > SVG_ELEMENT_LIMIT)
-      throw new ImportFailure("Source HTML exceeds the element limit.", true, "too_many_elements");
+    if (counts.elements > ELEMENT_LIMIT || counts.tags > TAG_LIMIT) throw elementFailure();
     const dom = new JSDOM(html, { url: page.url });
     const copy = dom.window.document.cloneNode(true) as Document;
     // Drawings are never article text; removing them keeps Readability's own count to real content.
     for (const drawing of copy.querySelectorAll("svg")) drawing.remove();
-    const article = new Readability(copy, {
-      // A little above our count, which excludes the implied html, head and body elements.
-      maxElemsToParse: ELEMENT_LIMIT + 100,
-    }).parse();
+    let article: ReturnType<Readability["parse"]>;
+    try {
+      article = new Readability(copy, {
+        // A little above our count, which excludes the implied html, head and body elements.
+        maxElemsToParse: ELEMENT_LIMIT + 100,
+      }).parse();
+    } catch (error) {
+      // Readability's own element limit: as permanent as ours, so it must not be retried.
+      if (/^Aborting parsing document/.test((error as Error)?.message ?? "")) throw elementFailure();
+      throw error;
+    }
     const sourceText =
       dom.window.document.body.textContent?.replace(/\s+/g, " ").trim() ?? "";
     rejectBarrier(
