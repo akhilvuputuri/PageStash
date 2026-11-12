@@ -1004,6 +1004,14 @@ Branch `fix/extraction-sandbox`, on `e0ae7f4` (the reviewed head of `fix/backend
 
 - **Second review follow-up (13 November 2026).** Independent delta review of `7473169` (Opus 5.5): APPROVE; the parent process survived every probe. One non-blocking finding is fixed here: a child that never reports ready by the deadline is now a retryable start failure (`EXTRACT_CHILD_START`), not a terminal `extract_timeout`, so a slow host can't permanently fail an innocent page (test added with a child that hangs before ready). Deadline tests now use 3 s deadlines so child start-up fits. `npm test`: 77 pass, three runs in a row. Still open from that review: a signal from outside (for example the container's memory killer) after ready is reported as `too_complex`; the `signal` option is not wired to shutdown or lease loss.
 
+### Release 0.6.1 (build floor 16) (13 November 2026)
+
+- **Version.** `MARKETING_VERSION, BUILD` is `0.6.1`, `16`; the project was regenerated with `/usr/bin/python3 scripts/generate-project.py`. Authorized by the owner on 13 November 2026, together with the backend deploy.
+- **What the app build carries** (all merged on 13 November 2026, entries above): one-tap saving in the share extension (#76), and the app fixes (#77): prefix search with scopes, storage-full handling with automatic removal of archived and finished downloads, the Save sheet, Share / Copy Link / Open Original, and reader progress.
+- **Backend, separate from this build.** Import robustness (#75) and extraction in a bounded child process (#78) are merged but **not deployed** when this entry was written; the deploy is recorded separately once it happens. The app build does not depend on it.
+- **Xcode Cloud.** Next Build Number should be 16 after build 15 (0.6.0); `ci_post_clone.sh` refuses the archive if it is lower. The result of the `v0.6.1` tag build is recorded after it finishes.
+- **Not verified before release.** Everything visual and interactive in #76 and #77 (no simulator UI was driven), real Safari/Chrome sharing, VoiceOver, and automatic download removal against a really full limit. The TestFlight build on the owner's iPhone is the first such check.
+
 ## Not yet tested
 
 - On-device Reading Context against Apple's real on-device model: prompt fit, part sizes, parse success, output quality, guardrail refusals, injection resistance, latency per note and question answers. The development Mac reported `modelNotReady` throughout 12 November 2026.
