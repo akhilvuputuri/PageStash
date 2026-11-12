@@ -64,6 +64,15 @@ public struct ReadingItem: Codable, Identifiable, Sendable {
       || (contentVersion > 0 && assets.contains { $0.role == "content" && $0.safeFilename })
   }
   public var needsImportReview: Bool { status != "ready" && !isTrashed }
+  /// The original web page, for Share, Copy Link and Open Original. Nil for agent briefs and any
+  /// source that isn't an http(s) link with a host.
+  public var webURL: URL? {
+    guard let raw = sourceUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+      let url = URL(string: raw), let scheme = url.scheme?.lowercased(),
+      ["http", "https"].contains(scheme), url.host?.isEmpty == false
+    else { return nil }
+    return url
+  }
   public init(
     id: String, title: String, kind: String = "article", status: String = "ready",
     error: String? = nil, sourceUrl: String? = nil, author: String? = nil,

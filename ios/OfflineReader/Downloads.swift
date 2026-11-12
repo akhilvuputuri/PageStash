@@ -15,6 +15,9 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
   private var enqueuing = false
   private var enqueueWaiters: [CheckedContinuation<Void, Never>] = []
   private var progressByItem: [String: Double] = [:]
+  /// Articles with files the latest enqueue couldn't fit under the storage limit, even after
+  /// removing downloads of archived and finished articles.
+  private var storageFull: Set<String> = []
   private var lastProgressNotification = Date.distantPast
   var completion: (() -> Void)?
   private(set) var backgroundCompletion: (() -> Void)?
@@ -42,6 +45,7 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
     store = nil
     generation = nil
     progressByItem = [:]
+    storageFull = []
     lock.unlock()
     session.getAllTasks { tasks in
       for task in tasks { task.cancel() }
@@ -53,7 +57,12 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
     lock.unlock()
     _ = session
   }
-  func enqueue(items: [ReadingItem], manual: Set<String> = []) async {
+  /// Queues the files `items` still need. Every caller passes the whole library, so the storage
+  /// full set is rebuilt here. When the limit is reached, downloads in Trash, then of archived and
+  /// finished articles, are removed (see `StorageEviction.plan`) before new files are skipped;
+  /// `protected` (the open article and Undo items), pinned downloads and anything still
+  /// transferring keep theirs.
+  func enqueue(items: [ReadingItem], manual: Set<String> = [], protected: Set<String> = []) async {
     await beginEnqueue()
     defer { endEnqueue() }
     guard !Task.isCancelled else { return }
@@ -67,35 +76,60 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
       })
     let (currentStore, currentGeneration) = snapshot()
     guard let currentStore, let currentGeneration else { return }
-    let limit = Int64(
-      UserDefaults.standard.integer(forKey: "storageLimit") == 0
-        ? 512_000_000 : UserDefaults.standard.integer(forKey: "storageLimit"))
-    var reserved =
-      currentStore.diskUsage
-      + tasks.reduce(Int64(0)) { sum, task in
-        guard let description = task.taskDescription, let data = description.data(using: .utf8),
-          let transfer = try? JSONDecoder().decode(Transfer.self, from: data),
-          transfer.generation == currentGeneration
-        else { return sum }
-        return sum + Int64(transfer.asset.size)
-      }
-    for item in items
-    where !item.deleted && !item.isTrashed && item.status == "ready"
-      && ((!item.archived && item.progress < 1 && !currentStore.isPaused(item.id))
-        || manual.contains(item.id))
-    {
-      for asset in item.assets.sorted(by: { $0.role == "content" && $1.role != "content" })
-      where asset.safeFilename && !currentStore.hasAsset(item, asset) {
-        guard
-          !existing.contains("\(currentGeneration):\(item.id):\(item.contentVersion):\(asset.id)"),
-          reserved + Int64(asset.size) <= limit
-        else { continue }
-        // Only fetch capabilities issued by the configured backend; no arbitrary manifest hosts.
-        guard
-          let configured = URL(string: UserDefaults.standard.string(forKey: "backendURL") ?? ""),
-          asset.url.host == configured.host, asset.url.port == configured.port,
-          asset.url.scheme == configured.scheme
-        else { continue }
+    let limit = Self.storageLimit
+    let inFlight = tasks.reduce(Int64(0)) { sum, task in
+      guard let description = task.taskDescription, let data = description.data(using: .utf8),
+        let transfer = try? JSONDecoder().decode(Transfer.self, from: data),
+        transfer.generation == currentGeneration
+      else { return sum }
+      return sum + Int64(transfer.asset.size)
+    }
+    let configured = URL(string: UserDefaults.standard.string(forKey: "backendURL") ?? "")
+    let wanted = items.filter {
+      !$0.deleted && !$0.isTrashed && $0.status == "ready"
+        && ((!$0.archived && $0.progress < 1 && !currentStore.isPaused($0.id))
+          || manual.contains($0.id))
+    }.map { item in
+      (
+        item: item,
+        assets: item.assets.sorted(by: { $0.role == "content" && $1.role != "content" }).filter {
+          asset in
+          asset.safeFilename && !currentStore.hasAsset(item, asset)
+            && !existing.contains(
+              "\(currentGeneration):\(item.id):\(item.contentVersion):\(asset.id)")
+            // Only fetch capabilities issued by the configured backend; no arbitrary manifest hosts.
+            && asset.url.host == configured?.host && asset.url.port == configured?.port
+            && asset.url.scheme == configured?.scheme
+        }
+      )
+    }.filter { !$0.assets.isEmpty }
+    var reserved = currentStore.diskUsage + inFlight
+    let needs = wanted.flatMap { entry in
+      entry.assets.map { StorageEviction.Need(itemID: entry.item.id, size: Int64($0.size)) }
+    }
+    if reserved + needs.reduce(Int64(0), { $0 + $1.size }) > limit {
+      // Make room from Trash, then archived and finished articles, but only as much as lets the
+      // files below be queued (the plan replays this same order).
+      let busy = Set(
+        tasks.compactMap { task -> String? in
+          guard let description = task.taskDescription, let data = description.data(using: .utf8)
+          else { return nil }
+          return (try? JSONDecoder().decode(Transfer.self, from: data))?.itemID
+        })
+      let evict = StorageEviction.plan(
+        items, sizes: currentStore.downloadSizes(), reserved: reserved, limit: limit,
+        wanted: needs,
+        protected: protected.union(busy).union(currentStore.pinnedDownloads()))
+      for id in evict { try? currentStore.evictDownload(id) }
+      if !evict.isEmpty { reserved = currentStore.diskUsage + inFlight }
+    }
+    var full: Set<String> = []
+    for (item, assets) in wanted {
+      for asset in assets {
+        guard reserved + Int64(asset.size) <= limit else {
+          full.insert(item.id)
+          continue
+        }
         reserved += Int64(asset.size)
         let transfer = Transfer(
           generation: currentGeneration, itemID: item.id, version: item.contentVersion, asset: asset
@@ -108,7 +142,24 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
         task.resume()
       }
     }
+    record(storageFull: full, generation: currentGeneration)
     DispatchQueue.main.async { self.completion?() }
+  }
+  private func record(storageFull full: Set<String>, generation current: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    if generation == current { storageFull = full }
+  }
+  /// The storage limit chosen in Settings (512 MB by default).
+  static var storageLimit: Int64 {
+    let chosen = UserDefaults.standard.integer(forKey: "storageLimit")
+    return Int64(chosen == 0 ? 512_000_000 : chosen)
+  }
+  /// Whether the latest enqueue skipped some of this article's files for lack of space.
+  func isStorageFull(itemID: String) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return storageFull.contains(itemID)
   }
   private func snapshot() -> (LocalStore?, String?) {
     lock.lock()
