@@ -89,6 +89,15 @@ final class ThemeTokensTests: XCTestCase {
     progress.update(-1)
     XCTAssertEqual(progress.fraction, 0)
   }
+  func testPasteTakesTheFirstLinkInReadingOrder() {
+    XCTAssertEqual(
+      SaveView.firstLink(in: "see https://z.example/b then https://a.example/a")?.absoluteString,
+      "https://z.example/b")
+    XCTAssertEqual(
+      SaveView.firstLink(in: "mailto:x@example.com https://example.com/x?utm_source=s")?
+        .absoluteString, "https://example.com/x")
+    XCTAssertNil(SaveView.firstLink(in: "no link here"))
+  }
   func testSearchScopesCoverLibraryArchiveAndAll() {
     XCTAssertTrue(LibrarySearchScope.library.includes(archived: false))
     XCTAssertFalse(LibrarySearchScope.library.includes(archived: true))

@@ -134,6 +134,7 @@ public final class LocalStore: @unchecked Sendable {
         try? FileManager.default.removeItem(at: root.appendingPathComponent(item.id))
         try? execute("DELETE FROM lengths WHERE id=?", [item.id])
         try? execute("DELETE FROM contexts WHERE item=?", [item.id])
+        try? unpin(item.id)
       }
     }
   }
@@ -162,6 +163,7 @@ public final class LocalStore: @unchecked Sendable {
         try? execute("ROLLBACK")
         throw error
       }
+      if patch.archived == true || patch.deleted == true { try unpin(id) }
       if patch.deleted == true {
         try? FileManager.default.removeItem(at: root.appendingPathComponent(id))
         try execute("DELETE FROM search WHERE id=?", [id])
@@ -330,6 +332,7 @@ public final class LocalStore: @unchecked Sendable {
         try execute(
           "INSERT INTO meta(key,value) VALUES('readingUndo',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
           [String(decoding: try encoder.encode(undo), as: UTF8.self)])
+        try unpin(id)
         try execute("COMMIT")
       } catch {
         try? execute("ROLLBACK")
@@ -494,6 +497,7 @@ public final class LocalStore: @unchecked Sendable {
   public func removeDownload(_ id: String) throws {
     try synchronized {
       try deleteFiles(id)
+      try execute("DELETE FROM meta WHERE key=?", ["pinned:\(id)"])
       try execute(
         "INSERT INTO meta(key,value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value='1'",
         ["paused:\(id)"])
@@ -502,7 +506,30 @@ public final class LocalStore: @unchecked Sendable {
   /// Removes an article's files to free space (see `StorageEviction`). Unlike `removeDownload`,
   /// nothing is paused: if the article returns to the Library unfinished, it downloads again.
   public func evictDownload(_ id: String) throws {
-    try synchronized { try deleteFiles(id) }
+    try synchronized {
+      try deleteFiles(id)
+      try execute("DELETE FROM meta WHERE key=?", ["pinned:\(id)"])
+    }
+  }
+  /// Keeps a download the reader asked for by hand (Download Now) out of automatic removal, even
+  /// when the article is archived or finished. Remove Download, Done Reading, archiving the
+  /// article again and deleting it end the pin.
+  public func pinDownload(_ id: String) throws {
+    try synchronized {
+      try execute(
+        "INSERT INTO meta(key,value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value='1'",
+        ["pinned:\(id)"])
+    }
+  }
+  /// Articles whose downloads are pinned (see `pinDownload`).
+  public func pinnedDownloads() -> Set<String> {
+    (try? synchronized {
+      Set(
+        try rows("SELECT substr(key,8) FROM meta WHERE key LIKE 'pinned:%'").compactMap(\.first))
+    }) ?? []
+  }
+  private func unpin(_ id: String) throws {
+    try execute("DELETE FROM meta WHERE key=?", ["pinned:\(id)"])
   }
   private func deleteFiles(_ id: String) throws {
     try? FileManager.default.removeItem(at: root.appendingPathComponent(id))
@@ -552,9 +579,12 @@ public final class LocalStore: @unchecked Sendable {
   /// title or text, so "progr" finds "programming". Each word is a quoted string, so the reader's
   /// quotes, operators and asterisks are searched for, never run as query syntax. Words without
   /// letters or digits are skipped (the index ignores them). Nil when nothing is left to search.
+  /// Words beyond this are ignored, so a pasted paragraph can't build a huge query.
+  public static let maxSearchWords = 32
   public static func searchExpression(_ query: String) -> String? {
     let words = query.split(whereSeparator: { $0.isWhitespace })
       .filter { $0.contains { $0.isLetter || $0.isNumber } }
+      .prefix(maxSearchWords)
       .map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }
     return words.isEmpty ? nil : words.joined(separator: " AND ")
   }

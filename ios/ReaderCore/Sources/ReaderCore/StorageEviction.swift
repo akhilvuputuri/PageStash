@@ -3,41 +3,73 @@ import Foundation
 /// Which downloads to remove when new articles need space under the storage limit. Pure, so it can
 /// be tested without files or the network.
 ///
-/// Only archived or finished articles give up their files, oldest saved first. The article open in
-/// the reader and anything still downloading are never chosen. Removing files this way doesn't
-/// pause the article's automatic download (see `LocalStore.evictDownload`), so an article moved
-/// back to the Library unfinished downloads again.
+/// Articles in Trash give up their files first (longest in Trash first), then archived or finished
+/// articles, oldest saved first. The article open in the reader, anything still downloading,
+/// anything being downloaded in the same pass, articles the reader downloaded by hand
+/// (`LocalStore.pinDownload`) and articles behind a visible Undo are never chosen. Removing files
+/// this way doesn't pause the article's automatic download (see `LocalStore.evictDownload`), so an
+/// article moved back to the Library unfinished downloads again.
 public enum StorageEviction {
-  /// Whether an article's download may be removed to make room: archived or finished, and not
-  /// deleted. Articles in Trash follow the same rule.
+  /// Whether an article's download may be removed to make room: in Trash, archived or finished,
+  /// and not deleted.
   public static func isEvictable(_ item: ReadingItem) -> Bool {
-    !item.deleted && (item.archived || item.progress >= 1)
+    !item.deleted && (item.isTrashed || item.archived || item.progress >= 1)
   }
-  /// Evictable articles with files on this device, oldest saved first (ties by ID, so the order is
-  /// stable). `sizes` gives each article's bytes on disk; `protected` lists articles to keep,
-  /// such as the one being read or ones still downloading.
+  /// Evictable articles with files on this device, in removal order: Trash first (by time moved
+  /// to Trash), then oldest saved first; ties by ID, so the order is stable. `sizes` gives each
+  /// article's bytes on disk; `protected` lists articles to keep.
   public static func candidates(
     _ items: [ReadingItem], sizes: [String: Int64], protected: Set<String> = []
   ) -> [ReadingItem] {
     items.filter {
       isEvictable($0) && !protected.contains($0.id) && (sizes[$0.id] ?? 0) > 0
-    }.sorted {
-      $0.capturedAt != $1.capturedAt ? $0.capturedAt < $1.capturedAt : $0.id < $1.id
+    }.sorted { a, b in
+      if a.isTrashed != b.isTrashed { return a.isTrashed }
+      if a.isTrashed, a.trashedAt != b.trashedAt { return (a.trashedAt ?? "") < (b.trashedAt ?? "") }
+      if a.capturedAt != b.capturedAt { return a.capturedAt < b.capturedAt }
+      return a.id < b.id
     }
   }
-  /// The fewest candidates, taken oldest first, that free at least `needed` bytes. When even all
-  /// of them aren't enough, all of them: whatever is freed lets some new downloads fit. Empty when
-  /// nothing is needed.
+  /// One file a pending download needs: its article and size in bytes.
+  public struct Need: Equatable, Sendable {
+    public let itemID: String
+    public let size: Int64
+    public init(itemID: String, size: Int64) {
+      self.itemID = itemID
+      self.size = size
+    }
+  }
+  /// The downloads to remove so that files in `wanted` fit, in the order they will be queued.
+  ///
+  /// It replays the queue: each file that fits in the space left takes it; a file that doesn't
+  /// fit takes just enough candidates, in removal order, to fit, and only if the remaining
+  /// candidates can free that much. A file that can't fit even then is skipped without removing
+  /// anything, so removal happens only when it lets a file be queued. `reserved` is the space
+  /// already used or promised to transfers in flight. Articles in `wanted` and `protected` are
+  /// never removed.
   public static func plan(
-    _ items: [ReadingItem], sizes: [String: Int64], needed: Int64, protected: Set<String> = []
+    _ items: [ReadingItem], sizes: [String: Int64], reserved: Int64, limit: Int64,
+    wanted: [Need], protected: Set<String> = []
   ) -> [String] {
-    guard needed > 0 else { return [] }
-    var freed: Int64 = 0
+    var pool = candidates(
+      items, sizes: sizes, protected: protected.union(wanted.map(\.itemID))
+    ).map { (id: $0.id, size: sizes[$0.id] ?? 0) }
+    var poolTotal = pool.reduce(Int64(0)) { $0 + $1.size }
+    var free = limit - reserved
     var chosen: [String] = []
-    for item in candidates(items, sizes: sizes, protected: protected) {
-      guard freed < needed else { break }
-      chosen.append(item.id)
-      freed += sizes[item.id] ?? 0
+    for need in wanted where need.size > 0 {
+      if need.size <= free {
+        free -= need.size
+        continue
+      }
+      guard free + poolTotal >= need.size else { continue }
+      while free < need.size, !pool.isEmpty {
+        let next = pool.removeFirst()
+        chosen.append(next.id)
+        free += next.size
+        poolTotal -= next.size
+      }
+      free -= need.size
     }
     return chosen
   }

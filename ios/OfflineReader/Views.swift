@@ -258,11 +258,18 @@ struct LibraryList: View {
   /// Changes that need the search run again: the query, and the index (downloads add text).
   private struct SearchKey: Equatable {
     let query: String
-    let items: Int
+    let titles: Int
     let downloaded: Int
   }
+  /// Titles are indexed too, so a renamed or newly synced article runs the search again.
   private var searchKey: SearchKey {
-    SearchKey(query: query, items: state.items.count, downloaded: state.wordCounts.count)
+    var titles = Hasher()
+    for item in state.items {
+      titles.combine(item.id)
+      titles.combine(item.title)
+    }
+    return SearchKey(
+      query: query, titles: titles.finalize(), downloaded: state.wordCounts.count)
   }
   private func visibleItems() -> [ReadingItem] {
     let scope = effectiveScope
@@ -309,6 +316,16 @@ struct LibraryList: View {
     }
     state.edit(current, ItemPatch(trashed: false))
     trashedUndo = nil
+  }
+  /// The articles behind this list's Undo banners.
+  private var undoProtected: [String?] {
+    [showArchiveUndo ? archiveUndo?.item.id : nil, showTrashUndo ? trashedUndo?.id : nil]
+  }
+  private func protectUndoItems() {
+    let ids = undoProtected
+    let list = archived ? "archive" : "library"
+    state.protectForUndo(ids[0], banner: "\(list).archive")
+    state.protectForUndo(ids[1], banner: "\(list).trash")
   }
   /// Restores the archive state from before the row's Archive or Move to Library.
   private func undoArchive() {
@@ -432,8 +449,15 @@ struct LibraryList: View {
     .listStyle(.plain)
     .scrollContentBackground(.hidden)
     .background(tokens.nativePage)
+    // Closing the search returns the scope to this list's own.
+    .background { SearchDismissal { scope = nil } }
     .refreshable { try? await state.sync(forceManifest: true) }
     .navigationTitle(archived ? "Archive" : "Library")
+    // Articles behind an Undo banner keep their downloads, so Undo never needs a new download.
+    .onChange(of: undoProtected, initial: true) { _, _ in protectUndoItems() }
+    // Not cleared on disappearing: a list pushed over or covered still has its banner. A stale
+    // entry from a closed Archive only keeps one download until that slot is next used.
+    .onAppear { protectUndoItems() }
     .searchable(text: $query, prompt: "Search \(archived ? "archive" : "library")")
     .searchScopes(
       Binding(get: { scope ?? ownScope }, set: { scope = $0 }), activation: .onSearchPresentation
@@ -479,7 +503,7 @@ struct LibraryList: View {
             HStack {
               Text(undo.archived ? "Moved to Archive" : "Moved to Library").font(.callout)
               Spacer()
-              Button("Undo") { undoArchive() }
+              StatusBarButton("Undo") { undoArchive() }
                 .font(.callout.weight(.semibold))
                 .accessibilityLabel(undo.archived ? "Undo Archive" : "Undo Move to Library")
               Button {
@@ -494,7 +518,7 @@ struct LibraryList: View {
             HStack {
               Text("Moved to Trash").font(.callout)
               Spacer()
-              Button("Undo") { undoTrash() }
+              StatusBarButton("Undo") { undoTrash() }
                 .font(.callout.weight(.semibold)).accessibilityLabel("Undo Move to Trash")
               Button {
                 trashedUndo = nil
@@ -508,7 +532,7 @@ struct LibraryList: View {
             HStack {
               Text("Moved to Archive").font(.callout)
               Spacer()
-              Button("Undo") { state.undoFinishedReading() }
+              StatusBarButton("Undo") { state.undoFinishedReading() }
                 .font(.callout.weight(.semibold)).accessibilityLabel("Undo Done Reading")
               Button {
                 state.dismissReadingUndo()
@@ -527,7 +551,7 @@ struct LibraryList: View {
               if retrying {
                 ProgressView().accessibilityLabel("Syncing")
               } else if state.messageRetryable {
-                Button("Retry") {
+                StatusBarButton("Retry") {
                   retrying = true
                   Task {
                     try? await state.sync(forceManifest: true)
@@ -712,6 +736,32 @@ extension View {
     #endif
   }
 }
+/// A text action in the Library's status bar, at least 44 points tall.
+struct StatusBarButton: View {
+  let title: String
+  let action: () -> Void
+  init(_ title: String, action: @escaping () -> Void) {
+    self.title = title
+    self.action = action
+  }
+  var body: some View {
+    Button(action: action) {
+      Text(title).frame(minHeight: 44).contentShape(Rectangle())
+    }
+  }
+}
+/// Calls `onDismiss` when the enclosing search closes. Placed inside the searchable view, where
+/// `isSearching` is set.
+struct SearchDismissal: View {
+  @Environment(\.isSearching) private var isSearching
+  let onDismiss: () -> Void
+  var body: some View {
+    Color.clear.accessibilityHidden(true)
+      .onChange(of: isSearching) { _, searching in
+        if !searching { onDismiss() }
+      }
+  }
+}
 /// Share, Copy Link and Open Original for an article's web page, in menus. Agent briefs have no
 /// web page, so callers show these only when `ReadingItem.webURL` exists.
 struct SourceLinkActions: View {
@@ -723,6 +773,7 @@ struct SourceLinkActions: View {
     }
     Button {
       UIPasteboard.general.url = url
+      UINotificationFeedbackGenerator().notificationOccurred(.success)
     } label: {
       Label("Copy Link", systemImage: "link")
     }
@@ -757,13 +808,16 @@ struct SaveView: View {
   @State private var busy = false
   @State private var error: String?
   @FocusState private var focused: Bool
+  /// Set once the reader tries to submit or leaves the field, so the hint doesn't nag mid-typing.
+  @State private var checked = false
   /// The link to submit: a web address with a host, as the share sheet accepts it. Nil while the
   /// field holds anything else, which keeps Save disabled.
   private var link: URL? { try? SharedLink.validate(url) }
   private var showsHint: Bool {
-    !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && link == nil
+    checked && !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && link == nil
   }
   private func save() {
+    checked = true
     guard let link, !busy else { return }
     busy = true
     error = nil
@@ -777,12 +831,19 @@ struct SaveView: View {
       busy = false
     }
   }
-  /// The first web link in pasted text, or the text itself for the field to check.
+  /// The first web link in pasted text, in reading order, or the text itself for the field to check.
+  static func firstLink(in text: String) -> URL? {
+    guard text.utf16.count <= 8192,
+      let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    else { return nil }
+    return detector.matches(in: text, range: NSRange(text.startIndex..., in: text))
+      .lazy.compactMap { $0.url.flatMap { try? SharedLink.validate($0.absoluteString) } }.first
+  }
   private func paste(_ texts: [String]) {
     guard let text = texts.first else { return }
-    url =
-      SharedLink.candidates(urls: [], texts: [text]).first?.absoluteString
+    url = Self.firstLink(in: text)?.absoluteString
       ?? text.trimmingCharacters(in: .whitespacesAndNewlines)
+    checked = true
   }
   var body: some View {
     NavigationStack {
@@ -793,6 +854,7 @@ struct SaveView: View {
               .autocorrectionDisabled().textContentType(.URL).submitLabel(.go)
               .focused($focused)
               .onSubmit(save)
+              .onChange(of: focused) { _, now in if !now { checked = true } }
               .accessibilityLabel("Article URL")
             // The system Paste button reads the clipboard only when tapped, so iOS doesn't ask.
             PasteButton(payloadType: String.self) { texts in
@@ -832,7 +894,8 @@ struct ReaderScreen: View {
   @State private var showDisplay = false
   @State private var finished = false
   @StateObject private var scrollState = ArticleScrollState()
-  @StateObject private var readingProgress = ReadingProgress()
+  /// Held, not observed: scrolling updates only `ReaderProgressStatus`, never this body.
+  @State private var readingProgress = ReadingProgress()
   @State private var showSettings = false
   let itemID: String
   @AppStorage("readerFontSize") private var fontSize = 20.0
@@ -1163,10 +1226,11 @@ struct ReaderProgressStatus: View {
   private var timeLeft: String? { ArticleRow.timeLeft(words: words, position: progress.fraction) }
   var body: some View {
     VStack(spacing: 4) {
-      if let timeLeft {
+      // At accessibility text sizes the words don't fit the bar; the bar stays, and VoiceOver
+      // still reads the time left.
+      if let timeLeft, !typeSize.isAccessibilitySize {
         Text(timeLeft).font(.caption).monospacedDigit()
           .foregroundStyle(tokens.secondaryInk.color).lineLimit(1)
-          .minimumScaleFactor(typeSize.isAccessibilitySize ? 0.7 : 1)
       }
       ProgressView(value: progress.fraction).tint(tokens.secondaryInk.color)
         .frame(width: 72)
@@ -1315,7 +1379,7 @@ struct SettingsView: View {
             Text("2 GB").tag(2_000_000_000)
           }
           Text("Used: \(ByteCountFormatter.string(fromByteCount: diskUsage, countStyle: .file))")
-          Button("Remove Downloads of Archived Articles", role: .destructive) {
+          Button("Remove Downloads of Archived and Finished Articles", role: .destructive) {
             confirmRemoveArchived = true
           }
           .disabled(archivedDownloads == 0)
@@ -1359,9 +1423,15 @@ struct SettingsView: View {
       }.readerFormBackground().navigationTitle("Settings").toolbar {
         ToolbarItem(placement: .cancellationAction) { CloseButton { dismiss() } }
       }
-      .onAppear(perform: measureStorage)
+      // Downloads finish and get removed while Settings is open, so the figures stay current.
+      .task {
+        while !Task.isCancelled {
+          measureStorage()
+          try? await Task.sleep(for: .seconds(2))
+        }
+      }
       .confirmationDialog(
-        "Remove downloads of \(archivedDownloads) archived \(archivedDownloads == 1 ? "article" : "articles")?",
+        "Remove downloads of \(archivedDownloads) archived and finished \(archivedDownloads == 1 ? "article" : "articles")?",
         isPresented: $confirmRemoveArchived, titleVisibility: .visible
       ) {
         Button("Remove Downloads", role: .destructive) {
@@ -1370,7 +1440,7 @@ struct SettingsView: View {
         }
       } message: {
         Text(
-          "They stay in your Archive and read again after downloading. Articles you move back to the Library download again automatically."
+          "They stay in your library and can be downloaded again. Unfinished articles you move back to the Library download again automatically."
         )
       }
     }.readerTheme()

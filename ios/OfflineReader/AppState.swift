@@ -155,8 +155,19 @@ import SwiftUI
     UserDefaults.standard.removeObject(forKey: "downloadError")
     message = nil
   }
-  /// The article open in the reader, whose files are never removed to make room.
-  private var protectedDownloads: Set<String> { readerRoute.map { [$0.id] } ?? [] }
+  /// Articles behind a visible Undo banner in a Library list, by banner, so Undo never needs a
+  /// download again. Lists set and clear their own entries.
+  private var undoProtection: [String: String] = [:]
+  func protectForUndo(_ id: String?, banner: String) { undoProtection[banner] = id }
+  /// Articles whose files are never removed to make room: the one open in the reader, ones behind
+  /// an Undo (Done Reading or a Library banner) and ones with changes not yet synced.
+  private var protectedDownloads: Set<String> {
+    var ids = Set(undoProtection.values)
+    if let id = readerRoute?.id { ids.insert(id) }
+    if let id = readingUndo?.itemId { ids.insert(id) }
+    if let edits = try? store?.pendingEdits() { ids.formUnion(edits.map(\.itemID)) }
+    return ids
+  }
   /// A kept (rejected) edit from the latest sync run, shown when it finishes. Reset only when a run
   /// starts, so every caller that joined a shared run reads the same result.
   private var syncRejection: String?
@@ -375,16 +386,20 @@ import SwiftUI
   func download(_ item: ReadingItem) async {
     do {
       try store?.resumeDownload(item.id)
+      // Asked for by hand, so automatic removal leaves it even while archived or finished.
+      try store?.pinDownload(item.id)
       try await sync(forceManifest: true)
       await Downloads.shared.enqueue(
         items: items, manual: [item.id], protected: protectedDownloads.union([item.id]))
     } catch { message = error.localizedDescription }
   }
-  /// Archived and finished articles with files on this device, for Settings.
+  /// Archived and finished articles (not in Trash) with files on this device, for Settings'
+  /// Remove Downloads of Archived and Finished Articles. Pinned downloads are included: the
+  /// reader asks for this explicitly.
   var archivedDownloads: [ReadingItem] {
     guard let store else { return [] }
     return StorageEviction.candidates(
-      items, sizes: store.downloadSizes(), protected: protectedDownloads)
+      items.filter { !$0.isTrashed }, sizes: store.downloadSizes(), protected: protectedDownloads)
   }
   /// Frees space by removing the downloads of archived and finished articles. Unlike Remove
   /// Download, an article moved back to the Library unfinished downloads again.

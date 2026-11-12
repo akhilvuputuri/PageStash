@@ -58,9 +58,10 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
     _ = session
   }
   /// Queues the files `items` still need. Every caller passes the whole library, so the storage
-  /// full set is rebuilt here. When the limit is reached, downloads of archived and finished
-  /// articles are removed, oldest saved first, before new files are skipped; `protected` (the
-  /// article being read) and anything still transferring keep theirs.
+  /// full set is rebuilt here. When the limit is reached, downloads in Trash, then of archived and
+  /// finished articles, are removed (see `StorageEviction.plan`) before new files are skipped;
+  /// `protected` (the open article and Undo items), pinned downloads and anything still
+  /// transferring keep theirs.
   func enqueue(items: [ReadingItem], manual: Set<String> = [], protected: Set<String> = []) async {
     await beginEnqueue()
     defer { endEnqueue() }
@@ -102,12 +103,13 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
         }
       )
     }.filter { !$0.assets.isEmpty }
-    let needed = wanted.reduce(Int64(0)) { sum, entry in
-      entry.assets.reduce(sum) { $0 + Int64($1.size) }
-    }
     var reserved = currentStore.diskUsage + inFlight
-    if reserved + needed > limit {
-      // Make room from archived and finished articles before skipping new ones.
+    let needs = wanted.flatMap { entry in
+      entry.assets.map { StorageEviction.Need(itemID: entry.item.id, size: Int64($0.size)) }
+    }
+    if reserved + needs.reduce(Int64(0), { $0 + $1.size }) > limit {
+      // Make room from Trash, then archived and finished articles, but only as much as lets the
+      // files below be queued (the plan replays this same order).
       let busy = Set(
         tasks.compactMap { task -> String? in
           guard let description = task.taskDescription, let data = description.data(using: .utf8)
@@ -115,8 +117,9 @@ final class Downloads: NSObject, URLSessionDownloadDelegate, @unchecked Sendable
           return (try? JSONDecoder().decode(Transfer.self, from: data))?.itemID
         })
       let evict = StorageEviction.plan(
-        items, sizes: currentStore.downloadSizes(), needed: reserved + needed - limit,
-        protected: protected.union(busy).union(wanted.map(\.item.id)))
+        items, sizes: currentStore.downloadSizes(), reserved: reserved, limit: limit,
+        wanted: needs,
+        protected: protected.union(busy).union(currentStore.pinnedDownloads()))
       for id in evict { try? currentStore.evictDownload(id) }
       if !evict.isEmpty { reserved = currentStore.diskUsage + inFlight }
     }
