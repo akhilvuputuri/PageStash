@@ -21,6 +21,7 @@ import {
   readerHTML,
   type Prepared,
 } from "../src/content.js";
+import { parseArticle } from "../src/extract-dom.js";
 import {
   ImportFailure,
   importOutcome,
@@ -320,18 +321,18 @@ test("element counting is linear on input with no closing bracket", () => {
 
 test("Readability's own element limit is a permanent failure", async () => {
   // A crafted count mismatch: elements our scanner can't see but the parser builds. Simulated by
-  // injecting a fetcher whose page passes our scan and then a Readability that throws.
+  // a Readability that throws, in this thread; extraction-sandbox.test.ts reaches the real limit
+  // through the worker with parser-built elements.
   const { Readability } = await import("@mozilla/readability");
   const parse = Readability.prototype.parse;
   Readability.prototype.parse = function () {
     throw new Error("Aborting parsing document; 20200 elements found");
   };
   try {
-    const failure = await extract("https://example.com/many", async (url) => ({
-      url,
-      mime: "text/html",
-      bytes: Buffer.from(`<html><body><article><p>${prose}</p></article></body></html>`),
-    })).catch((error) => error);
+    const failure = await parseArticle(
+      `<html><body><article><p>${prose}</p></article></body></html>`,
+      "https://example.com/many",
+    ).catch((error) => error);
     assert.ok(failure instanceof ImportFailure);
     assert.equal(failure.code, "too_many_elements");
     assert.equal(failure.terminal, true);

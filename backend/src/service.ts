@@ -19,11 +19,11 @@ import {
 } from "./import-error.js";
 import {
   extract,
-  briefDocument,
   readerHTML,
   escapeHTML,
   type Prepared,
 } from "./content.js";
+import { briefInWorker } from "./extract-sandbox.js";
 import {
   ARTICLE_CHARACTERS,
   EXCERPT_CHARACTERS,
@@ -1155,7 +1155,7 @@ export class Service {
           throw new ImportFailure("The brief contains no readable text.");
         prepared = {
           html:
-            briefDocument(row.payload.markdown ?? "") +
+            (await briefInWorker(row.payload.markdown ?? "")) +
             "<hr><p>Agent-created brief</p>" +
             (row.payload.sources ?? [])
               .map(
