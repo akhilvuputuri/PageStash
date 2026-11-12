@@ -1,68 +1,20 @@
-import { JSDOM } from "jsdom";
-import createDOMPurify from "dompurify";
-import { Readability } from "@mozilla/readability";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
 import { IMAGE_ACCEPT, safeFetch, type Fetched, type FetchOptions } from "./fetch.js";
 import { ImportFailure, timed, type ImportTrace } from "./import-error.js";
+import {
+  ELEMENT_LIMIT,
+  briefDocument,
+  elementFailure,
+  escapeHTML,
+  languageTag,
+  markdownDocument,
+  sanitize,
+} from "./extract-dom.js";
+import { parseInSandbox, type SandboxOptions } from "./extract-sandbox.js";
 
-const purifierWindow = new JSDOM("").window;
-const purify = createDOMPurify(purifierWindow);
-export function sanitize(html: string): string {
-  const clean = purify.sanitize(html, {
-    ALLOWED_TAGS: [
-      "p",
-      "div",
-      "section",
-      "article",
-      "h1",
-      "h2",
-      "h3",
-      "h4",
-      "ul",
-      "ol",
-      "li",
-      "blockquote",
-      "pre",
-      "code",
-      "strong",
-      "em",
-      "b",
-      "i",
-      "a",
-      "br",
-      "hr",
-      "figure",
-      "figcaption",
-      "img",
-      "table",
-      "thead",
-      "tbody",
-      "tr",
-      "th",
-      "td",
-      "sup",
-      "sub",
-    ],
-    ALLOWED_ATTR: ["href", "src", "alt", "title"],
-    ALLOW_DATA_ATTR: false,
-  });
-  const dom = new JSDOM(clean);
-  for (const a of dom.window.document.querySelectorAll("a"))
-    if (!/^https?:\/\//i.test(a.getAttribute("href") ?? ""))
-      a.removeAttribute("href");
-  return dom.window.document.body.innerHTML;
-}
-export function escapeHTML(value: string): string {
-  return value.replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
-        c
-      ]!,
-  );
-}
-
+// The DOM helpers moved to extract-dom.ts (safe to load in the extraction child); these names stay importable from here.
+export { ELEMENT_LIMIT, briefDocument, escapeHTML, languageTag, markdownDocument, sanitize };
 export interface Prepared {
   html: string;
   title: string;
@@ -75,78 +27,20 @@ export interface Prepared {
   missingImages: number;
   images: { id: string; bytes: Buffer }[];
 }
-function rejectBarrier(document: Document, text: string) {
-  const labels = [
-    document.title,
-    document.querySelector("main h1,article h1,h1")?.textContent ?? "",
-  ].map((value) =>
-    value
-      .replace(/\s+/g, " ")
-      .split(/\s+[|—–]\s+/)[0]
-      .trim()
-      .toLowerCase()
-      .replace(/[.!?]+$/, ""),
-  );
-  const challenge = labels.some((label) =>
-    /^(just a moment|checking your browser|verify (?:that )?you are human|security check|attention required)$/.test(
-      label,
-    ),
-  );
-  const failure = labels.some(
-    (label) =>
-      /^(?:error\s*)?(?:40[1348]|50[0234])(?:[ :–-]+(?:error|not found|page not found|forbidden|unauthorized|access denied|service unavailable|internal server error|bad gateway|gateway timeout|request timeout))?$/.test(
-        label,
-      ) ||
-      /^(access denied|request blocked|forbidden|unauthorized|page not found|not found|something went wrong|service unavailable|internal server error|sign in|log in|login)$/.test(
-        label,
-      ),
-  );
-  const instruction =
-    /verify (?:that )?you are human|enable javascript and cookies|checking your browser|you (?:do not|don't) have permission|sign in to (?:continue|read)|log in to (?:continue|read)|page (?:you requested |could )?(?:was |is )?not (?:be )?found|request (?:has been |was )?blocked|access (?:is |was )denied/i.test(
-      text.slice(0, 1500),
-    );
-  let intro = text.toLowerCase().trim();
-  for (const label of labels)
-    if (label && intro.startsWith(label))
-      intro = intro.slice(label.length).trim();
-  const directed =
-    /^(?:[.!?:–-]\s*)?(sorry|please|you\b|your\b|the page\b|this page\b|sign in\b|log in\b|verify\b|enable javascript\b|checking your browser\b)/.test(
-      intro,
-    );
-  const challengeMarkup =
-    document.querySelector(
-      '#challenge-form, #cf-challenge-running, input[name="cf-turnstile-response"]',
-    ) ||
-    [...document.querySelectorAll("script[src]")].some((script) =>
-      script.getAttribute("src")?.includes("/cdn-cgi/challenge-platform/"),
-    );
-  const password = document.querySelector('input[type="password"]');
-  if (
-    (challenge && (instruction || challengeMarkup)) ||
-    (failure && ((instruction && directed) || text.length < 600 || password))
-  ) {
-    throw new ImportFailure(
-      "The source returned an error, sign-in or access-check page instead of readable article text.",
-      true,
-      "barrier",
-    );
-  }
-}
-
 export type Fetcher = (
   url: string,
   limit: number,
   options?: FetchOptions,
 ) => Promise<Fetched>;
 
-/** Readable elements allowed in a page: outside `<svg>`, not counting script or style text. */
-export const ELEMENT_LIMIT = 20_000;
 /**
  * Every `<` followed by a letter, counted without any context, so no comment, attribute or raw-text
- * trick can hide markup from it. This is what bounds parser memory: measured on 13 November 2026,
- * the parsed page plus Readability's copy cost about 4.5 KB of RSS per element (20,000 elements
- * +93 MB, 50,000 +229 MB, 100,000 +460 MB), so 40,000 tags stay under about 200 MB on top of the
- * process baseline in a 512 MB container.
+ * trick can hide markup from it. It bounds tag tokens, not parsed nodes: the parser can build far
+ * more elements than tags (adoption-agency re-creation of formatting elements builds about N×M
+ * from N+3M tags). It is a cheap early rejection of large pages, not the memory bound; the
+ * extraction child process's heap limit and deadline (extract-sandbox.ts) are. Measured on 13 November
+ * 2026, a parsed page plus Readability's copy cost about 4.5 KB of RSS per element (20,000 elements
+ * +93 MB, 50,000 +229 MB, 100,000 +460 MB).
  */
 export const TAG_LIMIT = 40_000;
 /** Time for all of an article's images; any left over are marked unavailable. */
@@ -269,166 +163,81 @@ export function elementCounts(html: string): { elements: number; tags: number } 
   return { elements, tags };
 }
 
-const elementFailure = () =>
-  new ImportFailure("Source HTML exceeds the element limit.", true, "too_many_elements");
-
-function direction(...values: (string | null | undefined)[]): "rtl" | "ltr" | undefined {
-  for (const value of values) {
-    const dir = value?.trim().toLowerCase();
-    if (dir === "rtl" || dir === "ltr") return dir;
-  }
-  return undefined;
-}
-
 export async function extract(
   url: string,
   fetcher: Fetcher = safeFetch,
   trace?: ImportTrace,
+  sandbox?: SandboxOptions,
 ): Promise<Prepared> {
+  // Fetching stays on this thread, behind safeFetch's address checks; only the decoded HTML string
+  // goes to the extraction child process, and only plain data comes back.
   const page = await fetcher(url, 3 * 1024 * 1024, { trace });
-  return timed(trace, "extract", async () => {
+  const article = await timed(trace, "extract", async () => {
     if (!["text/html", "application/xhtml+xml"].includes(page.mime))
       throw new ImportFailure("This source is not an HTML article.", true, "not_html");
     const charset = pageCharset(page.bytes, page.charset);
     if (trace) trace.charset = charset;
     const html = decodePage(page.bytes, page.charset);
+    // Cheap linear pre-checks here, so obviously oversized pages never start a child process.
     const counts = elementCounts(html);
     if (trace) trace.elements = counts.elements;
     if (counts.elements > ELEMENT_LIMIT || counts.tags > TAG_LIMIT) throw elementFailure();
-    const dom = new JSDOM(html, { url: page.url });
-    const copy = dom.window.document.cloneNode(true) as Document;
-    // Drawings are never article text; removing them keeps Readability's own count to real content.
-    for (const drawing of copy.querySelectorAll("svg")) drawing.remove();
-    let article: ReturnType<Readability["parse"]>;
-    try {
-      article = new Readability(copy, {
-        // A little above our count, which excludes the implied html, head and body elements.
-        maxElemsToParse: ELEMENT_LIMIT + 100,
-      }).parse();
-    } catch (error) {
-      // Readability's own element limit: as permanent as ours, so it must not be retried.
-      if (/^Aborting parsing document/.test((error as Error)?.message ?? "")) throw elementFailure();
-      throw error;
-    }
-    const sourceText =
-      dom.window.document.body.textContent?.replace(/\s+/g, " ").trim() ?? "";
-    rejectBarrier(
-      dom.window.document,
-      article?.textContent?.replace(/\s+/g, " ").trim() || sourceText,
-    );
-    if (!article)
-      throw new ImportFailure("Readable article text could not be extracted.", true, "no_article");
-    const result = new JSDOM(sanitize(article.content ?? ""));
-    const text =
-      result.window.document.body.textContent?.replace(/\s+/g, " ").trim() ?? "";
-    if (text.length < 100 || (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0) < 40)
-      throw new ImportFailure("Readable article text could not be extracted.", true, "no_article");
-    return { dom, article, result };
-  }).then(async ({ dom, article, result }) => {
-    const images: Prepared["images"] = [];
-    let missingImages = 0;
-    const allImages = [...result.window.document.querySelectorAll("img")];
-    await timed(trace, "images", async () => {
-      let total = 0;
-      const deadline = Date.now() + IMAGE_BUDGET_MS;
-      for (const [index, img] of allImages.entries()) {
-        try {
-          if (index >= 20) throw new Error("Image count limit");
-          if (Date.now() > deadline) throw new Error("Image time limit");
-          const raw = img.getAttribute("src");
-          if (!raw) throw new Error("Image unavailable");
-          const image = await fetcher(
-            new URL(raw, page.url).toString(),
-            5 * 1024 * 1024,
-            { accept: IMAGE_ACCEPT, hopMs: 10_000, totalMs: 15_000 },
-          );
-          if (
-            ![
-              "image/jpeg",
-              "image/png",
-              "image/webp",
-              "image/gif",
-              "image/avif",
-            ].includes(image.mime)
-          )
-            throw new Error("Unsupported image");
-          total += image.bytes.length;
-          if (total > 25 * 1024 * 1024) throw new Error("Image byte limit");
-          const bytes = await sharp(image.bytes, { limitInputPixels: 20_000_000 })
-            .resize({ width: 1800, withoutEnlargement: true })
-            .webp({ quality: 82 })
-            .toBuffer();
-          const id = randomUUID();
-          images.push({ id, bytes });
-          img.setAttribute("src", `${id}.webp`);
-        } catch {
-          missingImages++;
-          const placeholder = result.window.document.createElement("p");
-          placeholder.textContent = `[Image unavailable${img.alt ? ": " + img.alt : ""}]`;
-          img.replaceWith(placeholder);
-        }
-      }
-    });
-    if (trace)
-      trace.images = { found: allImages.length, saved: images.length, missing: missingImages };
-    const root = dom.window.document.documentElement;
-    return {
-      html: result.window.document.body.innerHTML,
-      title: article.title || new URL(url).hostname,
-      author: article.byline || undefined,
-      siteName: article.siteName?.trim().slice(0, 120) || undefined,
-      lang: languageTag(article.lang || root.lang),
-      dir: direction(article.dir, root.getAttribute("dir"), dom.window.document.body?.getAttribute("dir")),
-      images,
-      missingImages,
-    };
+    return parseInSandbox(html, page.url, sandbox);
   });
-}
-
-// Deliberately small Markdown renderer: no raw HTML, embeds, or remote images.
-export function markdownDocument(markdown: string): string {
-  const lines = markdown.split(/\r?\n/);
-  let inCode = false;
-  const output: string[] = [];
-  for (const line of lines) {
-    if (line.startsWith("```")) {
-      output.push(inCode ? "</code></pre>" : "<pre><code>");
-      inCode = !inCode;
-      continue;
+  const images: Prepared["images"] = [];
+  let missingImages = 0;
+  const pieces: string[] = [];
+  await timed(trace, "images", async () => {
+    let total = 0;
+    const deadline = Date.now() + IMAGE_BUDGET_MS;
+    for (const [index, img] of article.images.entries()) {
+      try {
+        if (index >= 20) throw new Error("Image count limit");
+        if (Date.now() > deadline) throw new Error("Image time limit");
+        const raw = img.src;
+        if (!raw) throw new Error("Image unavailable");
+        const image = await fetcher(
+          new URL(raw, page.url).toString(),
+          5 * 1024 * 1024,
+          { accept: IMAGE_ACCEPT, hopMs: 10_000, totalMs: 15_000 },
+        );
+        if (
+          ![
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+            "image/avif",
+          ].includes(image.mime)
+        )
+          throw new Error("Unsupported image");
+        total += image.bytes.length;
+        if (total > 25 * 1024 * 1024) throw new Error("Image byte limit");
+        const bytes = await sharp(image.bytes, { limitInputPixels: 20_000_000 })
+          .resize({ width: 1800, withoutEnlargement: true })
+          .webp({ quality: 82 })
+          .toBuffer();
+        const id = randomUUID();
+        images.push({ id, bytes });
+        pieces.push(img.saved.split(article.slot).join(`${id}.webp`));
+      } catch {
+        missingImages++;
+        pieces.push(img.missing);
+      }
     }
-    if (inCode) {
-      output.push(escapeHTML(line) + "\n");
-      continue;
-    }
-    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
-    const body = escapeHTML(heading?.[2] ?? line)
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>')
-      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    output.push(
-      heading
-        ? `<h${heading[1].length}>${body}</h${heading[1].length}>`
-        : `<p>${body}</p>`,
-    );
-  }
-  if (inCode) output.push("</code></pre>");
-  return sanitize(output.join("\n"));
-}
-export function briefDocument(markdown: string): string {
-  const html = markdownDocument(markdown);
-  const text = new JSDOM(html).window.document.body.textContent ?? "";
-  if (!/[\p{L}\p{N}]/u.test(text))
-    throw new ImportFailure(
-      "The brief contains no readable text. Submit a corrected brief as a new request.",
-      true,
-      "empty_brief",
-    );
-  return html;
-}
-
-/** A well-formed BCP 47 tag, or undefined; source pages sometimes carry junk in `lang`. */
-export function languageTag(value: string | null | undefined): string | undefined {
-  const tag = value?.trim();
-  return tag && /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/.test(tag) ? tag : undefined;
+  });
+  if (trace)
+    trace.images = { found: article.images.length, saved: images.length, missing: missingImages };
+  return {
+    html: article.parts.map((part, i) => (i ? pieces[i - 1] + part : part)).join(""),
+    title: article.title || new URL(url).hostname,
+    author: article.byline,
+    siteName: article.siteName,
+    lang: article.lang,
+    dir: article.dir,
+    images,
+    missingImages,
+  };
 }
 
 export function readerHTML(
