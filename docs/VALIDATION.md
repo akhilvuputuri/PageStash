@@ -936,6 +936,27 @@ Branch `fix/app-fixes` from `main` at `06f91c9`. App and ReaderCore only; the sh
   - **Wiring test.** `Downloads.enqueue` itself isn't unit-tested: it needs the background `URLSession` and app defaults. The plan now takes the wanted files and protected IDs directly, and a ReaderCore test covers wanted, protected, pinned and busy articles never being removed.
   - **Checks after the fixes (tested, Xcode 27.2).** ReaderCore `swift test`: 109 tests pass. Unsigned generic device and simulator builds succeed with no new warnings. The OfflineReader tests on the iPhone 18 Pro / iOS 27.2 simulator: 25 pass. `ci_post_clone.sh`: the project matches the generator. Still not verified: Xcode 16.4 compilation (CI), every visual and VoiceOver check, closing the search resetting the scope, and removal with real transfers.
 
+### CI runs once per pull request (13 November 2026)
+
+Branch `ci/run-pr-checks-once` from `main` at `1d380b7`. Only `.github/workflows/checks.yml` and this record change.
+
+- **Problem.** The workflow had `on: [push, pull_request]`, so every push to a PR branch started two runs of the same commit, each with a macOS `ios` job. The `pull_request` run is the fuller one: the isolated preview build and its artifact run only there.
+- **What changed.**
+  - `push` runs only for `main`. `pull_request` is unchanged, so a PR commit gets one run.
+  - A `concurrency` group of the workflow name plus the PR number, or the commit SHA for `main`. A new push to a PR cancels the run for its previous commit (`cancel-in-progress` is true only for `pull_request` events). Runs on `main` are never cancelled. The `main` group is per commit, not per ref: with one group for the ref, a second `main` run would wait for the first and GitHub keeps only the newest waiting run in a group, so of three quick merges the middle commit's run would be cancelled.
+- **Why the jobs were cancelled (measured from the GitHub API, last 40 runs).** Six `ios` jobs ended `cancelled` with no steps and no runner after waiting 15 to 22 minutes. Each carries the annotation "The job was not acquired by Runner of type hosted even after multiple attempts", and three notices "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times."
+  - Three were duplicate `push` runs on PR branches: 43271376164 (`c9e209d`), 43271322547 (`abab062`) and 43073710382 (`0068dde`). Their `pull_request` runs on the same commits passed.
+  - Not only duplicates: one `main` push run (43267633310, `35ef46a`) and two `pull_request` runs (43267711183 and 43265424999, both `fix/backend-import-fixes`) were cancelled the same way.
+  - It isn't a job timeout: the workflow sets no `timeout-minutes` (the default is 360) and the jobs never started. GitHub gave up assigning a hosted macOS runner and cancelled the job itself.
+  - Hypothesis, not proven: the account's limit on concurrent macOS jobs made it worse. Around 17:37 UTC on 12 November three pushes within a minute (two PR branches and `main`) queued five `ios` jobs at once; without the duplicates it would have been three.
+- **What this doesn't fix.** GitHub's macOS capacity. A single `pull_request` or `main` run can still be cancelled unassigned; re-run it. This change halves the macOS jobs a PR push queues and removes the failed duplicate check.
+- **What no longer runs (checked).**
+  - Tag pushes. `v0.6.0` started a `push` run (43086061504) on a commit `main` had already checked (43086048950). Nothing depends on it: Xcode Cloud archives release tags, and DEPLOYMENT.md and AGENTS.md name no GitHub run on the tag.
+  - Branches without a PR. Open a PR (a draft is enough) to get checks.
+  - `main` has no branch protection or rulesets (GitHub API, 13 November 2026), so no required check is tied to a `push` run.
+- **Tested.** The workflow file parses as YAML with the expected `on` and `concurrency` values. `actionlint` isn't installed here. This PR's own runs are the check: one `pull_request` run and no `push` run for the branch.
+- **Not verified before merge.** That a second push cancels the first PR run, and that the `main` run after merge is not cancelled.
+
 ## Not yet tested
 
 - On-device Reading Context against Apple's real on-device model: prompt fit, part sizes, parse success, output quality, guardrail refusals, injection resistance, latency per note and question answers. The development Mac reported `modelNotReady` throughout 12 November 2026.
