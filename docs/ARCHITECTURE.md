@@ -54,6 +54,8 @@ Queue entries bind owner, server and credential generation. Logout clears the sh
 
 Accepted means a server submission, not an offline download. Server failures remain in Imports under the existing policy. Verified main-app assets alone establish offline availability. API credentials are not forwarded through HTTP redirects. App Group membership and the embedded extension have matching signed provisioning; physical Safari/Chrome acceptance remains a release gate.
 
+Update (13 November 2026): the sheet no longer displays the destination before saving. With one link and a usable session it saves on appearance after a 0.6 s cancellable pause, shows the page host and one status line, and closes itself after a successful or queued save; several links still require a choice, which then saves. Decision logic and wording live in `ShareSupport/ShareFlow.swift`. Operation keys, the App Group queue and generation fencing are unchanged. See [VALIDATION.md](VALIDATION.md#one-tap-saving-in-the-share-extension-13-november-2026).
+
 Apple references: [Share extensions](https://developer.apple.com/library/archive/documentation/General/Conceptual/ExtensibilityPG/Share.html), [App Groups](https://developer.apple.com/documentation/xcode/configuring-app-groups), [shared Keychain access](https://developer.apple.com/documentation/security/sharing-access-to-keychain-items-among-a-collection-of-apps).
 
 ## Authentication and authorization
